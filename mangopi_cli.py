@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.10"
+__version__ = "0.1.11"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -40,7 +40,7 @@ base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(project_root, ".mangocli", "session")
 
 # ANSI colors
-RESET, BOLD, DIM = "\033[0m", "\033[1m", "\033[2m"
+RESET, BOLD, SOFT, DIM = "\033[0m", "\033[1m", "\033[37m", "\033[2m"
 BLUE, CYAN, GREEN, YELLOW, RED, GREY, ORANGE = (
     "\033[34m", "\033[36m", "\033[32m", "\033[33m", "\033[31m", "\033[90m", "\033[38;2;245;78;0m")
 
@@ -176,7 +176,7 @@ class Printer:
     def output(self, content: str):
         self.section(_i18n("llm.output"))
         for line in content.splitlines():
-            self._write_line("  " + _c(line, GREY))
+            self._write_line("  " + _c(line, SOFT))
 
     def token_usage(self, iteration: int, input_tokens: int, output_tokens: int, context_tokens: int, max_context: int):
         def fmt(n): return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
@@ -1030,6 +1030,9 @@ def run_tool(tool_name, tool_args):
             result_lines = result.split("\n")
             max_preview_lines = 20  # 最多展示前3行
             max_line_width = 100  # 单行最大宽度，超出截断
+            if tool_name == "attempt_completion":
+                max_preview_lines = 1000
+                max_line_width = 500
             lines_to_show = result_lines[:max_preview_lines]
             preview_lines = []
             for line in lines_to_show:
@@ -1218,7 +1221,6 @@ def main():
     ctx.enabled_compact()
     ctx.set_max_failures()
     ctx.load(ctx_file_path)
-    print(len(ctx.get_messages()))
 
     prompt_runtime = SystemPrompt()
     system_prompt = prompt_runtime.assemble()
