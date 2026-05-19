@@ -9,11 +9,13 @@ import subprocess
 import sys
 import threading
 import time
+import ast
 import urllib.error
 import urllib.request
 import glob as globlib
 import platform
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 try:
@@ -21,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -198,11 +200,8 @@ class Printer:
         self.section(_i18n("context.compact"))
         self._write_line(f"  {_c(_i18n('context.compact.strategy'), GREY)} {_c(strategy, ORANGE)}")
         self._write_line(
-            f"  {_c('tokens', GREY)} "
-            f"{_c(f'{before_tokens:,}', RED)}"
-            f" {_c('→', GREY)} "
-            f"{_c(f'{after_tokens:,}', GREEN)} "
-            f"{_c(f'(-{saved:,})', ORANGE)}"
+            f"  {_c('tokens', GREY)} {_c(f'{before_tokens:,}', RED)} {_c('→', GREY)} "
+            f"{_c(f'{after_tokens:,}', GREEN)} {_c(f'(-{saved:,})', ORANGE)}"
         )
         self._write_line(f"  {_c('context', GREY)} {_c(f'{percent}%', color)}")
 
@@ -319,6 +318,119 @@ def _validate_file_path(path: str) -> Optional[str]:
     return None
 
 
+def _request(url: str, body: dict, headers: dict = None, timeout: int = 300, max_retries: int = 3) -> dict:
+    last_exception = None
+    headers = headers or {"Content-Type": "application/json"}
+    for attempt in range(max_retries + 1):
+        try:
+            request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw_data = response.read().decode("utf-8")
+                return json.loads(raw_data)
+        except urllib.error.HTTPError as e:
+            if e.code >= 500 or e.code == 429:
+                last_exception = e
+            else:
+                raise
+        except (urllib.error.URLError, json.JSONDecodeError, socket.timeout) as e:
+            last_exception = e
+        except Exception as e:
+            raise e
+
+        if attempt < max_retries:
+            delay = 1 * (2 ** attempt)
+            console.warning(
+                f"Request failed (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s: {last_exception}")
+            time.sleep(delay)
+        else:
+            break
+    raise last_exception
+
+
+class SkillManager:
+    def __init__(self, base_paths: List[str] = None, load_level: str = "resources"):
+        self.base_paths = base_paths or [os.path.expanduser("~/.mangocli/skills"), Path(base_persist_dir) / "skills"]
+        self.level = load_level
+        try:
+            self.skills = self._load_skills()
+        except Exception as err:
+            self.skills = {}
+            console.error(f"load skills err: {err}")
+
+    def _load_skills(self) -> Dict[str, dict]:
+        def _load_directory(_skill_path: str, _dirname: str):
+            dir_path = os.path.join(_skill_path, _dirname)
+            if not os.path.exists(dir_path):
+                return {}
+            return {os.path.join(root, file): open(os.path.join(root, file), 'r', encoding='utf-8').read()
+                    for root, _, files in os.walk(dir_path) for file in files}
+
+        skills = {}
+        for base in self.base_paths:
+            for skill_md in globlib.glob(os.path.join(base, "*/SKILL.md")):
+                skill_dir = os.path.dirname(skill_md)
+                skill_name = os.path.basename(skill_dir)
+                with open(skill_md, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                yaml_end = content.find('---', 3)
+                if yaml_end == -1:
+                    raise ValueError(f"Invalid SKILL.md: missing YAML frontmatter in {skill_md}")
+                yaml_text, body = content[3:yaml_end].strip(), content[yaml_end + 3:].strip()
+
+                meta = {}
+                for line in yaml_text.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    key, val = re.split(r':\s*', line, 1)
+                    val = val.strip()
+                    if val.lower() == 'true':
+                        val = True
+                    elif val.lower() == 'false':
+                        val = False
+                    elif val.lower() in ('null', '~'):
+                        val = None
+                    else:
+                        try:
+                            val = ast.literal_eval(val)
+                        except Exception:
+                            pass
+                    meta[key.strip()] = val
+                meta["body"] = body
+                skills[skill_name] = {"meta": meta}
+                if self.level == "resources":
+                    skills[skill_name].update({
+                        "scripts": _load_directory(skill_dir, "scripts"),
+                        "references": _load_directory(skill_dir, "references")
+                    })
+        return skills
+
+    def reload(self):
+        try:
+            self.skills = self._load_skills()
+        except Exception as err:
+            self.skills = {}
+            console.error(f"reload skills err: {err}")
+
+    def all(self) -> Dict[str, dict]:
+        return self.skills
+
+    def descriptions(self) -> str:
+        return "\n".join(f"- {name}: {data['meta'].get('description', '')}" for name, data in self.skills.items())
+
+    def find(self, keyword: str) -> List[Dict]:
+        matched = []
+        for name, data in self.skills.items():
+            meta = data.get("meta", {})
+            if keyword.lower() in name.lower() or any(keyword.lower() in t.lower() for t in meta.get("tags", [])):
+                matched.append({"name": name, "meta": meta})
+        return matched
+
+
+skill_manager = SkillManager()
+
+
 # --- Tool definitions: (description, schema, function) ---
 def read(args):
     lines = open(args["path"]).readlines()
@@ -391,6 +503,29 @@ def bash(args):
     return "".join(output_lines).strip() or "(empty)"
 
 
+def use_skill(args):
+    name = args["name"]
+    skills = SkillManager().all()
+    if name not in skills:
+        return f"Skill '{name}' not found"
+    skill = skills[name]
+    result = []
+    meta = skill.get("meta", {})
+    result.append(f"# Skill: {name}")
+    result.append(meta.get("body", ""))
+    scripts = skill.get("scripts", {})
+    if scripts:
+        result.append("\n## Scripts\n")
+        for path in scripts:
+            result.append(path)
+    refs = skill.get("references", {})
+    if refs:
+        result.append("\n## References\n")
+        for path in refs:
+            result.append(path)
+    return "\n".join(result)
+
+
 def attempt_completion(args):
     return args["result"]
 
@@ -449,6 +584,13 @@ TOOLS = {
             "cmd": {"type": "string", "description": "The shell command to execute, e.g., 'ls -la' or 'git status'"}
         },
         bash,
+    ),
+    "use_skill": (
+        "Load an installed skill with guidance, scripts and references",
+        {
+            "name": {"type": "string", "description": "Skill name"}
+        },
+        use_skill
     ),
     "attempt_completion": (
         "Indicate that the task is complete and provide the final result/answer to the user",
@@ -629,7 +771,93 @@ class ContextManager:
         self.messages = systems + others
 
     def full_compact(self):    # 手动执行，调用模型进行大规模的摘要生成，后续实现
-        pass
+        _full_compact_prompt = [
+            "Your task is to create a detailed summary of the conversation so far, "
+            "paying close attention to the user's explicit requests and your previous actions.\n",
+            "This summary should be thorough in capturing technical details, code patterns, "
+            "and architectural decisions that would be essential for continuing development work without "
+            "losing context.\n\n",
+            "Your summary should include the following sections:\n\n",
+            "1. Primary Request and Intent:Capture all of the user's explicit requests and intents in detail\n",
+            "2. Key Technical Concepts:List all important technical concepts, technologies, frameworks discussed.\n",
+            "3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. "
+            "Pay special attention to the most recent messages and include full code snippets where applicable "
+            "and include a summary of why this file read or edit is important.\n",
+            "4. Errors and fixes: List all errors that you ran into, and how you fixed them. "
+            "Pay special attention to specific user feedback that you received, "
+            "especially if the user told you to do something differently.\n",
+            "5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.\n",
+            "6. All user messages: List ALL user messages that are not tool results. "
+            "These are critical for understanding the users' feedback and changing intent.\n",
+            "7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.\n",
+            "8. Current Work: Describe in detail precisely what was being worked on immediately "
+            "before this summary request, paying special attention to the most recent messages from both "
+            "user and assistant. Include file names and code snippets where applicable.\n\n",
+            "Here's an example of how your output should be structured:\n\n",
+            "<example>\n",
+            "<analysis>\n",
+            "[Your thought process, ensuring all points are covered thoroughly and accurately]\n",
+            "</analysis>\n\n",
+            "<summary>\n",
+            "1. Primary Request and Intent:\n",
+            "  [Detailed description]\n\n",
+            "2. Key Technical Concepts:\n",
+            "  - [Concept 1]\n",
+            "  - [Concept 1]\n",
+            "  - [...]\n\n",
+            "3. Files and Code Sections:\n",
+            "  - [File Name 1]\n",
+            "    - [Summary of why this file is important]\n",
+            "    - [Summary of the changes made to this file, if any]\n",
+            "    - [Important Code Snippet]\n",
+            "  - [File Name 2]\n",
+            "    - [Important Code Snippet]\n",
+            "  - [...]\n\n",
+            "4. Errors and fixes:\n",
+            "  - [Detailed description of error 1]:\n",
+            "    - [How you fixed the error]\n",
+            "    - [User feedback on the error if any]\n",
+            "  - [...]\n\n",
+            "5. Problem Solving:\n",
+            "[Description of solved problems and ongoing troubleshooting]\n\n",
+            "6. All user messages:\n",
+            "  - [Detailed non tool use user message]\n",
+            "  - [...]\n\n",
+            "7. Pending Tasks:\n",
+            "  - [Task 1]\n",
+            "  - [Task 2]\n",
+            "  - [...]\n\n",
+            "8. Current Work:\n",
+            " [Precise description of current work]\n\n",
+            "</summary>\n",
+            "</example>\n\n",
+            "Please provide your summary based on the conversation so far, "
+            "following this structure and ensuring precision and thoroughness in your response. \n\n",
+            "There may be additional summarization instructions provided in the included context. If so, remember "
+            "to follow these instructions when creating the above summary. Examples of instructions include:\n\n",
+            "<example>\n",
+            "## Compact Instructions\n",
+            "When summarizing the conversation focus on typescript code changes and also remember the mistakes "
+            "you made and how you fixed them.\n",
+            "</example>\n\n",
+            "<example>\n",
+            "# Summary instructions\n",
+            "When you are using compact - please focus on test output and code changes. Include file reads verbatim.\n",
+            "</example>\n\n",
+        ]
+        try:
+            self.append_user("\n".join(_full_compact_prompt))
+            respon = provider.parse_response(_request(
+                provider.api_url, provider.build_body(self.messages), headers=provider.headers()
+            ))
+            if respon.get("content"):
+                systems = [m for m in self.messages if m.get("role") == "system"]
+                self.messages = systems
+                self.append_user(respon["content"])
+            else:
+                raise "full compact err: llm respon null"
+        except Exception as e:
+            raise f"full compact err: {e}"
 
     def prepare_for_api(self):
         self.micro_compact()
@@ -766,35 +994,10 @@ def create_provider() -> BaseProvider:
 provider = create_provider()
 
 
-def chat_completion(messages: List[Dict[str, str]], timeout: int = 300, max_retries: int = 3):
-    last_exception = None
-    for attempt in range(max_retries + 1):
-        try:
-            request = urllib.request.Request(
-                provider.api_url, data=json.dumps(provider.build_body(messages)).encode(),
-                headers=provider.headers(), method="POST", )
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw_data = response.read().decode("utf-8")
-                return json.loads(raw_data)
-        except urllib.error.HTTPError as e:
-            if e.code >= 500 or e.code == 429:
-                last_exception = e
-            else:
-                raise
-        except (urllib.error.URLError, json.JSONDecodeError, socket.timeout) as e:
-            last_exception = e
-        except Exception as e:
-            raise e
-
-        if attempt < max_retries:
-            delay = 1 * (2 ** attempt)
-            console.warning(
-                f"Request failed (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s: {last_exception}"
-            )
-            time.sleep(delay)
-        else:
-            break  # 所有重试均已耗尽，跳出循环并抛出最后一个异常
-    raise last_exception
+def chat_completion(messages: List[Dict[str, str]]):
+    return _request(
+        provider.api_url, provider.build_body(messages), headers=provider.headers()
+    )
 
 
 def run_tool(tool_name, tool_args):
@@ -857,10 +1060,11 @@ class SystemPrompt:
 
     def _init_default_sections(self):
         self.sections.append(("base_intro", self._build_base_intro()))
-        self.sections.append(("tool_guidance", self._build_tool_guidance()))
         self.sections.append(("safety", self._build_safety()))
         self.sections.append(("builtin_rules", self._build_builtin_rules()))
         self.sections.append(("language", self._build_language()))
+        self.sections.append(("tool_guidance", self._build_tool_guidance()))
+        self.sections.append(("skills_guidance", self._build_skills_guidance()))
         self.sections.append(("memory", self._build_memory()))
         self.sections.append(("environment", self._build_environment()))
 
@@ -888,8 +1092,27 @@ class SystemPrompt:
             "- Only use **bash** when no dedicated tool can accomplish the task, or for system commands (e.g., "
             "installing packages, running tests, managing directories).",
             "- Always use **attempt_completion** to present the final result to the user.",
-            "- When using edit, ensure the `old` string is unique or set `all` to true.",
+            "- When using edit, ensure the `old` string is unique or set `all` to true.\n",
         ]
+
+    @staticmethod
+    def _build_skills_guidance() -> List[str]:
+        desc = skill_manager.descriptions()
+        if desc:
+            return [
+                "## Skills Selection Guidelines\n\n",
+                f"{desc}\n\n",
+                "- If an installed skill is relevant, call use_skill first before proceeding.\n",
+                "- Skills may contain:\n",
+                "  - workflows\n",
+                "  - best practices\n",
+                "  - reusable scripts\n",
+                "  - references\n\n"
+            ]
+        else:
+            return [
+                "## Skills Selection Guidelines\n\n", "No skills available.\n\n"
+            ]
 
     @staticmethod
     def _build_environment() -> List[str]:  # 动态环境信息注入
@@ -995,6 +1218,7 @@ def main():
     ctx.enabled_compact()
     ctx.set_max_failures()
     ctx.load(ctx_file_path)
+    print(len(ctx.get_messages()))
 
     prompt_runtime = SystemPrompt()
     system_prompt = prompt_runtime.assemble()
@@ -1011,6 +1235,8 @@ def main():
                 if user_input.strip() in ("/q", "/quit"):  # 退出
                     break
                 if user_input.strip() in ("/c", "/compact"):  # 手动触发 full compact
+                    ctx.full_compact()
+                    console.success("Full compact success.")
                     continue
                 if user_input.strip() in ("/n", "/new"):  # 创建新的session
                     ctx.backup(ctx_file_path)
@@ -1040,10 +1266,10 @@ def main():
                     context_tokens=ctx.total_tokens(),
                     max_context=MANGO_MAX_CONTEXT)
 
-                if response["content"]:
-                    console.output(response["content"])
                 if response["reasoning_content"]:
                     console.thinking(response["reasoning_content"])
+                if response["content"]:
+                    console.output(response["content"])
 
                 if response["finish_reason"] == "stop":
                     break  # 模型明确表示结束，退出循环
@@ -1061,6 +1287,7 @@ def main():
         except (KeyboardInterrupt, EOFError):
             break
         except Exception as err:
+            console.end_spinner()  # 触发异常时, end_spinner 未被触发
             print(f"{RED}⏺ Error: {err}{RESET}")
         finally:
             ctx.save(ctx_file_path)
