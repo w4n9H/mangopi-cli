@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -432,205 +432,239 @@ skill_manager = SkillManager()
 
 
 # --- Tool definitions: (description, schema, function) ---
-def read(args):
-    lines = open(args["path"]).readlines()
-    offset = args.get("offset", 0)
-    limit = args.get("limit", len(lines))
-    selected = lines[offset: offset + limit]
-    return "".join(f"{offset + idx + 1:4}| {line}" for idx, line in enumerate(selected))
+class ToolBase:
+    name = ""
+    description = ""
+    params = {}
+    preview_lines = 20
+    preview_width = 100
+    use_spinner = False
+
+    def schema(self):
+        properties = {}
+        required = []
+        for param_name, param_info in self.params.items():
+            param_type = param_info["type"]
+            is_optional = param_type.endswith("?")
+            base_type = param_type.rstrip("?")
+            properties[param_name] = {
+                "type": "integer" if base_type == "number" else base_type, "description": param_info["description"]
+            }
+            if not is_optional:
+                required.append(param_name)
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {"type": "object", "properties": properties, "required": required}
+            }
+        }
+
+    def run(self, args): raise NotImplementedError
+
+    def preview(self, args):
+        return str(list(args.values())[0])[:self.preview_width] if args else ""
+
+    def before(self, args): pass
+
+    def after(self, result): pass
+
+    def confirm(self, args): return True
 
 
-def write(args):
-    error = _validate_file_path(args["path"])
-    if error:
-        return f"write error: {error}"
-    with open(args["path"], "w") as f:
-        f.write(args["content"])
-    return f"write {len(args['content'])}byte to {len(args['path'])} ok"
+class ReadTool(ToolBase):
+    name = "read"
+    description = "Read a file from the local filesystem"
+    params = {
+        "path": {"type": "string", "description": "Path to the file to read"},
+        "offset": {"type": "number?", "description": "Line number to start reading from (0-indexed, default 0)"},
+        "limit": {"type": "number?", "description": "Maximum number of lines to read (default: all lines)"}
+    }
+
+    def run(self, args):
+        lines = open(args["path"]).readlines()
+        offset = args.get("offset", 0)
+        limit = args.get("limit", len(lines))
+        selected = lines[offset: offset + limit]
+        return "".join(f"{offset + idx + 1:4}| {line}" for idx, line in enumerate(selected))
 
 
-def edit(args):
-    error = _validate_file_path(args["path"])
-    if error:
-        return f"edit error: {error}"
-    text = open(args["path"]).read()
-    old, new = args["old"], args["new"]
-    if old not in text:
-        return "edit error: old_string not found"
-    count = text.count(old)
-    if not args.get("all") and count > 1:
-        return f"error: old_string appears {count} times, must be unique (use all=true)"
-    replacement = (text.replace(old, new) if args.get("all") else text.replace(old, new, 1))
-    with open(args["path"], "w") as f:
-        f.write(replacement)
-    return f"edit {args['path']} ok"
+class WriteTool(ToolBase):
+    name = "write"
+    description = "Write content to a file, overwriting if it exists"
+    params = {
+        "path": {"type": "string", "description": "Path to the file to write"},
+        "content": {"type": "string", "description": "Content to write to the file"}
+    }
+
+    def run(self, args):
+        error = _validate_file_path(args["path"])
+        if error:
+            return f"write error: {error}"
+        with open(args["path"], "w") as f:
+            f.write(args["content"])
+        return f"write {len(args['content'])}byte to {len(args['path'])} ok"
 
 
-def search(args):
-    pattern = (args.get("path", ".") + "/" + args["pat"]).replace("//", "/")
-    files = globlib.glob(pattern, recursive=True)
-    files = sorted(files, key=lambda f: os.path.getmtime(f) if os.path.isfile(f) else 0, reverse=True,)
-    return "\n".join(files) or "none"
+class EditTool(ToolBase):
+    name = "edit"
+    description = "Edit a file by replacing an exact string with a new string"
+    params = {
+        "path": {"type": "string", "description": "Path to the file to edit"},
+        "old": {"type": "string", "description": "Exact string to be replaced"},
+        "new": {"type": "string", "description": "String to replace it with"},
+        "all": {"type": "boolean?", "description": "Replace all occurrences (default: false)"}
+    }
+
+    def run(self, args):
+        error = _validate_file_path(args["path"])
+        if error:
+            return f"edit error: {error}"
+        text = open(args["path"]).read()
+        old, new = args["old"], args["new"]
+        if old not in text:
+            return "edit error: old_string not found"
+        count = text.count(old)
+        if not args.get("all") and count > 1:
+            return f"error: old_string appears {count} times, must be unique (use all=true)"
+        replacement = (text.replace(old, new) if args.get("all") else text.replace(old, new, 1))
+        with open(args["path"], "w") as f:
+            f.write(replacement)
+        return f"edit {args['path']} ok"
 
 
-def grep(args):
-    pattern = re.compile(args["pat"])
-    hits = []
-    for filepath in globlib.glob(args.get("path", ".") + "/**", recursive=True):
+class SearchTool(ToolBase):
+    name = "search"
+    description = "Search for files using a glob pattern"
+    params = {
+        "pat": {"type": "string", "description": "Glob pattern to match file paths (e.g. '**/*.py')"},
+        "path": {"type": "string?", "description": "Directory to start search from (default: current directory)"}
+    }
+    use_spinner = True
+
+    def run(self, args):
+        pattern = (args.get("path", ".") + "/" + args["pat"]).replace("//", "/")
+        files = globlib.glob(pattern, recursive=True)
+        files = sorted(files, key=lambda f: os.path.getmtime(f) if os.path.isfile(f) else 0, reverse=True, )
+        return "\n".join(files) or "none"
+
+
+class GrepTool(ToolBase):
+    name = "grep"
+    description = "Search file contents recursively using a regular expression pattern"
+    params = {
+        "pat": {
+            "type": "string",
+            "description": "Regular expression pattern to search for (Python regex syntax)"},
+        "path": {
+            "type": "string?",
+            "description": "Search directory to recursively (defaults to current working directory if omitted)"}
+    }
+    use_spinner = True
+
+    def run(self, args):
         try:
-            for line_num, line in enumerate(open(filepath), 1):
-                if pattern.search(line):
-                    hits.append(f"{filepath}:{line_num}:{line.rstrip()}")
-        except Exception as err:
-            return f"grep tool error: {err}"
-    return "\n".join(hits[:50]) or "none"
+            pattern = re.compile(args["pat"])
+        except re.error as e:
+            return f"grep error: invalid regex: {e}"
+        hits = []
+        for filepath in globlib.glob(args.get("path", ".") + "/**", recursive=True):
+            if not os.path.isfile(filepath):
+                continue
+            try:
+                for line_num, line in enumerate(open(filepath), 1):
+                    if pattern.search(line):
+                        hits.append(f"{filepath}:{line_num}:{line.rstrip()}")
+            except Exception:
+                continue
+        return "\n".join(hits[:50]) or "none"
 
 
-def bash(args):
-    proc = subprocess.Popen(args["cmd"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    output_lines = []
-    try:
-        while True:
-            line = proc.stdout.readline()
-            if not line and proc.poll() is not None:
-                break
-            if line:
-                output_lines.append(line)
-        proc.wait(timeout=60)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        output_lines.append("\n(timed out after 60s)")
-    return "".join(output_lines).strip() or "(empty)"
+class BashTool(ToolBase):
+    name = "bash"
+    description = "Execute a shell command and return its stdout/stderr output (timeout after 60s)"
+    params = {
+        "cmd": {"type": "string", "description": "The shell command to execute, e.g., 'ls -la' or 'git status'"}
+    }
+    use_spinner = True
+
+    def confirm(self, args):
+        is_dangerous, reason = _check_command_safety(args["cmd"])
+        if not is_dangerous:
+            return True
+        return console.prompt_apply(
+            f"Execute dangerous cmd ({reason})? {args['cmd']}"
+        )
+
+    def run(self, args):
+        proc = subprocess.Popen(
+            args["cmd"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        output_lines = []
+        try:
+            while True:
+                line = proc.stdout.readline()
+                if not line and proc.poll() is not None:
+                    break
+                if line:
+                    output_lines.append(line)
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            output_lines.append("\n(timed out after 60s)")
+        return "".join(output_lines).strip() or "(empty)"
 
 
-def use_skill(args):
-    name = args["name"]
-    skills = SkillManager().all()
-    if name not in skills:
-        return f"Skill '{name}' not found"
-    skill = skills[name]
-    result = []
-    meta = skill.get("meta", {})
-    result.append(f"# Skill: {name}")
-    result.append(meta.get("body", ""))
-    scripts = skill.get("scripts", {})
-    if scripts:
-        result.append("\n## Scripts\n")
-        for path in scripts:
-            result.append(path)
-    refs = skill.get("references", {})
-    if refs:
-        result.append("\n## References\n")
-        for path in refs:
-            result.append(path)
-    return "\n".join(result)
+class UseSkillTool(ToolBase):
+    name = "use_skill"
+    description = "Load an installed skill with guidance, scripts and references"
+    params = {"name": {"type": "string", "description": "Skill name"}}
+
+    def run(self, args):
+        name = args["name"]
+        skills = SkillManager().all()
+        if name not in skills:
+            return f"Skill '{name}' not found"
+        skill = skills[name]
+        result = []
+        meta = skill.get("meta", {})
+        result.append(f"# Skill: {name}")
+        result.append(meta.get("body", ""))
+        scripts = skill.get("scripts", {})
+        if scripts:
+            result.append("\n## Scripts\n")
+            for path in scripts:
+                result.append(path)
+        refs = skill.get("references", {})
+        if refs:
+            result.append("\n## References\n")
+            for path in refs:
+                result.append(path)
+        return "\n".join(result)
 
 
-def attempt_completion(args):
-    return args["result"]
+class AttemptCompletionTool(ToolBase):
+    name = "attempt_completion"
+    description = "Indicate that the task is complete and provide the final result/answer to the user"
+    params = {"result": {"type": "string", "description": "The final result or summary of the completed task"}}
+    preview_lines = 500
+    preview_width = 5000
+
+    def run(self, args):
+        return args["result"]
 
 
 TOOLS = {
-    "read": (
-        "Read a file from the local filesystem",
-        {
-            "path": {"type": "string", "description": "Path to the file to read"},
-            "offset": {"type": "number?", "description": "Line number to start reading from (0-indexed, default 0)"},
-            "limit": {"type": "number?", "description": "Maximum number of lines to read (default: all lines)"}
-        },
-        read,
-    ),
-    "write": (
-        "Write content to a file, overwriting if it exists",
-        {
-            "path": {"type": "string", "description": "Path to the file to write"},
-            "content": {"type": "string", "description": "Content to write to the file"}
-        },
-        write,
-    ),
-    "edit": (
-        "Edit a file by replacing an exact string with a new string",
-        {
-            "path": {"type": "string", "description": "Path to the file to edit"},
-            "old": {"type": "string", "description": "Exact string to be replaced"},
-            "new": {"type": "string", "description": "String to replace it with"},
-            "all": {"type": "boolean?", "description": "Replace all occurrences (default: false)"}
-        },
-        edit,
-    ),
-    "search": (
-        "Search for files using a glob pattern",
-        {
-            "pat": {"type": "string", "description": "Glob pattern to match file paths (e.g. '**/*.py')"},
-            "path": {"type": "string?", "description": "Directory to start search from (default: current directory)"}
-        },
-        search,
-    ),
-    "grep": (
-        "Search file contents recursively using a regular expression pattern",
-        {
-            "pat": {
-                "type": "string",
-                "description": "Regular expression pattern to search for (Python regex syntax)"},
-            "path": {
-                "type": "string?",
-                "description": "Search directory to recursively (defaults to current working directory if omitted)"}
-        },
-        grep,
-    ),
-    "bash": (
-        "Execute a shell command and return its stdout/stderr output (timeout after 60s)",
-        {
-            "cmd": {"type": "string", "description": "The shell command to execute, e.g., 'ls -la' or 'git status'"}
-        },
-        bash,
-    ),
-    "use_skill": (
-        "Load an installed skill with guidance, scripts and references",
-        {
-            "name": {"type": "string", "description": "Skill name"}
-        },
-        use_skill
-    ),
-    "attempt_completion": (
-        "Indicate that the task is complete and provide the final result/answer to the user",
-        {
-            "result": {"type": "string", "description": "The final result or summary of the completed task"}
-        },
-        attempt_completion,
-    ),
+    t.name: t for t in [
+        ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
+        AttemptCompletionTool()
+    ]
 }
 
 
 def tool_schema():
-    result = []
-    for name, (description, params, _fn) in TOOLS.items():
-        properties = {}
-        required = []
-        for param_name, param_info in params.items():
-            param_type = param_info['type']
-            is_optional = param_type.endswith("?")
-            base_type = param_type.rstrip("?")
-            properties[param_name] = {
-                "type": "integer" if base_type == "number" else base_type, "description": param_info['description']
-            }
-            if not is_optional:
-                required.append(param_name)
-        result.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                    }
-                }
-            }
-        )
-    return result
+    return [tool.schema() for tool in TOOLS.values()]
 
 
 # --- Context manager: () ---
@@ -1001,58 +1035,44 @@ def chat_completion(messages: List[Dict[str, str]]):
 
 
 def run_tool(tool_name, tool_args):
+    tool: ToolBase = TOOLS[tool_name]
     try:
-        arg_preview = str(list(tool_args.values())[0])[:80]
-        console.tool_call(tool_name, arg_preview)
-
-        if tool_name == "edit":
-            console.diff(old=tool_args["old"], new=tool_args["new"])
-            if console.prompt_apply(f"Apply changes to {tool_args['path']}?"):
-                result = TOOLS[tool_name][2](tool_args)
-            else:
-                result = "error: User denied edit"
-        elif tool_name == "bash":
-            is_dangerous, reason = _check_command_safety(tool_args["cmd"])
-            if is_dangerous and not console.prompt_apply(f"Execute dangerous cmd ({reason})? {tool_args['cmd']}"):
-                result = "error: User denied dangerous command"
-            else:
-                console.start_spinner()
-                result = TOOLS[tool_name][2](tool_args)
-                console.end_spinner()
-        else:
+        console.tool_call(tool.name, tool.preview(tool_args))
+        tool.before(tool_args)
+        if not tool.confirm(tool_args):
+            return "error: User denied action"
+        if tool.use_spinner:
             console.start_spinner()
-            result = TOOLS[tool_name][2](tool_args)
+        result = tool.run(tool_args)
+        if tool.use_spinner:
             console.end_spinner()
+        tool.after(result)
 
         if not result:
-            print(f"  {DIM}⎿  (no output){RESET}")  # 空结果直接提示
+            print(f"  {DIM}⎿  (no output){RESET}")
         else:
             result_lines = result.split("\n")
-            max_preview_lines = 20  # 最多展示前3行
-            max_line_width = 100  # 单行最大宽度，超出截断
-            if tool_name == "attempt_completion":
-                max_preview_lines = 1000
-                max_line_width = 500
-            lines_to_show = result_lines[:max_preview_lines]
+            lines_to_show = result_lines[:tool.preview_lines]
             preview_lines = []
             for line in lines_to_show:
-                if len(line) > max_line_width:
-                    line = line[:max_line_width - 3] + "..."
+                if len(line) > tool.preview_width:
+                    line = line[:tool.preview_width - 3] + "..."
                 preview_lines.append(line)
-            if len(result_lines) > max_preview_lines:
-                more = len(result_lines) - max_preview_lines
+            if len(result_lines) > tool.preview_lines:
+                more = len(result_lines) - tool.preview_lines
                 preview_lines.append(f"... and {more} more line{'s' if more > 1 else ''}")
             prefix = f"  {DIM}⎿  "
             for i, line in enumerate(preview_lines):
                 if i == 0:
                     print(f"{prefix}{line}{RESET}")
                 else:
-                    print(f"     {DIM}{line}{RESET}")  # 后续行与第一行内容对齐（5个空格 + 颜色）
+                    print(f"     {DIM}{line}{RESET}")
 
         console.tool_result(True)
         return result
     except Exception as err:
-        return f"error: {err}"
+        console.end_spinner()
+        return f"run tool {tool_name} error: {err}"
 
 
 class SystemPrompt:
