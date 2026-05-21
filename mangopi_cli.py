@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.12"
+__version__ = "0.1.13"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -472,6 +472,12 @@ class ToolBase:
 
     def confirm(self, args): return True
 
+    @staticmethod
+    def ok(content="", **extra): return {"success": True, "content": content, **extra}
+
+    @staticmethod
+    def fail(content="", **extra): return {"success": False, "content": content, **extra}
+
 
 class ReadTool(ToolBase):
     name = "read"
@@ -487,7 +493,7 @@ class ReadTool(ToolBase):
         offset = args.get("offset", 0)
         limit = args.get("limit", len(lines))
         selected = lines[offset: offset + limit]
-        return "".join(f"{offset + idx + 1:4}| {line}" for idx, line in enumerate(selected))
+        return self.ok("".join(f"{offset + idx + 1:4}| {line}" for idx, line in enumerate(selected)))
 
 
 class WriteTool(ToolBase):
@@ -501,10 +507,10 @@ class WriteTool(ToolBase):
     def run(self, args):
         error = _validate_file_path(args["path"])
         if error:
-            return f"write error: {error}"
+            return self.fail(f"write error: {error}")
         with open(args["path"], "w") as f:
             f.write(args["content"])
-        return f"write {len(args['content'])}byte to {len(args['path'])} ok"
+        return self.ok(f"write {len(args['content'])}byte to {len(args['path'])} ok")
 
 
 class EditTool(ToolBase):
@@ -520,18 +526,18 @@ class EditTool(ToolBase):
     def run(self, args):
         error = _validate_file_path(args["path"])
         if error:
-            return f"edit error: {error}"
+            return self.fail(f"edit error: {error}")
         text = open(args["path"]).read()
         old, new = args["old"], args["new"]
         if old not in text:
-            return "edit error: old_string not found"
+            return self.fail("edit error: old_string not found")
         count = text.count(old)
         if not args.get("all") and count > 1:
-            return f"error: old_string appears {count} times, must be unique (use all=true)"
+            return self.fail(f"error: old_string appears {count} times, must be unique (use all=true)")
         replacement = (text.replace(old, new) if args.get("all") else text.replace(old, new, 1))
         with open(args["path"], "w") as f:
             f.write(replacement)
-        return f"edit {args['path']} ok"
+        return self.ok(f"edit {args['path']} ok")
 
 
 class SearchTool(ToolBase):
@@ -547,7 +553,7 @@ class SearchTool(ToolBase):
         pattern = (args.get("path", ".") + "/" + args["pat"]).replace("//", "/")
         files = globlib.glob(pattern, recursive=True)
         files = sorted(files, key=lambda f: os.path.getmtime(f) if os.path.isfile(f) else 0, reverse=True, )
-        return "\n".join(files) or "none"
+        return self.ok("\n".join(files) or "none")
 
 
 class GrepTool(ToolBase):
@@ -567,7 +573,7 @@ class GrepTool(ToolBase):
         try:
             pattern = re.compile(args["pat"])
         except re.error as e:
-            return f"grep error: invalid regex: {e}"
+            return self.fail(f"grep error: invalid regex: {e}")
         hits = []
         for filepath in globlib.glob(args.get("path", ".") + "/**", recursive=True):
             if not os.path.isfile(filepath):
@@ -578,7 +584,7 @@ class GrepTool(ToolBase):
                         hits.append(f"{filepath}:{line_num}:{line.rstrip()}")
             except Exception:
                 continue
-        return "\n".join(hits[:50]) or "none"
+        return self.ok("\n".join(hits[:50]) or "none")
 
 
 class BashTool(ToolBase):
@@ -598,9 +604,7 @@ class BashTool(ToolBase):
         )
 
     def run(self, args):
-        proc = subprocess.Popen(
-            args["cmd"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
+        proc = subprocess.Popen(args["cmd"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         output_lines = []
         try:
             while True:
@@ -612,8 +616,8 @@ class BashTool(ToolBase):
             proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
-            output_lines.append("\n(timed out after 60s)")
-        return "".join(output_lines).strip() or "(empty)"
+            return self.fail(f"exec {args['cmd']} timed out after 60s")
+        return self.ok("".join(output_lines).strip() or "(empty)")
 
 
 class UseSkillTool(ToolBase):
@@ -625,7 +629,7 @@ class UseSkillTool(ToolBase):
         name = args["name"]
         skills = SkillManager().all()
         if name not in skills:
-            return f"Skill '{name}' not found"
+            return self.fail(f"skill '{name}' not found")
         skill = skills[name]
         result = []
         meta = skill.get("meta", {})
@@ -641,7 +645,7 @@ class UseSkillTool(ToolBase):
             result.append("\n## References\n")
             for path in refs:
                 result.append(path)
-        return "\n".join(result)
+        return self.ok("\n".join(result))
 
 
 class AttemptCompletionTool(ToolBase):
@@ -652,7 +656,7 @@ class AttemptCompletionTool(ToolBase):
     preview_width = 5000
 
     def run(self, args):
-        return args["result"]
+        return self.ok(args["result"])
 
 
 TOOLS = {
@@ -1044,14 +1048,16 @@ def run_tool(tool_name, tool_args):
         if tool.use_spinner:
             console.start_spinner()
         result = tool.run(tool_args)
+        tool_status = result["success"]
+        tool_content = result["content"]
         if tool.use_spinner:
             console.end_spinner()
-        tool.after(result)
+        tool.after(tool_content)
 
-        if not result:
+        if not tool_content:
             print(f"  {DIM}⎿  (no output){RESET}")
         else:
-            result_lines = result.split("\n")
+            result_lines = tool_content.split("\n")
             lines_to_show = result_lines[:tool.preview_lines]
             preview_lines = []
             for line in lines_to_show:
@@ -1068,8 +1074,8 @@ def run_tool(tool_name, tool_args):
                 else:
                     print(f"     {DIM}{line}{RESET}")
 
-        console.tool_result(True)
-        return result
+        console.tool_result(tool_status)
+        return tool_content
     except Exception as err:
         console.end_spinner()
         return f"run tool {tool_name} error: {err}"
@@ -1290,7 +1296,8 @@ def main():
 
                 if response["reasoning_content"]:
                     console.thinking(response["reasoning_content"])
-                if response["content"]:
+                if (response["content"] and
+                        not any(tc["name"] == "attempt_completion" for tc in response.get("tool_calls", []))):
                     console.output(response["content"])
 
                 if response["finish_reason"] == "stop":
