@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.13"
+__version__ = "0.1.15"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -268,10 +268,7 @@ console = Printer()
 
 # --- Init dir, Base data ---
 def initialize_system():
-    if not os.path.exists(base_persist_dir):
-        os.mkdir(base_persist_dir)
-    if not os.path.exists(session_dir):
-        os.mkdir(session_dir)
+    os.makedirs(session_dir, exist_ok=True)  # auto create .mangocli
 
 
 def helper():
@@ -675,7 +672,7 @@ def tool_schema():
 class ContextManager:
     def __init__(self):
         self.messages: List[Dict] = []
-        self.white_tool_list = []
+        self.white_tool_list = ["attempt_completion"]
 
         self.auto_compact_threshold = int(MANGO_MAX_CONTEXT * 0.8)
         self.auto_compact_disabled = False
@@ -701,8 +698,9 @@ class ContextManager:
         content.update({"ts": int(time.time())})
         self.messages.append(content)
 
-    def append_tool(self, tool_call_id: str, content: str):
-        self.messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": content, "ts": int(time.time())})
+    def append_tool(self, tool_call_id: str, tool_name: str, content: str):
+        self.messages.append({"role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name,
+                              "content": content, "ts": int(time.time())})
 
     def load(self, persist_file: str):
         if os.path.exists(persist_file):
@@ -734,6 +732,29 @@ class ContextManager:
     def get_latest(self, n: int = 10) -> List[Dict]: return self.messages[-n:]
 
     @staticmethod
+    def compact_text(text: str, head: int = 80, tail: int = 80) -> str:
+        text = (text or "").strip()
+        if not text:
+            return ""
+        return text if len(text) <= head + tail else f"{text[:head]}\n...\n{text[-tail:]}\n<compacted>"
+
+    def split_turns(self):  # messages 拆分为 turn, user -> assistant -> tool... -> assistant
+        turns, current = [], []
+        for m in self.messages:
+            role = m.get("role")
+            if role == "system":
+                continue
+            if role == "user":
+                if current:
+                    turns.append(current)
+                current = [m]
+                continue
+            current.append(m)
+        if current:
+            turns.append(current)
+        return turns
+
+    @staticmethod
     def estimated_tokens(msg: Dict[str, Any]) -> int: return len(json.dumps(msg, ensure_ascii=False)) // 4 + 4
 
     def total_tokens(self) -> int: return sum(self.estimated_tokens(m) for m in self.messages)
@@ -743,70 +764,130 @@ class ContextManager:
             return
         if self.total_tokens() < self.auto_compact_threshold:
             return
+
+        try:
+            self.session_memory_compact()
+            current_tokens = self.total_tokens()
+            if current_tokens < self.auto_compact_threshold:
+                return
+
+            self.compact_conversation()
+            current_tokens = self.total_tokens()
+            if current_tokens < self.auto_compact_threshold:
+                return
+        except Exception:
+            pass
+
         if self.continuous_failures >= self.max_failures:
             return
-
-        try:    # 尝试会话记忆压缩
-            success = self.session_memory_compact()
-            if success and self.total_tokens() < self.auto_compact_threshold:
-                self.continuous_failures = 0
-                return
-        except Exception as e:
-            self.continuous_failures += 1
-
-        try:    # 回退传统压缩
-            self.compact_conversation()
+        try:
+            self.full_compact()
             self.continuous_failures = 0
-        except Exception as e:
+        except Exception:
             self.continuous_failures += 1
 
-    def micro_compact(self, max_age_seconds: int = 21_600):
-        """ 扫描消息数组，查找来自可压缩工具白名单的 tool_result 块，并将其内容替换为 <Old tool result content cleared> """
+    def micro_compact(self, max_age_seconds: int = 21_600, min_tokens: int = 200):
         now = int(time.time())
-        for m in self.messages:  # 如果是工具消息且很旧 → 用占位符替换
-            if m.get("role") == "tool" and now - m.get("ts", now) > max_age_seconds:
-                m["content"] = "<Old tool result content expired(6hours)>"
+        for idx, m in enumerate(self.messages):
+            if now - m.get("ts", now) < max_age_seconds:  # new tool pass
+                continue
+            if m.get("role") != "tool":  # not tool pass
+                continue
+            if m.get("tool_name") in self.white_tool_list:  # white tool pass
+                continue
+            content = m.get("content", "")
+            if content.endswith("<compacted>"):  # compacted pass
+                continue
+            content_tokens = self.estimated_tokens({"content": content})
+            if content_tokens < min_tokens:  # too small pass
+                continue
+            summary = self.compact_text(content)
+            if not summary.strip():
+                continue
+            if self.estimated_tokens({"content": summary}) >= content_tokens:
+                continue
+            m["content"] = summary
 
-    def session_memory_compact(self, retain_count: int = 100) -> bool:
-        """ 保留最近用户 + 助手消息，剥离旧工具结果, 返回: True 压缩成功 """
-        new_msgs = []
-        for m in self.messages:
-            if m.get("role") == "system":  # 先保留 system 消息
-                new_msgs.append(copy.deepcopy(m))
+    def session_memory_compact(self, retain_turns: int = 10, min_tokens: int = 200) -> bool:
+        systems = [copy.deepcopy(m) for m in self.messages if m.get("role") == "system"]
 
-        non_system = [m for m in self.messages if m.get("role") != "system"]
-        recent_msgs = non_system[-retain_count:]
-        for m in recent_msgs:
-            if m.get("role") == "tool":
-                m = copy.deepcopy(m)
-                m["content"] = "<Old tool result content compacted>"
-            new_msgs.append(m)
-        self.messages = new_msgs
+        turns = self.split_turns()
+        if len(turns) <= retain_turns:
+            return False
+
+        old_turns = turns[:-retain_turns]
+        recent_turns = turns[-retain_turns:]
+        compacted = []
+        for turn in old_turns:  # old turns
+            for m in turn:
+                cm = copy.deepcopy(m)
+                if cm.get("role") == "tool":
+                    cm["content"] = f"<Old tool({cm['tool_name']}:{cm['tool_call_id']}) result force compacted>"
+                elif cm.get("role") == "assistant":
+                    if cm.get("tool_calls"):  # tool calls pass
+                        compacted.append(cm)
+                        continue
+
+                    content = cm.get("content", "")
+                    if isinstance(content, list):
+                        continue  # claude style pass
+                    content_tokens = self.estimated_tokens({"content": content})
+                    if content_tokens > min_tokens:  # too small pass
+                        cm["content"] = (self.compact_text(content) if content else "")
+
+                    reasoning_content = cm.get("reasoning_content", "")
+                    reasoning_content_tokens = self.estimated_tokens({"reasoning_content": reasoning_content})
+                    if reasoning_content_tokens > min_tokens:
+                        cm["reasoning_content"] = self.compact_text(reasoning_content)
+
+                    reasoning_details = cm.get("reasoning_details", "")
+                    reasoning_details_tokens = self.estimated_tokens({"reasoning_details": reasoning_details})
+                    if reasoning_details_tokens > min_tokens:
+                        cm["reasoning_details"] = self.compact_text(reasoning_details)
+                compacted.append(cm)
+        for turn in recent_turns:
+            compacted.extend(copy.deepcopy(turn))
+        self.messages = systems + compacted
         return True
 
-    def compact_conversation(self):
-        """ 剥离大附件， 工具输出等内容，用占位符替代旧内容，保证 token 降到阈值以下 """
-        new_msgs = []
-        for m in self.messages:
-            m_copy = copy.deepcopy(m)
-            role = m_copy.get("role")
-            if role == "tool" and len(m_copy.get("content", "")) > 200:
-                m_copy["content"] = "<Old tool result content removed>"
-            elif role == "assistant":
-                if len(m_copy.get("content", "")) > 500:
-                    m_copy["content"] = "<Old assistant content removed>"
-                if len(m_copy.get("reasoning_content", "")) > 500:
-                    m_copy["reasoning_content"] = "<Old assistant reasoning_content removed>"
-            new_msgs.append(m_copy)
+    def compact_conversation(self, retain_turns: int = 8):
+        systems = [copy.deepcopy(m) for m in self.messages if m.get("role") == "system"]
+        turns = self.split_turns()
+        if not turns:
+            return
+        old_turns = turns[:-retain_turns]
+        recent_turns = turns[-retain_turns:]
+        rebuilt = systems[:]
+        for turn in old_turns + recent_turns:
+            rebuilt.extend(copy.deepcopy(turn))
 
-        systems = [m for m in new_msgs if m.get("role") == "system"]
-        others = [m for m in new_msgs if m.get("role") != "system"]
-        while sum(self.estimated_tokens(m) for m in systems + others) > self.auto_compact_threshold:  # 如果还是超长, 从头删除旧消息
-            if not others:  # 防止无限循环和 IndexError
-                break
-            others.pop(0)
+        if sum(self.estimated_tokens(m) for m in rebuilt) <= self.auto_compact_threshold:  # 已低于阈值，直接返回
+            self.messages = rebuilt
+            return
 
-        self.messages = systems + others
+        trimmed_old_turns = list(old_turns)
+        while trimmed_old_turns:
+            candidate = systems[:]
+            for turn in trimmed_old_turns:
+                candidate.extend(copy.deepcopy(turn))
+            for turn in recent_turns:
+                candidate.extend(copy.deepcopy(turn))
+            if sum(self.estimated_tokens(m) for m in candidate) <= self.auto_compact_threshold:
+                self.messages = candidate
+                return
+            trimmed_old_turns.pop(0)
+
+        trimmed_recent_turns = list(recent_turns)  # 极端情况:old turns 全删后仍超限
+        while len(trimmed_recent_turns) > 1:
+            candidate = systems[:]
+            for turn in trimmed_recent_turns:
+                candidate.extend(copy.deepcopy(turn))
+            if sum(self.estimated_tokens(m) for m in candidate) <= self.auto_compact_threshold:
+                self.messages = candidate
+                return
+            trimmed_recent_turns.pop(0)
+
+        self.messages = systems + [copy.deepcopy(m) for turn in trimmed_recent_turns for m in turn]  # 最终 fallback
 
     def full_compact(self):    # 手动执行，调用模型进行大规模的摘要生成，后续实现
         _full_compact_prompt = [
@@ -893,16 +974,15 @@ class ContextManager:
                 self.messages = systems
                 self.append_user(respon["content"])
             else:
-                raise "full compact err: llm respon null"
+                raise RuntimeError("full compact err: llm respon null")
         except Exception as e:
-            raise f"full compact err: {e}"
+            raise RuntimeError(f"full compact err: {e}")
 
     def prepare_for_api(self):
         self.micro_compact()
         before = self.total_tokens()
         self.auto_compact_if_needed()
-        after = self.total_tokens()
-        if before > after:
+        if before > (after := self.total_tokens()):
             console.compact_status(
                 before_tokens=before, after_tokens=after, max_context=MANGO_MAX_CONTEXT, strategy="auto")
         return self.get_messages()
@@ -925,14 +1005,13 @@ class BaseProvider:
 
     @staticmethod
     def normalize_tool_calls(message: Dict[str, Any]) -> List[Dict[str, Any]]:
-        raw_tool_calls = message.get("tool_calls", [])
-        if not raw_tool_calls:
-            return []
-        tool_calls = []
-
+        raw_tool_calls = message.get("tool_calls") or []
         if not raw_tool_calls and message.get("function_call"):  # OpenAI old function_call fallback
             raw_tool_calls = [{"id": "call_0", "type": "function", "function": message["function_call"]}]
+        if not raw_tool_calls:
+            return []
 
+        tool_calls = []
         for tc in raw_tool_calls:
             function = tc.get("function", {})
             args_str = function.get("arguments", "{}")
@@ -1006,8 +1085,7 @@ class OpenAIProvider(BaseProvider):
 class DeepSeekProvider(OpenAIProvider):
     def build_body(self, messages: List[Dict[str, Any]], thinking: str = "enabled", effort: str = "max") -> dict:
         body = super().build_body(messages)
-        body.update({"thinking": {"type": thinking}})
-        body.update({"reasoning_effort": effort})
+        body.update({"thinking": {"type": thinking}, "reasoning_effort": effort})
         return body
 
 
@@ -1059,11 +1137,9 @@ def run_tool(tool_name, tool_args):
         else:
             result_lines = tool_content.split("\n")
             lines_to_show = result_lines[:tool.preview_lines]
-            preview_lines = []
-            for line in lines_to_show:
-                if len(line) > tool.preview_width:
-                    line = line[:tool.preview_width - 3] + "..."
-                preview_lines.append(line)
+            preview_lines = [
+                line if len(line) <= tool.preview_width else line[:tool.preview_width - 3] + "..."
+                for line in lines_to_show]
             if len(result_lines) > tool.preview_lines:
                 more = len(result_lines) - tool.preview_lines
                 preview_lines.append(f"... and {more} more line{'s' if more > 1 else ''}")
@@ -1307,7 +1383,7 @@ def main():
                     for tool in tool_calls:
                         tool_name, tool_args = tool["name"], tool["arguments"]
                         result = run_tool(tool_name, tool_args)
-                        ctx.append_tool(tool["id"], result)
+                        ctx.append_tool(tool["id"], tool_name, result)
                     if any(tc["name"] == "attempt_completion" for tc in tool_calls):
                         break
                 else:
