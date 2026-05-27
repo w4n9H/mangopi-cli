@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.15"
+__version__ = "0.1.16"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -60,10 +60,11 @@ I18N = {
         "cli.welcome": "Mangopi CLI — 基于大模型的命令行编程助手",
         "cli.help_intro": "内置命令:",
         "cli.help_commands": {
-            "/q": "退出程序",
-            "/c": "手动压缩当前会话（释放上下文空间）",
-            "/n": "结束当前会话并创建一个全新的会话",
-            "/h": "显示本帮助信息"
+            "/q or /quit": "退出程序",
+            "/c or /compact": "手动压缩当前会话（释放上下文空间）",
+            "/n or /new": "结束当前会话并创建一个全新的会话",
+            "/g or /goal <query>": "进入 Goal 模式，自主规划、执行并验证直到完成目标",
+            "/h or /help": "显示本帮助信息"
         },
         "safety.warn.dangerous_command": "检测到危险命令",
         "safety.danger.rm": "文件删除",
@@ -87,10 +88,11 @@ I18N = {
         "cli.welcome": "Mangopi CLI — Large Model CLI Assistant",
         "cli.help_intro": "Built-in commands:",
         "cli.help_commands": {
-            "/q": "Quit",
-            "/c": "Manually compact current session",
-            "/n": "End current session and start a new one",
-            "/h": "Show this help info"
+            "/q or /quit": "Quit",
+            "/c or /compact": "Manually compact current session",
+            "/n or /new": "End current session and start a new one",
+            "/g or /goal <query>": "Enter Goal mode — autonomously plan, execute and verify until the goal is achieved",
+            "/h or /help": "Show this help info"
         },
         "safety.warn.dangerous_command": "Dangerous command detected",
         "safety.danger.rm": "File deletion",
@@ -678,6 +680,7 @@ class ContextManager:
         self.auto_compact_disabled = False
         self.continuous_failures = 0
         self.max_failures = 3
+        self.runtime_injections: List[Dict[str, Any]] = []  # 临时运行时注入，不进入 session / compact / save
 
     def __len__(self): return len(self.messages)
 
@@ -693,6 +696,10 @@ class ContextManager:
 
     def append_user(self, content: str):
         self.messages.append({"role": "user", "content": content, "ts": int(time.time())})
+
+    def inject_user(self, content: str): self.runtime_injections.append({"role": "user", "content": content})
+
+    def clear_runtime_injections(self): self.runtime_injections = []
 
     def append_assistant(self, content: dict):
         content.update({"ts": int(time.time())})
@@ -985,7 +992,7 @@ class ContextManager:
         if before > (after := self.total_tokens()):
             console.compact_status(
                 before_tokens=before, after_tokens=after, max_context=MANGO_MAX_CONTEXT, strategy="auto")
-        return self.get_messages()
+        return self.messages + self.runtime_injections
 
 
 class BaseProvider:
@@ -1167,7 +1174,7 @@ class SystemPrompt:
         self.sections.append(("base_intro", self._build_base_intro()))
         self.sections.append(("safety", self._build_safety()))
         self.sections.append(("builtin_rules", self._build_builtin_rules()))
-        self.sections.append(("language", self._build_language()))
+        # self.sections.append(("language", self._build_language()))
         self.sections.append(("tool_guidance", self._build_tool_guidance()))
         self.sections.append(("skills_guidance", self._build_skills_guidance()))
         self.sections.append(("memory", self._build_memory()))
@@ -1313,6 +1320,46 @@ class SystemPrompt:
         return "\n\n".join(_basic)
 
 
+def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
+    ctx.append_user(user_input)
+
+    iteration = 0
+    while True:
+        console.start_spinner("Request...")
+        response = provider.parse_response(chat_completion(ctx.prepare_for_api()))
+        console.end_spinner()
+        ctx.append_assistant(response["raw_message"])
+
+        iteration += 1
+        console.token_usage(
+            iteration=iteration, input_tokens=response["usage"]["prompt_tokens"],
+            output_tokens=response["usage"]["completion_tokens"], context_tokens=ctx.total_tokens(),
+            max_context=MANGO_MAX_CONTEXT)
+
+        if response["reasoning_content"]:
+            console.thinking(response["reasoning_content"])
+        if (response["content"] and
+                not any(tc["name"] == "attempt_completion" for tc in response.get("tool_calls", []))):
+            console.output(response["content"])
+
+        if response["finish_reason"] == "stop":
+            break  # 模型明确表示结束，退出循环
+        if response["has_tool_calls"]:
+            completed = False
+            for tool in response["tool_calls"]:
+                tool_name, tool_args = tool["name"], tool["arguments"]
+                result = run_tool(tool_name, tool_args)
+                ctx.append_tool(tool["id"], tool_name, result)
+                if tool_name == "attempt_completion":
+                    completed = True
+                    break  # 遇到完成工具就退出当前轮工具调用
+            if completed:
+                break
+        else:
+            break
+    ctx.save(ctx_file_path)
+
+
 def main():
     initialize_system()
 
@@ -1335,66 +1382,56 @@ def main():
             user_input = input(f"{BOLD}{BLUE}❯{RESET} ").strip()
             if not user_input:
                 continue
-            if user_input.startswith('/'):
-                if user_input.strip() in ("/q", "/quit"):  # 退出
-                    break
-                if user_input.strip() in ("/c", "/compact"):  # 手动触发 full compact
-                    ctx.full_compact()
-                    console.success("Full compact success.")
+            if user_input.strip() in ("/q", "/quit"):  # 退出
+                break
+            if user_input.strip() in ("/c", "/compact"):  # 手动触发 full compact
+                ctx.full_compact()
+                console.success("Full compact success.")
+                continue
+            if user_input.strip() in ("/n", "/new"):  # 创建新的session
+                ctx.backup(ctx_file_path)
+                ctx.clear()
+                ctx.append_system(system_prompt)
+                console.success("New session created.")
+                continue
+            if user_input.strip() in ("/h", "/help"):
+                helper()
+                continue
+
+            if user_input.strip().startswith("/g") or user_input.strip().startswith("/goal"):
+                parts = user_input.split(maxsplit=1)
+                if len(parts) != 2:
+                    console.error("Please input '/g or /goal <query>'")
                     continue
-                if user_input.strip() in ("/n", "/new"):  # 创建新的session
-                    ctx.backup(ctx_file_path)
-                    ctx.clear()
-                    ctx.append_system(system_prompt)
-                    console.success("New session created.")
+                goal_text = parts[1].strip()
+                if not goal_text:
+                    console.error("Please input '/g or /goal <query>'")
                     continue
-                if user_input.strip() in ("/h", "/help"):
-                    helper()
-                    continue
-
-            ctx.append_user(f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-            # agentic loop: keep calling API until no more tool calls
-            iteration = 0
-            while True:
-                console.start_spinner("Request...")
-                response = provider.parse_response(chat_completion(ctx.prepare_for_api()))
-                console.end_spinner()
-                ctx.append_assistant(response["raw_message"])
-
-                iteration += 1
-                console.token_usage(
-                    iteration=iteration,
-                    input_tokens=response["usage"]["prompt_tokens"],
-                    output_tokens=response["usage"]["completion_tokens"],
-                    context_tokens=ctx.total_tokens(),
-                    max_context=MANGO_MAX_CONTEXT)
-
-                if response["reasoning_content"]:
-                    console.thinking(response["reasoning_content"])
-                if (response["content"] and
-                        not any(tc["name"] == "attempt_completion" for tc in response.get("tool_calls", []))):
-                    console.output(response["content"])
-
-                if response["finish_reason"] == "stop":
-                    break  # 模型明确表示结束，退出循环
-                if response["has_tool_calls"]:
-                    tool_calls = response["tool_calls"]
-                    for tool in tool_calls:
-                        tool_name, tool_args = tool["name"], tool["arguments"]
-                        result = run_tool(tool_name, tool_args)
-                        ctx.append_tool(tool["id"], tool_name, result)
-                    if any(tc["name"] == "attempt_completion" for tc in tool_calls):
-                        break
-                else:
-                    break
-            ctx.save(ctx_file_path)
+                ctx.inject_user(
+                    "[GOAL MODE]\n\n"
+                    "The user has provided a long-running autonomous goal.\n\n"
+                    "You should:\n"
+                    "- plan\n"
+                    "- execute\n"
+                    "- verify\n"
+                    "- iterate autonomously\n"
+                    "- continue until fully complete\n"
+                    "- only call `attempt_completion` tool when the goal is fully completed\n\n"
+                    f"GOAL:\n{goal_text}\n\n"
+                    f"Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                console.success(f"🎯 Goal: {goal_text}")
+                agent_loop(ctx, ctx_file_path, "[CONTINUE GOAL EXECUTION]")
+                continue
+            normal_message = f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            agent_loop(ctx, ctx_file_path, normal_message)
         except (KeyboardInterrupt, EOFError):
             break
         except Exception as err:
             console.end_spinner()  # 触发异常时, end_spinner 未被触发
             print(f"{RED}⏺ Error: {err}{RESET}")
         finally:
+            ctx.clear_runtime_injections()
             ctx.save(ctx_file_path)
 
 

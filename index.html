@@ -617,8 +617,14 @@
         /* Commands */
         .commands-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 10px;
+        }
+
+        @media (max-width: 700px) {
+            .commands-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
         }
 
         @media (max-width: 500px) {
@@ -935,7 +941,7 @@
                             <span>mangopi-cli</span>
                         </div>
                         <div class="terminal-line output">
-                            <span class="info">Mango Cli v0.1.7 | deepseek-v4-flash | /home/user/project</span>
+                            <span class="info">Mango Cli v0.1.16 | deepseek-v4-flash | /home/user/project</span>
                         </div>
                         <div class="terminal-line">
                             <span class="prompt">❯</span>
@@ -999,14 +1005,14 @@
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value green">7</div>
+                    <div class="stat-value green">8</div>
                     <div class="stat-label">
                         <span class="lang-en">Built-in Tools</span>
                         <span class="lang-zh">内置工具</span>
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value purple">2</div>
+                    <div class="stat-value purple">3</div>
                     <div class="stat-label">
                         <span class="lang-en">Providers</span>
                         <span class="lang-zh">模型接入</span>
@@ -1105,6 +1111,46 @@
                         <span class="lang-en">Built-in Chinese & English. Set MANGO_LANG=zh for Chinese UI output. System prompt adapts automatically.</span>
                         <span class="lang-zh">内置中英文。设置 MANGO_LANG=zh 切换中文 UI 输出。System Prompt 自动适配。</span>
                     </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Safety -->
+    <section id="safety">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <span class="lang-en">// SAFETY</span>
+                    <span class="lang-zh">// 安全</span>
+                </h2>
+            </div>
+            <div class="safety-grid">
+                <div class="safety-card">
+                    <div class="safety-icon">🛡️</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Dangerous Command Detection</span>
+                            <span class="lang-zh">危险命令检测</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">Automatically detects rm -rf, sudo, chmod 777, mkfs, and other destructive operations. User confirmation required before execution.</span>
+                            <span class="lang-zh">自动检测 rm -rf, sudo, chmod 777, mkfs 等危险操作。执行前需用户确认。</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="safety-card">
+                    <div class="safety-icon">🔒</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Path Sandbox</span>
+                            <span class="lang-zh">路径沙盒</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">File operations are restricted to the project root directory. Cannot access files outside workspace without explicit approval.</span>
+                            <span class="lang-zh">文件操作限制在项目根目录内。未经明确批准，无法访问工作区外的文件。</span>
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1212,14 +1258,14 @@
                             <span class="lang-zh">API 密钥（必填）</span>
                         </span>
                     </li>
-                    <li class="env-item required">
+                    <li class="env-item">
                         <span class="env-name">MANGO_API_URL</span>
                         <span class="env-desc">
                             <span class="lang-en">Endpoint (default: deepseek)</span>
                             <span class="lang-zh">端点（默认：deepseek）</span>
                         </span>
                     </li>
-                    <li class="env-item required">
+                    <li class="env-item">
                         <span class="env-name">MANGO_MODEL</span>
                         <span class="env-desc">
                             <span class="lang-en">Model (default: deepseek-v4-flash)</span>
@@ -1301,6 +1347,13 @@
                     <p>
                         <span class="lang-en">Regex content search</span>
                         <span class="lang-zh">正则表达式内容搜索</span>
+                    </p>
+                </div>
+                <div class="tool-item">
+                    <code>use_skill</code>
+                    <p>
+                        <span class="lang-en">Load installed skills</span>
+                        <span class="lang-zh">加载已安装技能</span>
                     </p>
                 </div>
                 <div class="tool-item">
@@ -1399,11 +1452,45 @@
                         </p>
                     </div>
                     <div class="cmd-item">
+                        <code>/g &lt;goal&gt;</code>
+                        <p>
+                            <span class="lang-en">Autonomous goal execution</span>
+                            <span class="lang-zh">自主目标执行模式</span>
+                        </p>
+                    </div>
+                    <div class="cmd-item">
                         <code>/h</code>
                         <p>
                             <span class="lang-en">Help</span>
                             <span class="lang-zh">帮助</span>
                         </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Goal Mode -->
+    <section id="goal">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <span class="lang-en">// GOAL MODE</span>
+                    <span class="lang-zh">// 目标模式</span>
+                </h2>
+            </div>
+            <div class="install-grid">
+                <div class="install-card">
+                    <h3>
+                        <span class="lang-en">Autonomous Execution</span>
+                        <span class="lang-zh">自主执行</span>
+                    </h3>
+                    <p>
+                        <span class="lang-en">Use <code>/g &lt;goal&gt;</code> to let Mangopi CLI autonomously plan → execute → verify → iterate until the objective is fully completed. No manual intervention needed.</span>
+                        <span class="lang-zh">使用 <code>/g &lt;目标&gt;</code> 让 Mangopi CLI 自主 规划→执行→验证→迭代，直到目标完全达成。无需人工干预。</span>
+                    </p>
+                    <div class="code-block">
+                        <code><span class="cmd">/g</span> build a fastapi todo app with tests</code>
                     </div>
                 </div>
             </div>
@@ -1526,8 +1613,8 @@
     <footer>
         <div class="container">
             <p>
-                <span class="lang-en">© 2024 MANGOPI CLI v0.1.7 · Apache License 2.0</span>
-                <span class="lang-zh">© 2024 MANGOPI CLI v0.1.7 · Apache 许可证 2.0</span>
+                <span class="lang-en">© 2024 MANGOPI CLI v0.1.16 · Apache License 2.0</span>
+                <span class="lang-zh">© 2024 MANGOPI CLI v0.1.16 · Apache 许可证 2.0</span>
             </p>
         </div>
     </footer>
