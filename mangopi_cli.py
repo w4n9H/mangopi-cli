@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.16"
+__version__ = "0.1.17"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -64,8 +64,7 @@ I18N = {
             "/c or /compact": "手动压缩当前会话（释放上下文空间）",
             "/n or /new": "结束当前会话并创建一个全新的会话",
             "/g or /goal <query>": "进入 Goal 模式，自主规划、执行并验证直到完成目标",
-            "/h or /help": "显示本帮助信息"
-        },
+            "/h or /help": "显示本帮助信息"},
         "safety.warn.dangerous_command": "检测到危险命令",
         "safety.danger.rm": "文件删除",
         "safety.danger.mkfs": "磁盘格式化或分区",
@@ -73,8 +72,7 @@ I18N = {
         "safety.danger.sudo": "提权操作",
         "safety.danger.kill": "危险进程操作",
         "safety.danger.env": "环境变量或系统配置修改",
-        "safety.danger.history": "清理历史/日志",
-    },
+        "safety.danger.history": "清理历史/日志"},
     "en": {
         "tool.call": "Tool call",
         "tool.result.ok": "Applied successfully",
@@ -92,8 +90,7 @@ I18N = {
             "/c or /compact": "Manually compact current session",
             "/n or /new": "End current session and start a new one",
             "/g or /goal <query>": "Enter Goal mode — autonomously plan, execute and verify until the goal is achieved",
-            "/h or /help": "Show this help info"
-        },
+            "/h or /help": "Show this help info"},
         "safety.warn.dangerous_command": "Dangerous command detected",
         "safety.danger.rm": "File deletion",
         "safety.danger.mkfs": "Disk formatting or partition",
@@ -101,8 +98,7 @@ I18N = {
         "safety.danger.sudo": "Privilege escalation",
         "safety.danger.kill": "Dangerous process operation",
         "safety.danger.env": "Environment or system config change",
-        "safety.danger.history": "History/log clearing",
-    }
+        "safety.danger.history": "History/log clearing"}
 }
 
 
@@ -155,17 +151,13 @@ class Printer:
         suffix = _i18n("tool.result.ok") if ok else _i18n("tool.result.fail")
         self._write_line(f"  {_c(icon, color)}{_c(suffix, GREY)}")
 
-    def success(self, msg: str):
-        self._write_line(f"{_c('✓ ', GREEN)}{_c(msg, GREY)}")
+    def success(self, msg: str): self._write_line(f"{_c('✓ ', GREEN)}{_c(msg, GREY)}")
 
-    def error(self, msg: str):
-        self._write_line(f"{_c('✗ ', RED)}{_c(msg, GREY)}")
+    def error(self, msg: str): self._write_line(f"{_c('✗ ', RED)}{_c(msg, GREY)}")
 
-    def warning(self, msg: str):
-        self._write_line(f"{_c('! ', YELLOW)}{_c(msg, GREY)}")
+    def warning(self, msg: str): self._write_line(f"{_c('! ', YELLOW)}{_c(msg, GREY)}")
 
-    def text(self, msg: str):
-        self._write_line(_c(msg, GREY))
+    def text(self, msg: str): self._write_line(_c(msg, GREY))
 
     def separator(self):
         self._write_line(f"{DIM}{'─' * min(os.get_terminal_size().columns, 80)}{RESET}")
@@ -216,17 +208,15 @@ class Printer:
             elif resp in ("n", "no"):
                 return False
             else:
-                print("请输入 y 或 n")
+                print("input y or n")
 
     def diff(self, old: str, new: str, context: int = 3, filename: str = "file.py"):
         self.section("Code Diff")
         old_lines = old.splitlines()
         new_lines = new.splitlines()
-
         diff_lines = difflib.unified_diff(
             old_lines, new_lines, fromfile=f"a/{filename}", tofile=f"b/{filename}", lineterm="", n=context,
         )
-
         for dl in diff_lines:
             if dl.startswith("+") and not dl.startswith("+++"):
                 self._write_line(_c(dl, GREEN))
@@ -281,6 +271,47 @@ def helper():
 
 
 # --- Utils function ---
+FILTERED_DIRS = [
+    ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", ".turbo", ".idea",
+    ".vscode", ".mypy_cache", ".pytest_cache", ".cache", "target", "vendor"
+]
+
+
+def _is_directory_heavy(command: str) -> bool:  # 判断是否是目录遍历类命令
+    return any(k in command for k in ["find ", "tree", "ls -R", "du ", "fd ", "rg ",])
+
+
+def _filter_directory_output(lines: List[str]) -> List[str]:  # 过滤大型/无意义目录
+    filtered = []
+    for line in lines:
+        skip = False
+        for d in FILTERED_DIRS:
+            if (f"/{d}/" in line or f"/{d}:"
+                    in line or line.startswith(f"{d}/") or line.startswith(f"./{d}/") or line.startswith(f"./{d}:") or
+                    line == d or line == f"./{d}" or line.endswith(f"/{d}")):
+                skip = True
+                break
+        if skip:
+            continue
+        filtered.append(line)
+    return filtered
+
+
+def _limit_output_lines(lines: List[str], max_lines: int = 1000) -> List[str]:  # 限制输出行数
+    return lines if len(lines) <= max_lines else (
+            lines[:max_lines] + ["", f"... truncated {len(lines)-max_lines} lines ..."])
+
+
+def _process_bash_output(command: str, output: List[str]) -> List[str]:
+    """ bash command -> directory filter -> line limit"""
+    if not output:
+        return output
+    if _is_directory_heavy(command):
+        output = _filter_directory_output(output)
+    output = _limit_output_lines(output)
+    return output
+
+
 def _check_command_safety(command: str):
     dangerous_patterns = [
         (r'\brm\s+.*-[rf]', 1), (r'\brm\s+-[rf]', 1), (r'\bunlink\b', 1), (r'\brm\s+(-[rf]+\s+)?.*', 1),
@@ -447,23 +478,20 @@ class ToolBase:
             is_optional = param_type.endswith("?")
             base_type = param_type.rstrip("?")
             properties[param_name] = {
-                "type": "integer" if base_type == "number" else base_type, "description": param_info["description"]
-            }
+                "type": "integer" if base_type == "number" else base_type, "description": param_info["description"]}
             if not is_optional:
                 required.append(param_name)
         return {
             "type": "function",
             "function": {
-                "name": self.name,
-                "description": self.description,
+                "name": self.name, "description": self.description,
                 "parameters": {"type": "object", "properties": properties, "required": required}
             }
         }
 
     def run(self, args): raise NotImplementedError
 
-    def preview(self, args):
-        return str(list(args.values())[0])[:self.preview_width] if args else ""
+    def preview(self, args): return str(list(args.values())[0])[:self.preview_width] if args else ""
 
     def before(self, args): pass
 
@@ -484,13 +512,11 @@ class ReadTool(ToolBase):
     params = {
         "path": {"type": "string", "description": "Path to the file to read"},
         "offset": {"type": "number?", "description": "Line number to start reading from (0-indexed, default 0)"},
-        "limit": {"type": "number?", "description": "Maximum number of lines to read (default: all lines)"}
-    }
+        "limit": {"type": "number?", "description": "Maximum number of lines to read (default: all lines)"}}
 
     def run(self, args):
         lines = open(args["path"]).readlines()
-        offset = args.get("offset", 0)
-        limit = args.get("limit", len(lines))
+        offset, limit = args.get("offset", 0), args.get("limit", len(lines))
         selected = lines[offset: offset + limit]
         return self.ok("".join(f"{offset + idx + 1:4}| {line}" for idx, line in enumerate(selected)))
 
@@ -500,8 +526,7 @@ class WriteTool(ToolBase):
     description = "Write content to a file, overwriting if it exists"
     params = {
         "path": {"type": "string", "description": "Path to the file to write"},
-        "content": {"type": "string", "description": "Content to write to the file"}
-    }
+        "content": {"type": "string", "description": "Content to write to the file"}}
 
     def run(self, args):
         error = _validate_file_path(args["path"])
@@ -519,8 +544,13 @@ class EditTool(ToolBase):
         "path": {"type": "string", "description": "Path to the file to edit"},
         "old": {"type": "string", "description": "Exact string to be replaced"},
         "new": {"type": "string", "description": "String to replace it with"},
-        "all": {"type": "boolean?", "description": "Replace all occurrences (default: false)"}
-    }
+        "all": {"type": "boolean?", "description": "Replace all occurrences (default: false)"}}
+
+    def before(self, args):
+        if args.get("old") and args.get("new"):
+            console.diff(old=args["old"], new=args["new"], filename=args["path"])
+
+    def confirm(self, args): return console.prompt_apply(f"Edit {args['path']} (y or n)?")
 
     def run(self, args):
         error = _validate_file_path(args["path"])
@@ -544,8 +574,7 @@ class SearchTool(ToolBase):
     description = "Search for files using a glob pattern"
     params = {
         "pat": {"type": "string", "description": "Glob pattern to match file paths (e.g. '**/*.py')"},
-        "path": {"type": "string?", "description": "Directory to start search from (default: current directory)"}
-    }
+        "path": {"type": "string?", "description": "Directory to start search from (default: current directory)"}}
     use_spinner = True
 
     def run(self, args):
@@ -564,8 +593,7 @@ class GrepTool(ToolBase):
             "description": "Regular expression pattern to search for (Python regex syntax)"},
         "path": {
             "type": "string?",
-            "description": "Search directory to recursively (defaults to current working directory if omitted)"}
-    }
+            "description": "Search directory to recursively (defaults to current working directory if omitted)"}}
     use_spinner = True
 
     def run(self, args):
@@ -583,24 +611,19 @@ class GrepTool(ToolBase):
                         hits.append(f"{filepath}:{line_num}:{line.rstrip()}")
             except Exception:
                 continue
-        return self.ok("\n".join(hits[:50]) or "none")
+        return self.ok("\n".join(hits[:500]) or "none")
 
 
 class BashTool(ToolBase):
     name = "bash"
     description = "Execute a shell command and return its stdout/stderr output (timeout after 60s)"
     params = {
-        "cmd": {"type": "string", "description": "The shell command to execute, e.g., 'ls -la' or 'git status'"}
-    }
+        "cmd": {"type": "string", "description": "The shell command to execute, e.g., 'ls -la' or 'git status'"}}
     use_spinner = True
 
     def confirm(self, args):
         is_dangerous, reason = _check_command_safety(args["cmd"])
-        if not is_dangerous:
-            return True
-        return console.prompt_apply(
-            f"Execute dangerous cmd ({reason})? {args['cmd']}"
-        )
+        return not is_dangerous or console.prompt_apply(f"Execute dangerous cmd ({reason})? {args['cmd']}")
 
     def run(self, args):
         proc = subprocess.Popen(args["cmd"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -612,6 +635,7 @@ class BashTool(ToolBase):
                     break
                 if line:
                     output_lines.append(line)
+            output_lines = _process_bash_output(args['cmd'], output_lines)
             proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
@@ -661,8 +685,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        AttemptCompletionTool()
-    ]
+        AttemptCompletionTool()]
 }
 
 
@@ -675,7 +698,6 @@ class ContextManager:
     def __init__(self):
         self.messages: List[Dict] = []
         self.white_tool_list = ["attempt_completion"]
-
         self.auto_compact_threshold = int(MANGO_MAX_CONTEXT * 0.8)
         self.auto_compact_disabled = False
         self.continuous_failures = 0
@@ -1004,11 +1026,9 @@ class BaseProvider:
     def headers(self) -> dict:
         return {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
 
-    def build_body(self, messages: List[Dict[str, Any]]) -> dict:
-        raise NotImplementedError
+    def build_body(self, messages: List[Dict[str, Any]]) -> dict: raise NotImplementedError
 
-    def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError
+    def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]: raise NotImplementedError
 
     @staticmethod
     def normalize_tool_calls(message: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1054,12 +1074,7 @@ class BaseProvider:
 
 class OpenAIProvider(BaseProvider):
     def build_body(self, messages: List[Dict[str, Any]]) -> dict:
-        return {
-            "model": self.model,
-            "messages": messages,
-            "tools": tool_schema(),
-            "stream": False,
-        }
+        return {"model": self.model, "messages": messages, "tools": tool_schema(), "stream": False}
 
     def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
         choices = response.get("choices", [])
@@ -1118,9 +1133,7 @@ provider = create_provider()
 
 
 def chat_completion(messages: List[Dict[str, str]]):
-    return _request(
-        provider.api_url, provider.build_body(messages), headers=provider.headers()
-    )
+    return _request(provider.api_url, provider.build_body(messages), headers=provider.headers())
 
 
 def run_tool(tool_name, tool_args):
@@ -1187,25 +1200,23 @@ class SystemPrompt:
             "below and the tools available to you to assist the user.\n",
             "IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are "
             "for helping the user with programming. For file paths, always prefer absolute paths when possible. If "
-            "you need to read a directory, use the bash tool (ls) because the read tool cannot read directories.\n",
-        ]
+            "you need to read a directory, use the bash tool (ls) because the read tool cannot read directories.\n",]
 
     @staticmethod
     def _build_tool_guidance() -> List[str]:  # 工具使用指导
         return [
-            "## Tool Selection Guidelines\n",
-            "You have access to the following dedicated tools: read/write/edit/search/grep/bash/attempt_completion.\n",
-            "- For reading files: use **read**.",
-            "- For writing or overwriting files: use **write**.",
+            "## Tool Selection Guidelines\n\n",
+            "You have access to the following dedicated tools: read/write/edit/search/grep/bash/attempt_completion.\n\n",
+            "- For reading files: use **read**.\n",
+            "- For writing or overwriting files: use **write**.\n",
             "- For replacing exact strings within a file: use **edit**. Prefer edit when you only need to change a "
-            "small portion of a file.",
-            "- For searching file names/paths: use **search** with a glob pattern.",
-            "- For searching file content with regex: use **grep**.",
+            "small portion of a file.\n",
+            "- For searching file names/paths: use **search** with a glob pattern.\n",
+            "- For searching file content with regex: use **grep**.\n",
             "- Only use **bash** when no dedicated tool can accomplish the task, or for system commands (e.g., "
-            "installing packages, running tests, managing directories).",
-            "- Always use **attempt_completion** to present the final result to the user.",
-            "- When using edit, ensure the `old` string is unique or set `all` to true.\n",
-        ]
+            "installing packages, running tests, managing directories).\n",
+            "- Always use **attempt_completion** to present the final result to the user.\n",
+            "- When using edit, ensure the `old` string is unique or set `all` to true.\n\n",]
 
     @staticmethod
     def _build_skills_guidance() -> List[str]:
@@ -1219,25 +1230,20 @@ class SystemPrompt:
                 "  - workflows\n",
                 "  - best practices\n",
                 "  - reusable scripts\n",
-                "  - references\n\n"
-            ]
+                "  - references\n\n"]
         else:
-            return [
-                "## Skills Selection Guidelines\n\n", "No skills available.\n\n"
-            ]
+            return ["## Skills Selection Guidelines\n\n", "No skills available.\n\n"]
 
     @staticmethod
     def _build_environment() -> List[str]:  # 动态环境信息注入
         os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
         python_ver = sys.version.split()[0]
-
         return [
             "## Environment\n",
-            f"- Working directory: {project_root}",
-            f"- Operating system: {os_info}",
-            f"- Python version: {python_ver}",
-            f"- Shell: {os.environ.get('SHELL', 'unknown')}",
-        ]
+            f"- Working directory: {project_root}\n",
+            f"- Operating system: {os_info}\n",
+            f"- Python version: {python_ver}\n",
+            f"- Shell: {os.environ.get('SHELL', 'unknown')}\n",]
 
     @staticmethod
     def _build_language() -> List[str]:
@@ -1262,61 +1268,59 @@ class SystemPrompt:
     def _build_safety() -> List[str]:
         """ 安全边界提示. 要求模型在执行前对危险命令进行确认，并遵守工具的安全检查。"""
         return [
-            "## Safety\n",
+            "## Safety\n\n",
             "- Before executing any command that modifies the file system, deletes files, changes permissions, "
             "or performs system administration, you MUST ensure the command is safe and the user has confirmed if "
-            "necessary.",
+            "necessary.\n",
             "- Do not attempt to access files outside the project root unless explicitly required and confirmed by "
-            "the user.\n",
-        ]
+            "the user.\n\n",]
 
     @staticmethod
     def _build_builtin_rules() -> List[str]:
         return [
-            "## Built-in Rules\n",
-            "### 1. Think Before Coding\n",
+            "## Built-in Rules\n\n",
+            "### 1. Think Before Coding\n\n",
             "**Don't assume. Don't hide confusion. Surface tradeoffs.**\n",
-            "- **State assumptions explicitly** — If uncertain, ask rather than guess",
-            "- **Present multiple interpretations** — Don't pick silently when ambiguity exists",
-            "- **Push back when warranted** — If a simpler approach exists, say so",
-            "- **Stop when confused** — Name what's unclear and ask for clarification\n",
-            "### 2. Simplicity First\n",
-            "**inimum code that solves the problem. Nothing speculative.**\n",
-            "- No features beyond what was asked",
-            "- No abstractions for single-use code",
-            "- No 'flexibility' or 'configurability' that wasn't requested",
-            "- No error handling for impossible scenarios",
-            "- If 200 lines could be 50, rewrite it\n",
-            "### 3. Surgical Changes\n",
-            "**Touch only what you must. Clean up only your own mess.**\n",
+            "- **State assumptions explicitly** — If uncertain, ask rather than guess\n",
+            "- **Present multiple interpretations** — Don't pick silently when ambiguity exists\n",
+            "- **Push back when warranted** — If a simpler approach exists, say so\n",
+            "- **Stop when confused** — Name what's unclear and ask for clarification\n\n",
+            "### 2. Simplicity First\n\n",
+            "**inimum code that solves the problem. Nothing speculative.**\n\n",
+            "- No features beyond what was asked\n",
+            "- No abstractions for single-use code\n",
+            "- No 'flexibility' or 'configurability' that wasn't requested\n",
+            "- No error handling for impossible scenarios\n",
+            "- If 200 lines could be 50, rewrite it\n\n",
+            "### 3. Surgical Changes\n\n",
+            "**Touch only what you must. Clean up only your own mess.**\n\n",
             "When editing existing code:\n",
-            "- Don't 'improve' adjacent code, comments, or formatting",
-            "- Don't refactor things that aren't broken",
-            "- Match existing style, even if you'd do it differently",
+            "- Don't 'improve' adjacent code, comments, or formatting\n",
+            "- Don't refactor things that aren't broken\n",
+            "- Match existing style, even if you'd do it differently\n",
             "- If you notice unrelated dead code, mention it — don't delete it\n",
             "When your changes create orphans:\n",
-            "- Remove imports/variables/functions that YOUR changes made unused",
-            "- Don't remove pre-existing dead code unless asked\n",
-            "### 4. Goal-Driven Execution\n",
-            "**Define success criteria. Loop until verified.**\n",
+            "- Remove imports/variables/functions that YOUR changes made unused\n",
+            "- Don't remove pre-existing dead code unless asked\n\n",
+            "### 4. Goal-Driven Execution\n\n",
+            "**Define success criteria. Loop until verified.**\n\n",
             "Transform imperative tasks into verifiable goals:\n",
-            "| Instead of... | Transform to... |",
-            "|--------------|-----------------|",
-            "| 'Add validation' | 'Write tests for invalid inputs, then make them pass' |",
-            "| 'Fix the bug' | 'Write a test that reproduces it, then make it pass' |",
+            "| Instead of... | Transform to... |\n",
+            "|--------------|-----------------|\n",
+            "| 'Add validation' | 'Write tests for invalid inputs, then make them pass' |\n",
+            "| 'Fix the bug' | 'Write a test that reproduces it, then make it pass' |\n",
             "| 'Refactor X' | 'Ensure tests pass before and after' |\n",
             "For multi-step tasks, state a brief plan:\n",
-            "```",
-            "1. [Step] → verify: [check]",
-            "2. [Step] → verify: [check]",
-            "3. [Step] → verify: [check]",
-            "```\n"
-        ]
+            "```\n",
+            "1. [Step] → verify: [check]\n",
+            "2. [Step] → verify: [check]\n",
+            "3. [Step] → verify: [check]\n",
+            "```\n"]
 
     def assemble(self) -> str:  # 将所有 section 按顺序拼接成完整的 system prompt。
         _basic = []
         for _, content in self.sections:
-            _basic.append("\n".join(content))
+            _basic.append("".join(content))
         return "\n\n".join(_basic)
 
 
@@ -1367,8 +1371,6 @@ def main():
 
     ctx_file_path = os.path.join(session_dir, "session.json")
     ctx = ContextManager()
-    ctx.enabled_compact()
-    ctx.set_max_failures()
     ctx.load(ctx_file_path)
 
     prompt_runtime = SystemPrompt()
@@ -1418,8 +1420,7 @@ def main():
                     "- continue until fully complete\n"
                     "- only call `attempt_completion` tool when the goal is fully completed\n\n"
                     f"GOAL:\n{goal_text}\n\n"
-                    f"Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
+                    f"Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 console.success(f"🎯 Goal: {goal_text}")
                 agent_loop(ctx, ctx_file_path, "[CONTINUE GOAL EXECUTION]")
                 continue
