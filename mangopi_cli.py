@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.17"
+__version__ = "0.1.18"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -37,7 +37,8 @@ LANGUAGE = os.environ.get("MANGO_LANG", "en").lower()
 
 project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
-session_dir = os.path.join(project_root, ".mangocli", "session")
+session_dir = os.path.join(base_persist_dir, "session")
+memory_dir = os.path.join(base_persist_dir, "memory")
 
 # ANSI colors
 RESET, BOLD, SOFT, DIM = "\033[0m", "\033[1m", "\033[37m", "\033[2m"
@@ -261,6 +262,7 @@ console = Printer()
 # --- Init dir, Base data ---
 def initialize_system():
     os.makedirs(session_dir, exist_ok=True)  # auto create .mangocli
+    os.makedirs(memory_dir, exist_ok=True)
 
 
 def helper():
@@ -375,6 +377,62 @@ def _request(url: str, body: dict, headers: dict = None, timeout: int = 300, max
         else:
             break
     raise last_exception
+
+
+class MemoryManager:
+    def __init__(self):
+        self.memory_dir = memory_dir
+
+    def today_path(self):
+        return os.path.join(self.memory_dir, datetime.now().strftime("%Y-%m-%d.md"))
+
+    def append(self, content: str):
+        with open(self.today_path(), "a", encoding="utf-8") as f:
+            f.write(content.strip() + "\n\n")
+
+    @staticmethod
+    def _tokenize(text: str):
+        return [x.strip().lower() for x in text.split() if x.strip()]
+
+    @staticmethod
+    def _split_chunks(text: str):
+        return [c.strip() for c in re.split(r"\n\s*\n", text) if c.strip()]
+
+    def search(self, query: str, top_k: int = 10):
+        keywords = self._tokenize(query)
+        if not keywords:
+            return "empty query"
+
+        scored = []
+        for path in sorted(globlib.glob(self.memory_dir + "/*.md"), reverse=True):
+            try:
+                with open(path, encoding="utf-8") as fp:
+                    memory_text = fp.read()
+                    chunks = self._split_chunks(memory_text)
+                    for chunk in chunks:
+                        lower = chunk.lower()
+                        score = 0
+                        for kw in keywords:
+                            if kw in lower:
+                                score += lower.count(kw) * 10
+                        if score <= 0:
+                            continue
+                        score += min(len(chunk) // 200, 5)
+                        mtime_bonus = max(0, 30 - int((time.time() - os.path.getmtime(path)) / 86400))
+                        score += mtime_bonus
+                        scored.append({"score": score, "file": os.path.basename(path), "content": chunk[:2000]})
+            except Exception:
+                continue
+        if not scored:
+            return "No memory found."
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        results = []
+        for item in scored[:top_k]:
+            results.append(f"# {item['file']} (score={item['score']})\n{item['content']}")
+        return "\n\n---\n\n".join(results)
+
+
+memory_manager = MemoryManager()
 
 
 class SkillManager:
@@ -671,6 +729,36 @@ class UseSkillTool(ToolBase):
         return self.ok("\n".join(result))
 
 
+class SearchMemoryTool(ToolBase):
+    name = "search_memory"
+    description = "Search long-term markdown memories using multi-keyword retrieval"
+    params = {
+        "query": {
+            "type": "string",
+            "description": "Search query. Supports multiple space-separated keywords in both English and Chinese."}}
+    use_spinner = True
+
+    def run(self, args):
+        result = memory_manager.search(args["query"])
+        return self.ok(result)
+
+
+class AppendMemoryTool(ToolBase):
+    name = "append_memory"
+    description = "Append important information into long-term markdown memory"
+    params = {
+        "content": {
+            "type": "string",
+            "description": "Important long-term memory content such as architecture decisions, bugs, workflows"}}
+
+    def confirm(self, args):
+        return console.prompt_apply("Append to long-term memory (y or n)?")
+
+    def run(self, args):
+        memory_manager.append(args["content"])
+        return self.ok("memory appended")
+
+
 class AttemptCompletionTool(ToolBase):
     name = "attempt_completion"
     description = "Indicate that the task is complete and provide the final result/answer to the user"
@@ -685,7 +773,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        AttemptCompletionTool()]
+        SearchMemoryTool(), AppendMemoryTool(), AttemptCompletionTool()]
 }
 
 
@@ -694,6 +782,12 @@ def tool_schema():
 
 
 # --- Context manager: () ---
+COMPACT_RULES = {
+    "tool": {"max_tokens": 800, "keep_head": 200, "keep_tail": 200, "max_age": 21_600},  # 真实执行状态
+    "reasoning_content": {"max_tokens": 500, "keep_head": 125, "keep_tail": 125, "max_age": 7_200},  # 信息密度低
+    "assistant": {"max_tokens": 1500, "keep_head": 350, "keep_tail": 350, "max_age": 10_800}}
+
+
 class ContextManager:
     def __init__(self):
         self.messages: List[Dict] = []
@@ -761,7 +855,7 @@ class ContextManager:
     def get_latest(self, n: int = 10) -> List[Dict]: return self.messages[-n:]
 
     @staticmethod
-    def compact_text(text: str, head: int = 80, tail: int = 80) -> str:
+    def compact_text(text: str, head: int, tail: int) -> str:
         text = (text or "").strip()
         if not text:
             return ""
@@ -815,27 +909,19 @@ class ContextManager:
         except Exception:
             self.continuous_failures += 1
 
-    def micro_compact(self, max_age_seconds: int = 21_600, min_tokens: int = 200):
+    def micro_compact(self):
         now = int(time.time())
         for idx, m in enumerate(self.messages):
-            if now - m.get("ts", now) < max_age_seconds:  # new tool pass
-                continue
-            if m.get("role") != "tool":  # not tool pass
-                continue
-            if m.get("tool_name") in self.white_tool_list:  # white tool pass
-                continue
-            content = m.get("content", "")
-            if content.endswith("<compacted>"):  # compacted pass
-                continue
-            content_tokens = self.estimated_tokens({"content": content})
-            if content_tokens < min_tokens:  # too small pass
-                continue
-            summary = self.compact_text(content)
-            if not summary.strip():
-                continue
-            if self.estimated_tokens({"content": summary}) >= content_tokens:
-                continue
-            m["content"] = summary
+            _age = now - m.get("ts", now)
+            if m.get("role") == "tool":  # not tool pass
+                if m.get("tool_name") in self.white_tool_list:  # white tool pass
+                    continue
+                content = m.get("content", "")
+                if content and not content.endswith("<compacted>"):  # compacted pass
+                    rule = COMPACT_RULES["tool"]
+                    if _age >= rule.get("max_age", 0):  # new tool pass
+                        if self.estimated_tokens({"content": content}) > rule["max_tokens"]:  # too small pass
+                            m["content"] = self.compact_text(content, rule["keep_head"], rule["keep_tail"])
 
     def session_memory_compact(self, retain_turns: int = 10, min_tokens: int = 200) -> bool:
         systems = [copy.deepcopy(m) for m in self.messages if m.get("role") == "system"]
@@ -853,26 +939,24 @@ class ContextManager:
                 if cm.get("role") == "tool":
                     cm["content"] = f"<Old tool({cm['tool_name']}:{cm['tool_call_id']}) result force compacted>"
                 elif cm.get("role") == "assistant":
-                    if cm.get("tool_calls"):  # tool calls pass
-                        compacted.append(cm)
-                        continue
-
-                    content = cm.get("content", "")
-                    if isinstance(content, list):
-                        continue  # claude style pass
-                    content_tokens = self.estimated_tokens({"content": content})
-                    if content_tokens > min_tokens:  # too small pass
-                        cm["content"] = (self.compact_text(content) if content else "")
-
-                    reasoning_content = cm.get("reasoning_content", "")
-                    reasoning_content_tokens = self.estimated_tokens({"reasoning_content": reasoning_content})
-                    if reasoning_content_tokens > min_tokens:
-                        cm["reasoning_content"] = self.compact_text(reasoning_content)
-
-                    reasoning_details = cm.get("reasoning_details", "")
-                    reasoning_details_tokens = self.estimated_tokens({"reasoning_details": reasoning_details})
-                    if reasoning_details_tokens > min_tokens:
-                        cm["reasoning_details"] = self.compact_text(reasoning_details)
+                    content = cm.get("content", "")  # llm output
+                    if isinstance(content, str) and content:
+                        rule = COMPACT_RULES["assistant"]
+                        if (not content.endswith("<compacted>") and
+                                self.estimated_tokens({"content": content}) > rule["max_tokens"]):
+                            cm["content"] = self.compact_text(content, rule["keep_head"], rule["keep_tail"])
+                    reasoning = (cm.get("reasoning_content") or cm.get("reasoning") or cm.get("reasoning_details") or "")
+                    if reasoning:
+                        rule = COMPACT_RULES["reasoning_content"]
+                        if (not reasoning.endswith("<compacted>") and
+                                self.estimated_tokens({"content": reasoning}) > rule["max_tokens"]):
+                            compacted_text = self.compact_text(reasoning, rule["keep_head"], rule["keep_tail"])
+                            if "reasoning_content" in cm:
+                                cm["reasoning_content"] = compacted_text
+                            if "reasoning" in cm:
+                                cm["reasoning"] = compacted_text
+                            if "reasoning_details" in cm:
+                                cm["reasoning_details"] = compacted_text
                 compacted.append(cm)
         for turn in recent_turns:
             compacted.extend(copy.deepcopy(turn))
@@ -1187,7 +1271,6 @@ class SystemPrompt:
         self.sections.append(("base_intro", self._build_base_intro()))
         self.sections.append(("safety", self._build_safety()))
         self.sections.append(("builtin_rules", self._build_builtin_rules()))
-        # self.sections.append(("language", self._build_language()))
         self.sections.append(("tool_guidance", self._build_tool_guidance()))
         self.sections.append(("skills_guidance", self._build_skills_guidance()))
         self.sections.append(("memory", self._build_memory()))
@@ -1206,13 +1289,19 @@ class SystemPrompt:
     def _build_tool_guidance() -> List[str]:  # 工具使用指导
         return [
             "## Tool Selection Guidelines\n\n",
-            "You have access to the following dedicated tools: read/write/edit/search/grep/bash/attempt_completion.\n\n",
+            "You have access to the following dedicated tools: read/write/edit/search/grep/bash/"
+            "search_memory/append_memory/attempt_completion.\n\n",
             "- For reading files: use **read**.\n",
             "- For writing or overwriting files: use **write**.\n",
             "- For replacing exact strings within a file: use **edit**. Prefer edit when you only need to change a "
             "small portion of a file.\n",
             "- For searching file names/paths: use **search** with a glob pattern.\n",
             "- For searching file content with regex: use **grep**.\n",
+            "- For retrieving long-term knowledge or historical decisions: use **search_memory**.\n",
+            "- search_memory supports multi-keyword retrieval in both English and Chinese.\n",
+            "- Only use **append_memory** for information that is truly valuable long-term "
+            "(architecture decisions, workflows, important bugs, persistent preferences).\n",
+            "- Do NOT spam append_memory for temporary tasks or short-lived context.\n",
             "- Only use **bash** when no dedicated tool can accomplish the task, or for system commands (e.g., "
             "installing packages, running tests, managing directories).\n",
             "- Always use **attempt_completion** to present the final result to the user.\n",
@@ -1226,11 +1315,7 @@ class SystemPrompt:
                 "## Skills Selection Guidelines\n\n",
                 f"{desc}\n\n",
                 "- If an installed skill is relevant, call use_skill first before proceeding.\n",
-                "- Skills may contain:\n",
-                "  - workflows\n",
-                "  - best practices\n",
-                "  - reusable scripts\n",
-                "  - references\n\n"]
+                "- Skills may contain: workflows, best practices, reusable scripts, references\n\n"]
         else:
             return ["## Skills Selection Guidelines\n\n", "No skills available.\n\n"]
 
@@ -1244,14 +1329,6 @@ class SystemPrompt:
             f"- Operating system: {os_info}\n",
             f"- Python version: {python_ver}\n",
             f"- Shell: {os.environ.get('SHELL', 'unknown')}\n",]
-
-    @staticmethod
-    def _build_language() -> List[str]:
-        """语言偏好(可通过环境变量 MANGO_LANG 配置), 若未设置则默认使用 English. """
-        lang = os.environ.get("MANGO_LANG", "zh")
-        if lang.lower() == "chinese" or lang.lower() == "zh":
-            return ["## Language\n", f"You should communicate with the user in Chinese (Simplified)."]
-        return ["## Language\n", f"You should communicate with the user in {lang}."]
 
     @staticmethod
     def _build_memory() -> List[str]:
