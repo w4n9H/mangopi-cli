@@ -421,8 +421,14 @@
         /* Providers */
         .providers-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
+        }
+
+        @media (max-width: 900px) {
+            .providers-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
 
         @media (max-width: 600px) {
@@ -941,7 +947,7 @@
                             <span>mangopi-cli</span>
                         </div>
                         <div class="terminal-line output">
-                            <span class="info">Mango Cli v0.1.16 | deepseek-v4-flash | /home/user/project</span>
+                            <span class="info">Mango Cli v0.1.19 | deepseek-v4-flash | /home/user/project</span>
                         </div>
                         <div class="terminal-line">
                             <span class="prompt">❯</span>
@@ -1005,7 +1011,7 @@
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value green">8</div>
+                    <div class="stat-value green">11</div>
                     <div class="stat-label">
                         <span class="lang-en">Built-in Tools</span>
                         <span class="lang-zh">内置工具</span>
@@ -1194,6 +1200,13 @@
                         <span class="lang-zh">Qwen、Moonshot 等 — 只要支持 OpenAI 协议即可接入。</span>
                     </p>
                 </div>
+                <div class="provider-card">
+                    <h3>MiniMax</h3>
+                    <p>
+                        <span class="lang-en">Auto-detected when the model name contains "minimax". Enables reasoning_split for transparent reasoning traces.</span>
+                        <span class="lang-zh">模型名包含 "minimax" 时自动启用。通过 reasoning_split 暴露推理链。</span>
+                    </p>
+                </div>
             </div>
         </div>
     </section>
@@ -1357,6 +1370,27 @@
                     </p>
                 </div>
                 <div class="tool-item">
+                    <code>search_memory</code>
+                    <p>
+                        <span class="lang-en">Multi-keyword memory search</span>
+                        <span class="lang-zh">多关键词记忆检索</span>
+                    </p>
+                </div>
+                <div class="tool-item">
+                    <code>append_memory</code>
+                    <p>
+                        <span class="lang-en">Append long-term memory</span>
+                        <span class="lang-zh">追加长期记忆</span>
+                    </p>
+                </div>
+                <div class="tool-item">
+                    <code>goal</code>
+                    <p>
+                        <span class="lang-en">Plan / step / show / finish</span>
+                        <span class="lang-zh">目标计划管理</span>
+                    </p>
+                </div>
+                <div class="tool-item">
                     <code>bash</code>
                     <p>
                         <span class="lang-en">Shell exec with 60s timeout</span>
@@ -1364,7 +1398,7 @@
                     </p>
                 </div>
                 <div class="tool-item">
-                    <code>completion</code>
+                    <code>attempt_completion</code>
                     <p>
                         <span class="lang-en">Task completion signal</span>
                         <span class="lang-zh">任务完成信号</span>
@@ -1613,8 +1647,8 @@
     <footer>
         <div class="container">
             <p>
-                <span class="lang-en">© 2024 MANGOPI CLI v0.1.16 · Apache License 2.0</span>
-                <span class="lang-zh">© 2024 MANGOPI CLI v0.1.16 · Apache 许可证 2.0</span>
+                <span class="lang-en">© 2024 MANGOPI CLI v0.1.19 · Apache License 2.0</span>
+                <span class="lang-zh">© 2024 MANGOPI CLI v0.1.19 · Apache 许可证 2.0</span>
             </p>
         </div>
     </footer>

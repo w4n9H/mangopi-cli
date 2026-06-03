@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.18"
+__version__ = "0.1.19"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -39,6 +39,7 @@ project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
 memory_dir = os.path.join(base_persist_dir, "memory")
+goal_file = os.path.join(base_persist_dir, "goal.json")
 
 # ANSI colors
 RESET, BOLD, SOFT, DIM = "\033[0m", "\033[1m", "\033[37m", "\033[2m"
@@ -377,6 +378,21 @@ def _request(url: str, body: dict, headers: dict = None, timeout: int = 300, max
         else:
             break
     raise last_exception
+
+
+def _goal_load() -> Optional[Dict[str, Any]]:
+    try:
+        return json.loads(open(goal_file, encoding="utf-8").read())
+    except Exception as err:
+        return None
+
+
+def _goal_save(g: Dict[str, Any]) -> None:
+    with open(goal_file, "w", encoding="utf-8") as fp:
+        fp.write(json.dumps(g, indent=2, ensure_ascii=False))
+
+
+def _goal_clear() -> None: os.remove(goal_file) if os.path.exists(goal_file) else None
 
 
 class MemoryManager:
@@ -759,12 +775,99 @@ class AppendMemoryTool(ToolBase):
         return self.ok("memory appended")
 
 
+class GoalTool(ToolBase):
+    name = "goal"
+    description = ("Manage the current goal plan. "
+                   "action='plan' creates, 'step' updates a step, 'show' views, 'finish' clears.")
+    params = {
+        "action": {
+            "type": "string",
+            "description": "What to do: 'plan'(create new),'step'(update one step),'show'(view current),"
+                           "'finish'(mark goal done)"},
+        "goal": {
+            "type": "string?",
+            "description": "The user's goal text in plain language, required for action='plan'."},
+        "steps": {
+            "type": "string?",
+            "description": "JSON array of step descriptions, e.g. '[\"set up project\", \"write tests\"]'"
+                           ", required for action='plan'."},
+        "step": {
+            "type": "number?",
+            "description": "Which step to update (1-indexed), required for action='step'."},
+        "status": {
+            "type": "string?",
+            "description": "Step status: 'done' = completed, 'failed' = errored, required for action='step'."},
+        "note": {
+            "type": "string?",
+            "description": "Free-text note about the result,e.g. 'pytest 3/3 passed' or 'compile error: undefined foo',"
+                           "Optional but recommended action='step'."}}
+    use_spinner = True
+    preview_lines = 100
+    preview_width = 500
+
+    def run(self, args):
+        action = args.get("action", "show")
+        method = getattr(self, f"_action_{action}", None)
+        if not method:
+            return self.fail(f"unknown action '{action}', one of 'plan' | 'step' | 'show' | 'finish'")
+        return method(args)
+
+    def _action_plan(self, args):
+        if not args.get("goal") or not args.get("steps"):
+            return self.fail("action='plan' requires 'goal' and 'steps'")
+        try:
+            sl = json.loads(args["steps"])
+            if not isinstance(sl, list) or not sl:
+                return self.fail("steps must be non-empty JSON array")
+        except json.JSONDecodeError as e:
+            return self.fail(f"invalid steps JSON array: {e}")
+        cur = _goal_load()  # 拒绝覆盖未结束的活跃 goal
+        if cur and cur.get("current", 0) < len(cur.get("steps", [])):
+            return self.fail(
+                "action='plan' refused: an active goal is still in progress "
+                f"(step {cur['current'] + 1}/{len(cur['steps'])}). "
+                "Use action='step' to advance the current goal, or action='finish' to close it first.")
+        g = {"goal": args["goal"], "steps": [{"desc": s, "status": "pending"} for s in sl], "current": 0}
+        _goal_save(g)
+        return self.ok(f"plan: {len(sl)} steps\n{json.dumps(g, ensure_ascii=False)}")
+
+    def _action_step(self, args):
+        n, status = args.get("step"), args.get("status", "done")
+        if status not in ("done", "failed"):
+            return self.fail(f"invalid status '{status}', one of 'done' | 'failed'")
+        g = _goal_load()
+        if not g or not n or n < 1 or n > len(g["steps"]):
+            return self.fail("no active goal or invalid step number, the goal may have already ended,"
+                             "call `attempt_completion` tool finish task.")
+        g["steps"][n - 1]["status"] = status
+        if args.get("note"):
+            g["steps"][n - 1]["note"] = args["note"]
+        if status == "done" and n == g["current"] + 1:
+            g["current"] = n
+        _goal_save(g)
+        nxt = (f"next: step {n + 1}" if n < len(g["steps"])
+               else "ALL STEPS DONE. You MUST now: (1) call goal(action='finish'), "
+                    "(2) call attempt_completion. DO NOT call goal(action='plan') again — "
+                    "it will be rejected and will reset your progress.")
+        return self.ok(f"step {n} {status}. {nxt}")
+
+    def _action_show(self, args):
+        g = _goal_load()
+        return self.ok(json.dumps(g, ensure_ascii=False, indent=2)) if g else self.fail("no active goal")
+
+    def _action_finish(self, args):
+        _goal_clear()
+        return self.ok("goal cleared, call `attempt_completion` tool finish task.")
+
+    _HANDLERS = {"plan": _action_plan, "step": _action_step, "show": _action_show, "finish": _action_finish}
+
+
 class AttemptCompletionTool(ToolBase):
     name = "attempt_completion"
     description = "Indicate that the task is complete and provide the final result/answer to the user"
     params = {"result": {"type": "string", "description": "The final result or summary of the completed task"}}
     preview_lines = 500
-    preview_width = 5000
+    preview_width = 500
 
     def run(self, args):
         return self.ok(args["result"])
@@ -773,7 +876,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        SearchMemoryTool(), AppendMemoryTool(), AttemptCompletionTool()]
+        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), AttemptCompletionTool()]
 }
 
 
@@ -799,12 +902,6 @@ class ContextManager:
         self.runtime_injections: List[Dict[str, Any]] = []  # 临时运行时注入，不进入 session / compact / save
 
     def __len__(self): return len(self.messages)
-
-    def disabled_compact(self): self.auto_compact_disabled = True
-
-    def enabled_compact(self): self.auto_compact_disabled = False
-
-    def set_max_failures(self, n: int = 3): self.max_failures = n
 
     def clear(self): self.messages = []
 
@@ -1004,29 +1101,20 @@ class ContextManager:
 
     def full_compact(self):    # 手动执行，调用模型进行大规模的摘要生成，后续实现
         _full_compact_prompt = [
-            "Your task is to create a detailed summary of the conversation so far, "
-            "paying close attention to the user's explicit requests and your previous actions.\n",
-            "This summary should be thorough in capturing technical details, code patterns, "
-            "and architectural decisions that would be essential for continuing development work without "
-            "losing context.\n\n",
-            "Your summary should include the following sections:\n\n",
-            "1. Primary Request and Intent:Capture all of the user's explicit requests and intents in detail\n",
-            "2. Key Technical Concepts:List all important technical concepts, technologies, frameworks discussed.\n",
-            "3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. "
-            "Pay special attention to the most recent messages and include full code snippets where applicable "
-            "and include a summary of why this file read or edit is important.\n",
-            "4. Errors and fixes: List all errors that you ran into, and how you fixed them. "
-            "Pay special attention to specific user feedback that you received, "
-            "especially if the user told you to do something differently.\n",
-            "5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.\n",
-            "6. All user messages: List ALL user messages that are not tool results. "
-            "These are critical for understanding the users' feedback and changing intent.\n",
-            "7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.\n",
-            "8. Current Work: Describe in detail precisely what was being worked on immediately "
-            "before this summary request, paying special attention to the most recent messages from both "
-            "user and assistant. Include file names and code snippets where applicable.\n\n",
+            "Create a detailed summary of the conversation so far.\n",
+            "Focus on: user's original intent, files modified with key code snippets, "
+            "errors encountered and their fixes, and the current work in progress.\n",
+            "Use this structure:\n",
+            "1. Primary Request and Intent\n",
+            "2. Key Technical Concepts\n",
+            "3. Files and Code Sections (most recent first)\n",
+            "4. Errors and fixes\n",
+            "5. Problem Solving\n",
+            "6. All user messages\n",
+            "7. Pending Tasks\n",
+            "8. Current Work\n\n",
+            "Output in <analysis>...</analysis><summary>...</summary> format.\n",
             "Here's an example of how your output should be structured:\n\n",
-            "<example>\n",
             "<analysis>\n",
             "[Your thought process, ensuring all points are covered thoroughly and accurately]\n",
             "</analysis>\n\n",
@@ -1034,7 +1122,6 @@ class ContextManager:
             "1. Primary Request and Intent:\n",
             "  [Detailed description]\n\n",
             "2. Key Technical Concepts:\n",
-            "  - [Concept 1]\n",
             "  - [Concept 1]\n",
             "  - [...]\n\n",
             "3. Files and Code Sections:\n",
@@ -1057,26 +1144,10 @@ class ContextManager:
             "  - [...]\n\n",
             "7. Pending Tasks:\n",
             "  - [Task 1]\n",
-            "  - [Task 2]\n",
             "  - [...]\n\n",
             "8. Current Work:\n",
             " [Precise description of current work]\n\n",
-            "</summary>\n",
-            "</example>\n\n",
-            "Please provide your summary based on the conversation so far, "
-            "following this structure and ensuring precision and thoroughness in your response. \n\n",
-            "There may be additional summarization instructions provided in the included context. If so, remember "
-            "to follow these instructions when creating the above summary. Examples of instructions include:\n\n",
-            "<example>\n",
-            "## Compact Instructions\n",
-            "When summarizing the conversation focus on typescript code changes and also remember the mistakes "
-            "you made and how you fixed them.\n",
-            "</example>\n\n",
-            "<example>\n",
-            "# Summary instructions\n",
-            "When you are using compact - please focus on test output and code changes. Include file reads verbatim.\n",
-            "</example>\n\n",
-        ]
+            "</summary>\n\n"]
         try:
             self.append_user("\n".join(_full_compact_prompt))
             respon = provider.parse_response(_request(
@@ -1288,24 +1359,13 @@ class SystemPrompt:
     @staticmethod
     def _build_tool_guidance() -> List[str]:  # 工具使用指导
         return [
-            "## Tool Selection Guidelines\n\n",
-            "You have access to the following dedicated tools: read/write/edit/search/grep/bash/"
-            "search_memory/append_memory/attempt_completion.\n\n",
-            "- For reading files: use **read**.\n",
-            "- For writing or overwriting files: use **write**.\n",
-            "- For replacing exact strings within a file: use **edit**. Prefer edit when you only need to change a "
-            "small portion of a file.\n",
-            "- For searching file names/paths: use **search** with a glob pattern.\n",
-            "- For searching file content with regex: use **grep**.\n",
-            "- For retrieving long-term knowledge or historical decisions: use **search_memory**.\n",
-            "- search_memory supports multi-keyword retrieval in both English and Chinese.\n",
-            "- Only use **append_memory** for information that is truly valuable long-term "
-            "(architecture decisions, workflows, important bugs, persistent preferences).\n",
-            "- Do NOT spam append_memory for temporary tasks or short-lived context.\n",
-            "- Only use **bash** when no dedicated tool can accomplish the task, or for system commands (e.g., "
-            "installing packages, running tests, managing directories).\n",
-            "- Always use **attempt_completion** to present the final result to the user.\n",
-            "- When using edit, ensure the `old` string is unique or set `all` to true.\n\n",]
+            "## Tool Selection\n\n",
+            "Use the dedicated tool when one exists (read/write/edit/search/grep/search_memory/"
+            "append_memory/attempt_completion). Reach for **bash** only when no dedicated tool fits.\n",
+            "Use **edit** (not write) for small in-place changes; ensure `old` is unique or pass `all=true`.\n",
+            "Use **search_memory** for long-term knowledge, **append_memory** only for "
+            "architecture decisions / persistent preferences (not ephemeral context).\n",
+            "Always finish with **attempt_completion** to present the final result.\n\n",]
 
     @staticmethod
     def _build_skills_guidance() -> List[str]:
@@ -1343,56 +1403,20 @@ class SystemPrompt:
 
     @staticmethod
     def _build_safety() -> List[str]:
-        """ 安全边界提示. 要求模型在执行前对危险命令进行确认，并遵守工具的安全检查。"""
         return [
             "## Safety\n\n",
-            "- Before executing any command that modifies the file system, deletes files, changes permissions, "
-            "or performs system administration, you MUST ensure the command is safe and the user has confirmed if "
-            "necessary.\n",
-            "- Do not attempt to access files outside the project root unless explicitly required and confirmed by "
-            "the user.\n\n",]
+            "Destructive commands and any access outside the project root require explicit user confirmation.\n\n",]
 
     @staticmethod
     def _build_builtin_rules() -> List[str]:
         return [
             "## Built-in Rules\n\n",
-            "### 1. Think Before Coding\n\n",
-            "**Don't assume. Don't hide confusion. Surface tradeoffs.**\n",
-            "- **State assumptions explicitly** — If uncertain, ask rather than guess\n",
-            "- **Present multiple interpretations** — Don't pick silently when ambiguity exists\n",
-            "- **Push back when warranted** — If a simpler approach exists, say so\n",
-            "- **Stop when confused** — Name what's unclear and ask for clarification\n\n",
-            "### 2. Simplicity First\n\n",
-            "**inimum code that solves the problem. Nothing speculative.**\n\n",
-            "- No features beyond what was asked\n",
-            "- No abstractions for single-use code\n",
-            "- No 'flexibility' or 'configurability' that wasn't requested\n",
-            "- No error handling for impossible scenarios\n",
-            "- If 200 lines could be 50, rewrite it\n\n",
-            "### 3. Surgical Changes\n\n",
-            "**Touch only what you must. Clean up only your own mess.**\n\n",
-            "When editing existing code:\n",
-            "- Don't 'improve' adjacent code, comments, or formatting\n",
-            "- Don't refactor things that aren't broken\n",
-            "- Match existing style, even if you'd do it differently\n",
-            "- If you notice unrelated dead code, mention it — don't delete it\n",
-            "When your changes create orphans:\n",
-            "- Remove imports/variables/functions that YOUR changes made unused\n",
-            "- Don't remove pre-existing dead code unless asked\n\n",
-            "### 4. Goal-Driven Execution\n\n",
-            "**Define success criteria. Loop until verified.**\n\n",
-            "Transform imperative tasks into verifiable goals:\n",
-            "| Instead of... | Transform to... |\n",
-            "|--------------|-----------------|\n",
-            "| 'Add validation' | 'Write tests for invalid inputs, then make them pass' |\n",
-            "| 'Fix the bug' | 'Write a test that reproduces it, then make it pass' |\n",
-            "| 'Refactor X' | 'Ensure tests pass before and after' |\n",
-            "For multi-step tasks, state a brief plan:\n",
-            "```\n",
-            "1. [Step] → verify: [check]\n",
-            "2. [Step] → verify: [check]\n",
-            "3. [Step] → verify: [check]\n",
-            "```\n"]
+            "**1. Think before coding.** State assumptions. If uncertain, ask rather than guess.\n",
+            "**2. Minimum code.** If 200 lines can be 50, rewrite. No features beyond what was asked.\n",
+            "**3. Surgical changes.** Touch only what you must. Don't 'improve' adjacent code or "
+            "refactor things that aren't broken. Match existing style.\n",
+            "**4. Verify before completion.** Transform tasks into verifiable goals: "
+            "'Write tests for X, then make them pass.' For multi-step work, state a brief plan first.\n\n",]
 
     def assemble(self) -> str:  # 将所有 section 按顺序拼接成完整的 system prompt。
         _basic = []
@@ -1486,18 +1510,22 @@ def main():
                 if not goal_text:
                     console.error("Please input '/g or /goal <query>'")
                     continue
-                ctx.inject_user(
-                    "[GOAL MODE]\n\n"
-                    "The user has provided a long-running autonomous goal.\n\n"
-                    "You should:\n"
-                    "- plan\n"
-                    "- execute\n"
-                    "- verify\n"
-                    "- iterate autonomously\n"
-                    "- continue until fully complete\n"
-                    "- only call `attempt_completion` tool when the goal is fully completed\n\n"
-                    f"GOAL:\n{goal_text}\n\n"
-                    f"Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                g = _goal_load()
+                if g and (g.get("goal") == goal_text or goal_text.lower() in ("继续", "go on", "continue")):
+                    ctx.inject_user(
+                        f"[GOAL RESUMED] step {g['current']}/{len(g['steps'])} done\n"
+                        f"Plan: {json.dumps(g, ensure_ascii=False)}\n\n"
+                        "Continue with next pending step. Call goal(action='show') to refresh.")
+                else:
+                    if g:
+                        _goal_clear()  # 换 goal 时清掉旧的
+                    ctx.inject_user(
+                        f"[GOAL MODE] {goal_text}\n\n"
+                        "Call goal(action='plan', goal='<verbatim>', steps=[\"...\"]) ONCE with 3-8 steps. "
+                        "Then for each step: execute, call goal(action='step', step=N, status='done', note='...'). "
+                        "After all steps done, call goal(action='finish') then attempt_completion. "
+                        "Do NOT call goal(action='plan') again — it will be rejected.\n\n"
+                        f"Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 console.success(f"🎯 Goal: {goal_text}")
                 agent_loop(ctx, ctx_file_path, "[CONTINUE GOAL EXECUTION]")
                 continue

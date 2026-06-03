@@ -1,36 +1,80 @@
 # Mangopi CLI
 
-> A lightweight, zero-dependency AI coding assistant running directly in your terminal.
+> Single-file, zero-dependency AI coding assistant for the terminal.
 
-Mangopi CLI is a local-first AI coding assistant inspired by tools like Claude Code, designed for developers who want a fast, hackable, and minimal runtime experience.
+Mangopi CLI is a local-first autonomous coding agent built with only the Python standard library.
 
-It provides an agentic coding workflow with:
+No frameworks.
+No Electron.
+No Docker.
+No dependency hell.
 
-* file editing
-* shell execution
-* tool calling
-* autonomous goal execution
-* context-aware conversation management
-* automatic context compacting
+Just one fast, hackable Python file.
 
-All with instant startup and no heavyweight framework dependencies.
+---
+
+# Design Philosophy
+
+**Seeking a perfect balance between code size, complexity, and the functionality & effectiveness of the agent.**
+
+Mangopi CLI intentionally keeps the runtime extremely small.
+
+Why?
+
+* easier to audit 
+* easier to hack 
+* easier to fork 
+* easier to understand 
+* easier to run locally
+
+The project avoids unnecessary abstractions, frameworks, and dependencies whenever possible.
+
+---
+
+# Why Mangopi CLI?
+
+| Mangopi CLI                  | Typical AI Agent Frameworks  |
+|------------------------------|------------------------------|
+| Single-file runtime          | Large multi-module codebases |
+| Python standard library only | Heavy dependency trees       |
+| Instant startup              | Slow boot time               |
+| Fully hackable               | Framework-heavy              |
+| Local-first                  | Cloud-oriented               |
+| Minimal abstractions         | Over-engineered              |
+| Easy to fork                 | Hard to customize            |
+
+
+---
+
+
+# Ideal For
+
+* developers who prefer terminal workflows 
+* users who dislike heavyweight AI frameworks 
+* hackers and tinkerers 
+* local-first enthusiasts 
+* people who want full runtime control 
+* building custom coding agents
 
 ---
 
 # Features
 
-* Zero dependency (Python standard library only)
+* Single-file architecture
+* Python standard library only
 * Instant startup speed
-* Claude Code–style terminal UX
+* Local-first workflow design
+* Autonomous goal execution
+* Context-aware conversation management
+* Automatic context compacting
+* Markdown memory system
 * OpenAI-compatible API support
 * Built-in file and shell tools
-* Autonomous Goal Mode
-* Automatic context compacting
 * Persistent local sessions
 * Skill system support (`SKILL.md`)
 * Safe shell execution checks
 * Fully hackable and easy to extend
-* Large-context optimized architecture
+* Large-context optimized runtime
 
 ---
 
@@ -78,8 +122,8 @@ export MANGO_MODEL="deepseek-v4-flash"
 Optional:
 
 ```bash
-export MANGO_MAX_CONTEXT=1000000
-export MANGO_LANG=zh
+export MANGO_MAX_CONTEXT=1000000   # default 1,000,000 tokens
+export MANGO_LANG=en               # en (default) | zh — controls UI text and CLI help language
 ```
 
 ---
@@ -120,13 +164,15 @@ python mangopi_cli.py
 
 # Built-in Commands
 
-| Command     | Description                    |
-|-------------|--------------------------------|
-| `/q`        | Quit                           |
-| `/n`        | Start a new session            |
-| `/c`        | Compact current session        |
-| `/h`        | Show help                      |
-| `/g <goal>` | Autonomous goal execution mode |
+| Command     | Aliases         | Description                                              |
+|-------------|-----------------|----------------------------------------------------------|
+| `/q`        | `/quit`         | Quit                                                     |
+| `/n`        | `/new`          | Start a new session (old session is auto-backed-up)      |
+| `/c`        | `/compact`      | Manually trigger full conversation compact               |
+| `/h`        | `/help`         | Show built-in command help                               |
+| `/g <goal>` | `/goal <query>` | Enter Goal mode — plan, execute, verify until completion |
+
+`/g` accepts Chinese resume keywords (`继续`, `继续执行`, `next`, `resume`, `continue`) to resume a paused plan with the same goal text.
 
 ---
 
@@ -153,16 +199,19 @@ The agent will continue working until it determines the task is complete.
 
 # Built-in Tools
 
-| Tool                 | Description                        |
-|----------------------|------------------------------------|
-| `read`               | Read files                         |
-| `write`              | Write or overwrite files           |
-| `edit`               | Replace exact strings in files     |
-| `search`             | Search files using glob patterns   |
-| `grep`               | Regex search through project files |
-| `bash`               | Execute shell commands             |
-| `use_skill`          | Load installed skills              |
-| `attempt_completion` | Finish the current task            |
+| Tool                 | Description                                                       |
+|----------------------|-------------------------------------------------------------------|
+| `read`               | Read a file (supports `offset` / `limit`)                         |
+| `write`              | Write or overwrite a file                                         |
+| `edit`               | Replace an exact string in a file, with unified-diff preview      |
+| `search`             | Search files using glob patterns, sorted by mtime                 |
+| `grep`               | Recursive regex content search                                    |
+| `bash`               | Execute a shell command (60s timeout, output filtered)            |
+| `use_skill`          | Load an installed `SKILL.md` with its scripts/references          |
+| `search_memory`      | Search long-term markdown memory (multi-keyword, scored)          |
+| `append_memory`      | Append a note to today's long-term memory file                    |
+| `goal`               | Manage the active goal plan (`plan` / `step` / `show` / `finish`) |
+| `attempt_completion` | Final step — present the result to the user                       |
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
 
@@ -217,28 +266,34 @@ Mangopi CLI automatically:
 
 # Context Compacting
 
-Mangopi CLI includes multiple compacting strategies:
+Mangopi CLI uses a **three-tier compacting strategy** that triggers automatically once context exceeds 80% of `MANGO_MAX_CONTEXT`:
 
-* micro compact
-* session memory compact
-* conversation compact
-* full LLM summary compact
+| Tier                  | Strategy              | Scope                                                   |
+|-----------------------|-----------------------|---------------------------------------------------------|
+| `micro_compact`       | Head/tail truncation  | Individual tool outputs and long assistant messages     |
+| `session_memory_compact` | Force-compact old turns | Drops the oldest turns, keeps last 10 turns in full |
+| `compact_conversation`   | Drop-while-overflow  | Strips oldest turns first, then trims recent turns     |
+| `full_compact`        | LLM-driven summary    | Replaces the whole conversation with a structured recap (manual `/c`) |
 
-This enables extremely long-running coding sessions while staying within model context limits.
+The compact pipeline is invoked by `ContextManager.prepare_for_api()` before every model call, so long-running autonomous workflows stay within the configured context budget without manual intervention.
 
 ---
 
 # Safety
 
-Dangerous shell commands require confirmation before execution.
+Mangopi CLI enforces safety at two layers:
 
-Examples include:
+**Dangerous command detection** — the following patterns require explicit `y/n` confirmation before execution:
 
-* `rm -rf`
-* `mkfs`
-* `chmod 777`
-* `sudo rm`
-* destructive system operations
+* File deletion — `rm -rf`, `unlink`
+* Disk / partition — `mkfs`, `fdisk`, `parted`, `dd if=... of=...`
+* Permission changes — `chmod 777` (and similar `*7*7*` modes), `chown ... root`
+* Privilege escalation — `sudo rm`, `su -`, `su root`
+* Dangerous process control — `kill -9 1`, `killall -9`, `pkill -9`
+* Environment tampering — `export PATH=...`, `unset PATH`, writes to `/etc/`
+* History / log clearing — `history -c`, `> /dev/null 2>&1`
+
+**Path sandbox** — `write` and `edit` resolve the target path with `realpath` and reject any file outside the project root. Operating on a directory path (rather than a file) is also rejected. This prevents the model from escaping the working directory.
 
 ---
 
@@ -246,35 +301,17 @@ Examples include:
 
 Core components:
 
-| Component        | Responsibility                   |
-|------------------|----------------------------------|
-| `Printer`        | Terminal UI rendering            |
-| `ContextManager` | Conversation memory & compacting |
-| `ToolBase`       | Tool framework                   |
-| `Provider`       | API abstraction layer            |
-| `SystemPrompt`   | Runtime prompt assembly          |
-| `SkillManager`   | Skill discovery & loading        |
-
----
-
-# Philosophy
-
-Mangopi CLI focuses on:
-
-* fast startup
-* zero dependency
-* local-first workflows
-* terminal-native AI interaction
-* lightweight runtime design
-* simplicity over abstraction
-* hackability over frameworks
-
-No Electron.
-No Docker.
-No Redis.
-No heavyweight AI frameworks.
-
-Just a fast and hackable AI coding assistant for the terminal.
+| Component         | Responsibility                                                          |
+|-------------------|-------------------------------------------------------------------------|
+| `Printer`         | Terminal UI rendering (spinner, diff, tool call/result)                 |
+| `ContextManager`  | Conversation memory, three-tier compact, session save/restore           |
+| `ToolBase`        | Tool framework (schema, confirm, before/after hooks, preview)            |
+| `Provider`        | API abstraction (`OpenAIProvider`, `DeepSeekProvider`, `MiniMaxProvider`) |
+| `SystemPrompt`    | Layered runtime prompt assembly (base, safety, rules, tools, env)        |
+| `SkillManager`    | Discovers and loads `SKILL.md` + scripts/references                      |
+| `MemoryManager`   | Long-term markdown memory (append + scored multi-keyword search)        |
+| `GoalTool`        | Persistent goal plan (`plan` / `step` / `show` / `finish`) with human checkpoint between steps |
+| `agent_loop`      | Drives the read → think → tool-call → verify loop until the model stops or calls `attempt_completion` |
 
 ---
 
