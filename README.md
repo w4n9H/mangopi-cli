@@ -1,5 +1,7 @@
 # Mangopi CLI
 
+![Mangopi CLI demo](./mangopi-demo.gif)
+
 > Single-file, zero-dependency AI coding assistant for the terminal.
 
 Mangopi CLI is a local-first autonomous coding agent built with only the Python standard library.

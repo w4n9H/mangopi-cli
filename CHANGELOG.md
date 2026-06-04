@@ -1,0 +1,231 @@
+# Changelog
+
+All notable changes to Mangopi CLI will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+> **Note:** Versions `0.1.1` through `0.1.3` were published on the same day as the project rename
+> from `mangocli` to `mangopi-cli`. Individual commit notes for these three releases are not
+> preserved, so they are grouped below as a single "Initial releases" entry.
+
+---
+
+## [Unreleased]
+
+---
+
+## [0.1.21] - 2026-06-04
+
+### Added
+- `CHANGELOG.md` at project root following the [Keep a Changelog](https://keepachangelog.com/) format
+- `ROADMAP.md` outlining the 3–6 month development direction
+- `mangopi-demo.gif` terminal demo, embedded at the top of `README.md`
+- `CONTRIBUTING.md` promoted to the project root for higher visibility
+
+### Changed
+- `README.md` opens with the demo animation banner
+- `CONTRIBUTING.md` relocated from `docs/` to the repository root
+
+---
+
+## [0.1.20] - 2026-06-04
+
+### Added
+- More unit tests covering memory manager, system prompt, and tool execution
+
+### Changed
+- Refined memory API and persistence layout under `.mangocli/memory/`
+- Updated `README.md` and `index.html` landing page
+
+---
+
+## [0.1.19] - 2026-06-03
+
+### Added
+- More unit tests covering compaction, safety, and tool lifecycle
+- Stronger Chinese-language resume keywords for `/g` (Goal Mode) — `继续`, `继续执行`, `next`, `resume`, `continue`
+
+### Changed
+- `/g` / `/goal` Goal Mode strengthened with clearer plan / step / show / finish semantics
+- System prompt simplified and rebalanced
+- `README.md` and `index.html` updated
+
+---
+
+## [0.1.18] - 2026-05-29
+
+### Added
+- Memory system foundation: `append_memory` and `search_memory` tools, Markdown files under `.mangocli/memory/`
+- Compact rules registry for tunable per-content-type compression
+
+### Changed
+- Context compression made more flexible via `COMPACT_RULES` configuration
+- `ContextManager` rewired to use the new rules across all three compact tiers
+
+---
+
+## [0.1.17] - 2026-05-28
+
+### Added
+- Directory-aware output filtering in `bash` tool for `find` / `tree` / `ls -R` / `du` / `fd` / `rg` commands
+- Hard output line cap (1000 lines by default) for any single `bash` invocation
+- `EditTool` unified-diff preview before applying changes
+
+### Changed
+- `EditTool` now shows diff and confirmation for safer in-place edits
+- Bash output pipeline: command → directory filter → line limit
+
+### Security
+- Output filtering reduces the risk of accidentally leaking large directory trees into the LLM context
+
+---
+
+## [0.1.16] - 2026-05-27
+
+### Added
+- Goal Mode: `/g` / `/goal <query>` command for autonomous plan → execute → verify → iterate workflows
+- `GoalTool` with `plan` / `step` / `show` / `finish` actions
+- Human checkpoint between Goal Mode steps
+
+### Changed
+- `agent_loop` extracted out of `main()` for cleaner separation of concerns
+- Updated `README.md` and `index.html` to document Goal Mode
+
+---
+
+## [0.1.15] - 2026-05-25
+
+### Changed
+- **Major refactor of the context compression system.** Replaced the previous single-tier compact with a three-tier pipeline:
+  - `micro_compact` — head/tail truncation of individual tool outputs and long assistant messages
+  - `session_memory_compact` — force-compact old turns, retain the last 10 turns in full
+  - `compact_conversation` — drop-while-overflow, strip oldest turns first, then trim recent turns
+- `ContextManager.prepare_for_api()` is now the single entry point that runs compact before every model call
+- `auto_compact_threshold` set to 80% of `MANGO_MAX_CONTEXT`
+
+### Added
+- Manual `/c` / `/compact` command triggers `full_compact` (LLM-driven structured summary)
+
+---
+
+## [0.1.13] - 2026-05-21
+
+### Fixed
+- `attempt_completion` was being output twice in some sessions — now rendered exactly once
+
+### Added
+- `ToolBase.ok()` and `ToolBase.fail()` helpers for clean tool execution status checking
+
+---
+
+## [0.1.12] - 2026-05-20
+
+### Changed
+- **Refactored the Tool system** for greater flexibility:
+  - Unified `ToolBase` with `schema` / `confirm` / `before` / `after` / `preview` hooks
+  - Tools now expose a consistent `preview()` for `Printer.tool_call` rendering
+  - Cleaner separation between tool definition and execution
+
+---
+
+## [0.1.11] - 2026-05-19
+
+### Changed
+- `Printer` now renders `thinking` (reasoning content) and `output` (final answer) with distinct color styles
+- `attempt_completion` tool output is no longer truncated — full result is rendered
+
+---
+
+## [0.1.10] - 2026-05-19
+
+### Added
+- **Skill system**: discover and load `SKILL.md` workflows from `~/.mangocli/skills/` and `<project>/.mangocli/skills/`
+- New `use_skill` tool
+- Completed `full_compact` implementation (LLM-driven structured summary) — previously a stub
+
+### Changed
+- Minor UI polish around spinner and tool result rendering
+
+---
+
+## [0.1.9] - 2026-05-17
+
+### Added
+- **Minimax provider** (`MiniMaxProvider`) for OpenAI-compatible models that use `reasoning_split: true` and `reasoning_details`
+
+### Fixed
+- `input()` prompt on Unix-like systems could not correctly delete Chinese characters — added `readline` import fallback (Unix only, gracefully skipped on Windows)
+
+---
+
+## [0.1.8] - 2026-05-15
+
+### Added
+- New `builtin_rules` section in `SystemPrompt` (think before coding, minimum code, surgical changes, verify before completion)
+
+### Changed
+- `ContextManager.estimated_tokens` reworked for more accurate token accounting
+
+### Fixed
+- Runtime exception when running on Python 3.8 — installation now explicitly supports 3.8 / 3.9 / 3.10 / 3.11 / 3.12
+
+---
+
+## [0.1.7] - 2026-05-14
+
+### Added
+- **Internationalization (i18n)** — `MANGO_LANG=en|zh` switches UI text and CLI help between English and Chinese
+
+### Changed
+- `chat_completion` timeout / retry exception handling improved
+- Updated `index.html` landing page
+
+---
+
+## [0.1.6] - 2026-05-13
+
+### Changed
+- `Current date` moved from system prompt into a per-turn user message to improve LLM prompt cache hit rate
+- `Printer` now shows more lines in the `tool_call` preview before truncation
+
+---
+
+## [0.1.5] - 2026-05-13
+
+> Patch release following 0.1.4. No user-facing change note preserved.
+
+---
+
+## [0.1.4] - 2026-05-13
+
+### Changed
+- Release process optimized: `deploy.sh` now auto-extracts `__version__` from `mangopi_cli.py`
+- `pyproject.toml` cleaned up to match the publish pipeline
+
+### Fixed
+- `twine upload` failure when version string contained unintended whitespace
+
+---
+
+## [0.1.1] – [0.1.3] - 2026-05-12
+
+> **Initial releases** published on the same day as the project rename from `mangocli` to `mangopi-cli`. Individual change notes are not preserved in the git log.
+
+### Milestones in this batch
+
+- **Project rename** `mangocli` → `mangopi-cli`
+- **`pyproject.toml`** added, with `pip install -e .` workflow established
+- **`deploy.sh`** added: clean → uninstall → `python -m build` → install → `twine upload`
+- **`index.html`** landing page added (single-file 67KB marketing page)
+- **SystemPrompt** layered prompt system introduced (base / safety / rules / tools / env)
+- **Provider abstraction** (`BaseProvider` + `OpenAIProvider` + `DeepSeekProvider`) introduced — sets the stage for later `MinimaxProvider` in 0.1.9
+- **UI enhancements** — `Printer` color system refined, compact-status display added
+
+---
+
+## Links
+
+- PyPI: https://pypi.org/project/mangopi-cli/
+- Repository: https://github.com/w4n9H/mangopi-cli
+- Author: moofs (https://github.com/w4n9H)

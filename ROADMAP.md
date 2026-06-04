@@ -1,0 +1,361 @@
+# Mangopi CLI · ROADMAP
+
+> The 3–6 month development roadmap for Mangopi CLI.
+>
+> This document is public and serves as a shared commitment to contributors, users, and potential collaborators on feature priorities and design direction.
+>
+> The roadmap is adjusted dynamically based on community feedback. Major pivots are announced via PR + GitHub Discussion.
+
+---
+
+## 🎯 Core Philosophy (Non-Negotiable Constraints)
+
+**Every new feature must answer two questions first:**
+
+1. **Can it be implemented with the Python standard library?**
+2. **Can it live inside `mangopi_cli.py` as a single file without breaking readability?**
+
+If the answer to both is "yes" — build it.
+If one answer is "no" — use the **opt-in switch** pattern (see Long-Term §4).
+If both are "no" — the feature belongs in a **separate sub-project** (see Long-Term §1 Web Console).
+
+### Boundaries We Hold
+
+- ✅ **Zero runtime dependencies** — `pip install mangopi-cli` introduces no third-party packages by default
+- ✅ **Single-file architecture** — the core runtime always lives in `mangopi_cli.py`
+- ✅ **Low LOC** — `mangopi_cli.py` stays under 3,000 lines; exceeding it triggers a split review
+- ✅ **Auditable / hackable / forkable** — no heavy abstractions; a new contributor reads the whole thing in under an hour
+- ✅ **Local-first** — core functionality works fully offline (network capabilities are always opt-in)
+
+### Capabilities We Actively Reject
+
+- ❌ TUI framework dependencies (textual / prompt_toolkit)
+- ❌ Embedded browsers / Electron
+- ❌ Docker images / containerized distribution
+- ❌ Heavy async runtimes (uvloop / anyio)
+
+> These aren't "impossible" — they're "out of philosophy." If the community genuinely needs them, they'll ship as separate sub-projects, not pollute the main repo.
+
+---
+
+## 🛠 Design & Implementation Principles
+
+Every new feature follows these rules, in order of priority:
+
+| Principle | Meaning |
+|-----------|---------|
+| **Stdlib First** | Check `urllib / json / asyncio / threading / pathlib` first |
+| **Opt-in for Heavy** | If a third-party dep is unavoidable, gate it behind `MANGO_OPT_FEATURES` |
+| **Feature Flag** | Experimental features ship off by default with explicit opt-in docs |
+| **Backward Compatible** | Never break existing session format, config fields, or tool protocol |
+| **Test Before Ship** | New features ship with unit tests; core path coverage > 80% |
+
+---
+
+## 📅 Mid–Short Term (1–3 Months)
+
+> Goal: take Mangopi from "runs" to "actually good to use" — without breaking the zero-dependency baseline.
+
+### 1. Smart Provider Routing
+
+**Status:** 🟡 Planned
+
+**Problem:** Within the same session, "read me this file" and "design me a distributed system" demand wildly different model capability — but every request currently hits the same `MANGO_MODEL`. Either it's too expensive, or too weak.
+
+**Approach:**
+
+- Maintain a **Provider Ladder** declared in `~/.mangocli/config.json` or the `MANGO_PROVIDERS` env var:
+
+  ```json
+  {
+    "providers": [
+      {"name": "fast",   "url": "https://api.deepseek.com",  "model": "deepseek-v4-flash", "tier": "cheap"},
+      {"name": "strong", "url": "https://api.openai.com/v1", "model": "gpt-4o",            "tier": "strong"}
+    ],
+    "routing": {
+      "default": "fast",
+      "upgrade_on": ["goal_mode", "complex_edit", "user_override"]
+    }
+  }
+  ```
+
+- **Routing triggers** (all stdlib heuristics — no extra LLM call):
+  - User enters `/g` Goal mode → auto-upgrade to `strong`
+  - A single `edit` touches > N lines or spans multiple files → upgrade
+  - K consecutive tool failures (`continuous_failures` already exists in `ContextManager`) → upgrade
+  - User can force-switch with `/use strong`
+
+- **Downgrade / fallback**: if `strong` fails or times out, fall back to `fast` and surface the fallback to the user.
+
+**Why it fits the philosophy:** Pure stdlib heuristics (string length / counts). Adds < 200 LOC.
+
+**Acceptance criteria:**
+
+- [ ] `MANGO_PROVIDERS` supports JSON multi-provider declaration
+- [ ] Ladder parsing + routing logic has full unit tests
+- [ ] At least one trigger (Goal mode) works end-to-end
+- [ ] Failure fallback has clear logging
+
+---
+
+### 2. Multimodal Support (Image)
+
+**Status:** 🟡 Planned
+
+**Problem:** Users routinely need the AI to read screenshots, UI mockups, error screens, and diagrams — but pure-text tool chains treat images as opaque attachments.
+
+**Approach:**
+
+- Add tool `view_image` (extension of the existing `read`), accepting a local path or URL:
+  - Local path → read as base64, assemble OpenAI-compatible `image_url` data URI
+  - URL → pass through; the model fetches it
+  - All stdlib: `base64` + `urllib` + `mimetypes`
+- Multimodal message format follows the OpenAI Chat Completions vision spec; `DeepSeekProvider` / `OpenAIProvider` / `MinimaxProvider` all updated in lockstep.
+- `read` tool auto-detects image extensions (`.png` / `.jpg` / `.gif` / `.webp`) — no extra tool call needed.
+
+**Why it fits the philosophy:** Pure stdlib message assembly. Adds < 150 LOC, no Pillow / requests required.
+
+**Acceptance criteria:**
+
+- [ ] `view_image` tool works with at least one of: DeepSeek-VL, GPT-4o
+- [ ] Screenshot → vision → generated code demo works end-to-end
+- [ ] Clear error on non-image / oversized payloads
+
+**Explicitly out of scope:**
+
+- ❌ OCR (let the model see the pixels; no preprocessing)
+- ❌ Image generation (different project)
+- ❌ Local image preprocessing (crop / resize) — the user handles it
+
+---
+
+### 3. Sub Agent (Single Delegation)
+
+**Status:** 🟡 Planned
+
+**Problem:** In complex tasks, the main agent often gets bogged down by "first research library A's API, then library B's, then synthesize" — sequential multi-line work that should be parallel.
+
+**Approach:**
+
+- New tool `delegate(goal, context_files)`:
+  - Spawns **one** sub-agent session with its own `ContextManager` and tool loop
+  - When the sub-agent completes / times out / fails, only the **final summary** flows back to the main agent
+  - The main agent sees a markdown summary as the tool result; the sub-agent's full trace never enters the main context
+- Sub-agent reuses current `MANGO_KEY / MANGO_MODEL` — no new LLM-account concept
+- Default timeout: 5 minutes, tunable via `MANGO_SUB_AGENT_TIMEOUT`
+
+**Why single-agent and not parallel:** Concurrent scheduling requires thread / process / async pools, which will quickly break the single-file readability budget. That's saved for the long-term track.
+
+**Why it fits the philosophy:** Reuses existing `agent_loop` + `ContextManager`. The whole feature is essentially "open another session and compress its result back." Adds < 250 LOC.
+
+**Acceptance criteria:**
+
+- [ ] `delegate` tool works: main agent delegates → sub-agent runs independently → main agent receives summary
+- [ ] Sub-agent failure does not block the main agent
+- [ ] Sub-agent session files are stored separately under `.mangocli/sub_sessions/`
+
+**Explicitly out of scope:**
+
+- ❌ Concurrent sub-agents (Long-Term §3)
+- ❌ Sub-agents communicating with each other
+- ❌ Recursive nesting (hard depth limit: 1)
+
+---
+
+### 4. Web Fetch (Depends on Third-Party)
+
+**Status:** 🟡 Planned — **flagged: third-party dependency**
+
+**Problem:** The AI frequently needs to consult the latest docs / GitHub issues / blog posts. Right now the user has to `cat` a local file by hand.
+
+**Approach (a third-party dep is unavoidable here):**
+
+- New tool `web_fetch(url)`: convert a web page to markdown / plain text for the LLM
+- **Key decision: this feature uses the opt-in switch** (see Long-Term §4):
+  - Off by default
+  - User enables via `export MANGO_OPT_FEATURES=fetch`
+  - Recommended implementation: `trafilatura` (lightweight, pure-Python, high accuracy, Apache 2.0)
+  - When disabled, the tool returns `error: web_fetch requires MANGO_OPT_FEATURES=fetch`
+
+**Why not pure stdlib:** stdlib `html.parser` only parses HTML — extracting body text, stripping nav, and Markdown-ifying requires a lot of glue code that doesn't pay for itself. Be honest about the tradeoff and go opt-in.
+
+**Why it fits the philosophy:** The zero-dependency baseline holds (`pip install mangopi-cli` doesn't pull in `trafilatura`); users who need this feature opt in; the implementation is a single-file `try-import` block.
+
+**Acceptance criteria:**
+
+- [ ] `MANGO_OPT_FEATURES=fetch` enables `web_fetch`
+- [ ] Default `pip install mangopi-cli` does not install `trafilatura`
+- [ ] Clear errors and retries on timeout / 4xx / 5xx
+
+---
+
+## 🌐 Long-Term (3–6 Months)
+
+> Goal: take Mangopi toward "professional AI coding platform" tier while keeping the main repo's zero-dependency boundary intact.
+> Note: some features in this phase **will exceed the main repo's constraints** — they ship via opt-in switches or as separate sub-projects.
+
+### 1. Web Console (Separate Sub-Project: `mangopi-web`)
+
+**Status:** ⚪ Backlog
+
+**Positioning:** **Not in the `mangopi-cli` main repo** — published as an independent sub-project to keep the single-file philosophy clean.
+
+**Form:**
+
+- Backend: `mangopi-cli` exposes a local HTTP / WebSocket interface (short-lived)
+- Frontend: lightweight SPA (Vue or Svelte — Svelte preferred for size), deployable independently
+- Core capabilities:
+  - Live session state, token usage, context occupancy
+  - Cross-device session sync (user-hosted backend, no cloud)
+  - Team-shared goal plans (permissions in the enterprise edition)
+  - Visual diff (current `Printer.diff` upgraded to a side-by-side view)
+
+**Why split it out:** Any frontend framework violates zero-dependency; even pure HTML+JS, a 3,000+ line console blows the main-file budget.
+
+**Relationship to the main repo:** Main repo only exposes the necessary HTTP interface; console lives in a sibling repo, optional install.
+
+**Acceptance criteria:**
+
+- [ ] New repo `w4n9H/mangopi-web` created
+- [ ] Main repo README points to Web Console install instructions
+- [ ] Main repo `mangopi_cli.py` adds zero web-framework dependencies
+
+---
+
+### 2. MCP Client Integration
+
+**Status:** ⚪ Backlog
+
+**Positioning:** Let Mangopi consume community MCP servers — the tool ecosystem is no longer limited to the 10 built-in tools.
+
+**Implementation strategy (key):**
+
+- **Strictly opt-in**: `export MANGO_OPT_FEATURES=mcp` enables `mcp` SDK import
+- Default install remains zero-dependency
+- MCP servers declared in `~/.mangocli/mcp_servers.json`:
+
+  ```json
+  {
+    "servers": [
+      {"name": "filesystem", "command": "uvx", "args": ["mcp-server-filesystem", "/tmp"]},
+      {"name": "github",     "command": "npx",   "args": ["-y", "@modelcontextprotocol/server-github"]}
+    ]
+  }
+  ```
+
+- On startup, check the opt-in flag, dynamically import, map MCP tools onto the existing `ToolBase` interface
+- The LLM sees a merged tool schema (built-in + MCP)
+
+**Why it fits the philosophy:** Zero-dependency baseline preserved; users who need MCP opt in; reuses the existing Tool framework.
+
+**Acceptance criteria:**
+
+- [ ] Opt-in flag + dynamic import mechanism is stable
+- [ ] At least one official MCP server runs (filesystem / github)
+- [ ] MCP tool errors propagate cleanly without breaking the main agent loop
+
+---
+
+### 3. Sub Agent (Parallel)
+
+**Status:** ⚪ Backlog (depends on Mid-Short §3 completion)
+
+**Upgrades:**
+
+- `delegate` tool supports a `mode: "parallel"` argument
+- Concurrency limit via `MANGO_SUB_AGENT_MAX_CONCURRENT` (default 3)
+- Use stdlib `concurrent.futures.ThreadPoolExecutor` for thread-level parallelism
+- After all sub-agents complete, the main agent receives a merged summary
+
+**Risks & tradeoffs:**
+
+- Parallelism drives up token usage — needs a hard `MANGO_SUB_AGENT_BUDGET` cap
+- Rollback strategy for partial failures needs careful design
+- Single-file LOC near the critical line — may need to extract an internal `_sub_agent.py` (same directory as `mangopi_cli.py`, imported as `from _sub_agent import ...`)
+
+**Acceptance criteria:**
+
+- [ ] `delegate(mode="parallel", goals=[...])` works
+- [ ] Thread pool + budget cap have full tests
+- [ ] Single-file LOC stays under 3,500
+
+---
+
+### 4. Opt-in Switch Mechanism (Core Infrastructure)
+
+**Status:** ⚪ Backlog — shared by §1, §2, §3
+
+**Goal:** Formalize the "zero-dependency vs feature richness" tradeoff as a first-class engineering mechanism — the project's meta-capability.
+
+**Design:**
+
+```bash
+# Comma-separated list of opt-in features
+export MANGO_OPT_FEATURES=fetch,mcp,stream
+
+# Or in ~/.mangocli/config.json
+{
+  "opt_features": ["fetch", "mcp", "stream"]
+}
+```
+
+**Implementation details:**
+
+- Top of the main file: add `_OPT_FEATURES = set(...)` parsing logic
+- Each opt-in module is wrapped in `try: import xxx except ImportError: xxx = None`
+- Public tool entry point checks: `if xxx is None: return "error: feature xxx not enabled, install ... and set MANGO_OPT_FEATURES=xxx"`
+- `pyproject.toml` changes to use `optional-dependencies`:
+
+  ```toml
+  [project.optional-dependencies]
+  fetch  = ["trafilatura>=1.6"]
+  mcp    = ["mcp>=1.0"]
+  stream = ["sseclient-py>=1.7"]
+  ```
+
+  ```bash
+  # User install
+  pip install mangopi-cli[fetch,mcp]
+  ```
+
+**Hard constraints:**
+
+- Any opt-in dep must produce a **clear runtime error when missing**, not an `ImportError` crash
+- Opt-in deps should be **pure Python + lightweight + Apache 2.0 / MIT**
+- Every new opt-in dep must justify itself in its PR: "Why not stdlib? Is there a lighter alternative?"
+
+**Acceptance criteria:**
+
+- [ ] Opt-in parsing logic fits in < 30 lines at the top of `mangopi_cli.py`
+- [ ] `pip install mangopi-cli` installs no opt-in deps
+- [ ] `pip install mangopi-cli[fetch,mcp]` enables them in one go
+- [ ] All three example opt-in features (fetch / mcp / stream) work end-to-end
+
+---
+
+## 🧭 Direction Adjustment Principles
+
+- A feature requested by **> 30% of the community** may be pulled forward from long-term to mid-short
+- A feature whose implementation exceeds **500 LOC** is the first candidate for a sub-project
+- **Architecture review triggers**: any sign of zero-dependency erosion (single file > 3,500 LOC / > 5 opt-in features / any feature broken when its flag is off)
+- Major adjustments go through GitHub Discussion first, then merge into this ROADMAP
+
+---
+
+## 🤝 Contributing
+
+Want to pick up a feature?
+
+1. Comment on the relevant section / open an issue, flip its status to 🟢
+2. PR title: `[roadmap] <feature name>`
+3. For large features (> 500 LOC), sync the design in Discussion first
+
+---
+
+## 📜 License
+
+Apache License 2.0 · this ROADMAP document shares the codebase license.
+
+---
+
+Last updated: 2026-06-04
