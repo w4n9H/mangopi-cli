@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.19"
+__version__ = "0.1.20"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -440,7 +440,8 @@ class MemoryManager:
             except Exception:
                 continue
         if not scored:
-            return "No memory found."
+            return ("No memory found. Tip: append important user preferences, decisions, "
+                    "and non-obvious fixes so future sessions can recall them.")
         scored.sort(key=lambda x: x["score"], reverse=True)
         results = []
         for item in scored[:top_k]:
@@ -747,7 +748,10 @@ class UseSkillTool(ToolBase):
 
 class SearchMemoryTool(ToolBase):
     name = "search_memory"
-    description = "Search long-term markdown memories using multi-keyword retrieval"
+    description = ("Search YOUR long-term memory — notes YOU have saved in past sessions. CALL THIS WHEN: "
+                   "(1) user references past work ('last time', 'as discussed'), "
+                   "(2) before recommending architecture/patterns (check for prior decisions), "
+                   "(3) user asks about their preferences or project conventions.")
     params = {
         "query": {
             "type": "string",
@@ -761,14 +765,16 @@ class SearchMemoryTool(ToolBase):
 
 class AppendMemoryTool(ToolBase):
     name = "append_memory"
-    description = "Append important information into long-term markdown memory"
+    description = ("Save a note to YOUR long-term memory. Persists across sessions. CALL THIS WHEN: "
+                   "(1) user states a preference ('I always use X'), "
+                   "(2) an architecture decision is made, (3) a non-obvious bug fix is found, "
+                   "(4) a project convention is established. "
+                   "DO NOT CALL for ephemeral session context, code already in the repo, or trivial facts.")
     params = {
         "content": {
             "type": "string",
-            "description": "Important long-term memory content such as architecture decisions, bugs, workflows"}}
-
-    def confirm(self, args):
-        return console.prompt_apply("Append to long-term memory (y or n)?")
+            "description": "Concise 5-10 sentence note. Prefix with a tag: "
+                           "[PREFERENCE]/[DECISION]/[BUG-FIX]/[CONVENTION]."}}
 
     def run(self, args):
         memory_manager.append(args["content"])
@@ -1344,7 +1350,7 @@ class SystemPrompt:
         self.sections.append(("builtin_rules", self._build_builtin_rules()))
         self.sections.append(("tool_guidance", self._build_tool_guidance()))
         self.sections.append(("skills_guidance", self._build_skills_guidance()))
-        self.sections.append(("memory", self._build_memory()))
+        self.sections.append(("memory", self._build_user_rules()))
         self.sections.append(("environment", self._build_environment()))
 
     @staticmethod
@@ -1391,15 +1397,13 @@ class SystemPrompt:
             f"- Shell: {os.environ.get('SHELL', 'unknown')}\n",]
 
     @staticmethod
-    def _build_memory() -> List[str]:
+    def _build_user_rules() -> List[str]:
         """ 记忆加载, .mangocli/MEMORY.md 存在，则将其内容作为记忆注入. """
         memory_path = os.path.join(project_root, ".mangocli", "MANGO.md")
-        if not os.path.exists(memory_path):
-            return ["## Memory\n", "No persistent memory available.\n"]
-        if os.path.getsize(memory_path) == 0:
-            return ["## Memory\n", "No persistent memory available.\n"]
+        if not os.path.exists(memory_path) or os.path.getsize(memory_path) == 0:
+            return ["## User Rules\n\n", "No user-defined rules.\n"]
         content = open(memory_path, "r", encoding="utf-8").readlines()
-        return [f"## Persisted Memory\n"] + content
+        return [f"## User Rules\n\n"] + content
 
     @staticmethod
     def _build_safety() -> List[str]:

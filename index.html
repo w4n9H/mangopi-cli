@@ -839,6 +839,244 @@
         @media (max-width: 700px) {
             nav { display: none; }
         }
+
+        /* ============== Design Philosophy ============== */
+        .philo-hero {
+            position: relative;
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(125, 211, 252, 0.05) 100%);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px 36px;
+            margin-bottom: 28px;
+            overflow: hidden;
+        }
+
+        .philo-hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 3px;
+            height: 100%;
+            background: linear-gradient(180deg, var(--accent), var(--purple));
+        }
+
+        .philo-quote-mark {
+            font-size: 64px;
+            line-height: 0.5;
+            color: var(--accent);
+            opacity: 0.4;
+            font-family: Georgia, serif;
+            margin-bottom: 8px;
+        }
+
+        .philo-quote-text {
+            font-size: 20px;
+            line-height: 1.5;
+            color: var(--text);
+            font-weight: 400;
+            letter-spacing: -0.3px;
+            max-width: 720px;
+        }
+
+        .philo-quote-tag {
+            display: inline-block;
+            margin-top: 20px;
+            font-size: 11px;
+            color: var(--accent);
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+        }
+
+        .principle-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+        }
+
+        @media (max-width: 900px) {
+            .principle-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 500px) {
+            .principle-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .principle-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 14px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+
+        .principle-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .principle-icon {
+            font-size: 22px;
+            margin-bottom: 8px;
+        }
+
+        .principle-card h4 {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 4px;
+            color: var(--text);
+        }
+
+        .principle-card p {
+            font-size: 11px;
+            color: var(--text-dim);
+            line-height: 1.4;
+        }
+
+        /* ============== Why Mangopi CLI? (Compare Table) ============== */
+        .compare-table {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .compare-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .compare-row:last-child {
+            border-bottom: none;
+        }
+
+        .compare-row.header {
+            background: rgba(125, 211, 252, 0.04);
+        }
+
+        .compare-cell {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 20px;
+            font-size: 13px;
+        }
+
+        .compare-cell.ours {
+            color: var(--text);
+            border-right: 1px solid var(--border);
+        }
+
+        .compare-cell.theirs {
+            color: var(--text-dim);
+        }
+
+        .compare-row.header .compare-cell {
+            font-size: 12px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .compare-mark {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .compare-mark.check {
+            background: rgba(74, 222, 128, 0.15);
+            color: var(--green);
+        }
+
+        .compare-mark.cross {
+            background: rgba(248, 113, 113, 0.12);
+            color: var(--red);
+        }
+
+        @media (max-width: 600px) {
+            .compare-cell {
+                font-size: 12px;
+                padding: 12px 14px;
+            }
+            .compare-row.header .compare-cell {
+                font-size: 10px;
+            }
+        }
+
+        /* ============== Ideal For (Persona Grid) ============== */
+        .ideal-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        @media (max-width: 800px) {
+            .ideal-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 500px) {
+            .ideal-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .ideal-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+            transition: all 0.2s;
+        }
+
+        .ideal-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .ideal-avatar {
+            flex-shrink: 0;
+            width: 42px;
+            height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(125, 211, 252, 0.08);
+            border: 1px solid rgba(125, 211, 252, 0.2);
+            border-radius: 10px;
+            font-size: 20px;
+        }
+
+        .ideal-card h4 {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 4px;
+            color: var(--text);
+        }
+
+        .ideal-card p {
+            font-size: 12px;
+            color: var(--text-dim);
+            line-height: 1.5;
+        }
     </style>
 </head>
 <body data-lang="en">
@@ -850,6 +1088,14 @@
                 <span>MANGOPI CLI</span>
             </div>
             <nav>
+                <a href="#design-philosophy">
+                    <span class="lang-en">Philosophy</span>
+                    <span class="lang-zh">哲学</span>
+                </a>
+                <a href="#ideal-for">
+                    <span class="lang-en">Ideal For</span>
+                    <span class="lang-zh">适用</span>
+                </a>
                 <a href="#features">
                     <span class="lang-en">Features</span>
                     <span class="lang-zh">特性</span>
@@ -857,18 +1103,6 @@
                 <a href="#install">
                     <span class="lang-en">Install</span>
                     <span class="lang-zh">安装</span>
-                </a>
-                <a href="#config">
-                    <span class="lang-en">Config</span>
-                    <span class="lang-zh">配置</span>
-                </a>
-                <a href="#tools">
-                    <span class="lang-en">Tools</span>
-                    <span class="lang-zh">工具</span>
-                </a>
-                <a href="#architecture">
-                    <span class="lang-en">Arch</span>
-                    <span class="lang-zh">架构</span>
                 </a>
             </nav>
             <div class="header-right">
@@ -1036,6 +1270,178 @@
                     <div class="stat-label">
                         <span class="lang-en">npm install</span>
                         <span class="lang-zh">npm install</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Design Philosophy -->
+    <section id="design-philosophy">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <span class="lang-en">// DESIGN PHILOSOPHY</span>
+                    <span class="lang-zh">// 设计哲学</span>
+                </h2>
+            </div>
+            <div class="philo-hero">
+                <div class="philo-quote-mark">"</div>
+                <p class="philo-quote-text">
+                    <span class="lang-en">Seeking a perfect balance between code size, complexity, and the functionality &amp; effectiveness of the agent.</span>
+                    <span class="lang-zh">在代码体积、复杂度和智能体功能与效能之间,追求完美的平衡。</span>
+                </p>
+                <div class="philo-quote-tag">
+                    <span class="lang-en">// The Mangopi Mantra</span>
+                    <span class="lang-zh">// Mangopi 的信条</span>
+                </div>
+            </div>
+            <div class="principle-grid">
+                <div class="principle-card">
+                    <div class="principle-icon">🔍</div>
+                    <h4>
+                        <span class="lang-en">Audit</span>
+                        <span class="lang-zh">可审计</span>
+                    </h4>
+                    <p>
+                        <span class="lang-en">Easier to audit</span>
+                        <span class="lang-zh">易于审计</span>
+                    </p>
+                </div>
+                <div class="principle-card">
+                    <div class="principle-icon">🛠️</div>
+                    <h4>
+                        <span class="lang-en">Hack</span>
+                        <span class="lang-zh">可魔改</span>
+                    </h4>
+                    <p>
+                        <span class="lang-en">Easier to hack</span>
+                        <span class="lang-zh">易于修改</span>
+                    </p>
+                </div>
+                <div class="principle-card">
+                    <div class="principle-icon">⑂</div>
+                    <h4>
+                        <span class="lang-en">Fork</span>
+                        <span class="lang-zh">可分叉</span>
+                    </h4>
+                    <p>
+                        <span class="lang-en">Easier to fork</span>
+                        <span class="lang-zh">易于分支</span>
+                    </p>
+                </div>
+                <div class="principle-card">
+                    <div class="principle-icon">📖</div>
+                    <h4>
+                        <span class="lang-en">Understand</span>
+                        <span class="lang-zh">可读懂</span>
+                    </h4>
+                    <p>
+                        <span class="lang-en">Easier to understand</span>
+                        <span class="lang-zh">易于理解</span>
+                    </p>
+                </div>
+                <div class="principle-card">
+                    <div class="principle-icon">🏠</div>
+                    <h4>
+                        <span class="lang-en">Local</span>
+                        <span class="lang-zh">可本地</span>
+                    </h4>
+                    <p>
+                        <span class="lang-en">Easier to run locally</span>
+                        <span class="lang-zh">易于本地运行</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Ideal For -->
+    <section id="ideal-for">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <span class="lang-en">// IDEAL FOR</span>
+                    <span class="lang-zh">// 适用人群</span>
+                </h2>
+            </div>
+            <div class="ideal-grid">
+                <div class="ideal-card">
+                    <div class="ideal-avatar">💻</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Terminal-First Developers</span>
+                            <span class="lang-zh">终端流开发者</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">Developers who prefer terminal workflows over GUI tools.</span>
+                            <span class="lang-zh">偏好终端工作流,胜过 GUI 工具的开发者。</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="ideal-card">
+                    <div class="ideal-avatar">🚫</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Framework Skeptics</span>
+                            <span class="lang-zh">重型框架厌恶者</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">Users who dislike heavyweight AI frameworks and dependencies.</span>
+                            <span class="lang-zh">不喜欢臃肿的 AI 框架和依赖的用户。</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="ideal-card">
+                    <div class="ideal-avatar">🧪</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Hackers &amp; Tinkerers</span>
+                            <span class="lang-zh">黑客与折腾者</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">People who love to peek under the hood and customize everything.</span>
+                            <span class="lang-zh">喜欢掀开引擎盖、一切都自己改的极客。</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="ideal-card">
+                    <div class="ideal-avatar">🏠</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Local-First Enthusiasts</span>
+                            <span class="lang-zh">本地优先主义者</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">Privacy-minded users who want code &amp; data to stay on their machine.</span>
+                            <span class="lang-zh">注重隐私,希望代码和数据留在本机的用户。</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="ideal-card">
+                    <div class="ideal-avatar">🎛️</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Full Runtime Control</span>
+                            <span class="lang-zh">完全掌控运行时</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">People who want full control over the agent runtime and behavior.</span>
+                            <span class="lang-zh">希望完全掌控智能体运行时与行为的用户。</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="ideal-card">
+                    <div class="ideal-avatar">🏗️</div>
+                    <div>
+                        <h4>
+                            <span class="lang-en">Custom Agent Builders</span>
+                            <span class="lang-zh">自定义智能体构建者</span>
+                        </h4>
+                        <p>
+                            <span class="lang-en">Engineers building bespoke coding agents on top of a clean base.</span>
+                            <span class="lang-zh">在干净基座上构建定制编码智能体的工程师。</span>
+                        </p>
                     </div>
                 </div>
             </div>
@@ -1525,118 +1931,6 @@
                     </p>
                     <div class="code-block">
                         <code><span class="cmd">/g</span> build a fastapi todo app with tests</code>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Philosophy -->
-    <section id="philo">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// PHILOSOPHY</span>
-                    <span class="lang-zh">// 理念</span>
-                </h2>
-            </div>
-            <div class="philo-grid">
-                <div class="philo-items">
-                    <div class="philo-item">
-                        <div class="philo-icon">⚡</div>
-                        <div>
-                            <h4>
-                                <span class="lang-en">Fast</span>
-                                <span class="lang-zh">快速</span>
-                            </h4>
-                            <p>
-                                <span class="lang-en">Millisecond cold start. No Node.js boot, no container spin-up.</span>
-                                <span class="lang-zh">毫秒级冷启动。无 Node.js 启动，无容器开销。</span>
-                            </p>
-                        </div>
-                    </div>
-                    <div class="philo-item">
-                        <div class="philo-icon">📦</div>
-                        <div>
-                            <h4>
-                                <span class="lang-en">Minimal</span>
-                                <span class="lang-zh">极简</span>
-                            </h4>
-                            <p>
-                                <span class="lang-en">Single file, zero deps. Copy it and it works.</span>
-                                <span class="lang-zh">单文件，零依赖。复制即用。</span>
-                            </p>
-                        </div>
-                    </div>
-                    <div class="philo-item">
-                        <div class="philo-icon">🏠</div>
-                        <div>
-                            <h4>
-                                <span class="lang-en">Local First</span>
-                                <span class="lang-zh">本地优先</span>
-                            </h4>
-                            <p>
-                                <span class="lang-en">Sessions stored in .mangocli/. Your code stays on your machine.</span>
-                                <span class="lang-zh">会话存储在 .mangocli/。代码不离开本机。</span>
-                            </p>
-                        </div>
-                    </div>
-                    <div class="philo-item">
-                        <div class="philo-icon">🔓</div>
-                        <div>
-                            <h4>
-                                <span class="lang-en">Hackable</span>
-                                <span class="lang-zh">可魔改</span>
-                            </h4>
-                            <p>
-                                <span class="lang-en">One file to read, one file to hack. Fork it, own it.</span>
-                                <span class="lang-zh">一个文件可读可改。Fork 它，拥有它。</span>
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                <div>
-                    <h3 style="font-size: 12px; color: var(--text-dim); margin-bottom: 12px; letter-spacing: 2px; text-transform: uppercase;">
-                        <span class="lang-en">// NO THANKS</span>
-                        <span class="lang-zh">// 不需要</span>
-                    </h3>
-                    <div class="no-list">
-                        <div class="no-item">
-                            <span class="no-cross">✕</span>
-                            <span>Electron</span>
-                        </div>
-                        <div class="no-item">
-                            <span class="no-cross">✕</span>
-                            <span>Docker</span>
-                        </div>
-                        <div class="no-item">
-                            <span class="no-cross">✕</span>
-                            <span>Redis</span>
-                        </div>
-                        <div class="no-item">
-                            <span class="no-cross">✕</span>
-                            <span>npm / node_modules</span>
-                        </div>
-                        <div class="no-item">
-                            <span class="no-cross">✕</span>
-                            <span>
-                                <span class="lang-en">Heavy Frameworks</span>
-                                <span class="lang-zh">重型框架</span>
-                            </span>
-                        </div>
-                    </div>
-                    <div class="license-box">
-                        <p>
-                            <strong>
-                                <span class="lang-en">License:</span>
-                                <span class="lang-zh">许可证：</span>
-                            </strong>
-                            Apache 2.0
-                        </p>
-                        <p>
-                            <span class="lang-en">Open source. Free forever. Fully hackable.</span>
-                            <span class="lang-zh">开源，永久免费，完全可魔改。</span>
-                        </p>
                     </div>
                 </div>
             </div>
