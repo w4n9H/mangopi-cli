@@ -209,12 +209,12 @@ jobs:
           gh release create "v$VERSION" \
             --title "v$VERSION" \
             --notes "See [CHANGELOG.md](../blob/main/CHANGELOG.md) for details." \
-            --target "$GITHUB_REF" \
+            --target "v$VERSION" \
             dist/* 2>/dev/null || \
           gh release create "v$VERSION" \
             --title "v$VERSION" \
             --notes "See [CHANGELOG.md](../blob/main/CHANGELOG.md) for details." \
-            --target "$GITHUB_REF"
+            --target "v$VERSION"
 
 # ════════════════════════════════════════════════════════════════════════
 # Add this badge to README.md after the workflow is merged:
