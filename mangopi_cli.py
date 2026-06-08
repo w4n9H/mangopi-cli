@@ -577,7 +577,7 @@ class ToolBase:
     def confirm(self, args): return True
 
     @staticmethod
-    def ok(content: str | dict = "", **extra): return {"success": True, "content": content, **extra}
+    def ok(content: Any = "", **extra): return {"success": True, "content": content, **extra}
 
     @staticmethod
     def fail(content="", **extra): return {"success": False, "content": content, **extra}
