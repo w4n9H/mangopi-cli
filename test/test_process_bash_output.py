@@ -1,273 +1,385 @@
-#!/usr/bin/env python3
-"""Test _process_bash_output() —— 覆盖空输出分支、非目录类命令、目录类命令过滤、行数限制及组合场景。"""
+"""Tests for _process_bash_output() and its sub-helpers.
 
-import sys
+Covers:
+    * Empty/falsy output short-circuit
+    * Non-directory commands: pass-through (no filter, but still line-limited)
+    * Directory-heavy commands: drop lines that reference FILTERED_DIRS
+    * 1000-line truncation cap (and its composition with the filter)
+    * _is_directory_heavy boundary cases (substring-match regressions)
+    * _filter_directory_output path-shape variants
+"""
 import os
+import sys
+import unittest
 
-# 将项目根目录加到 sys.path，以便 import mangopi_cli 中的 _process_bash_output
+# Add parent dir to sys.path so we can import mangopi_cli.
+# This file lives at <project>/test/test_process_bash_output.py,
+# so the project root is one level up from __file__'s directory.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mangopi_cli import _process_bash_output, _is_directory_heavy, _filter_directory_output, _limit_output_lines
+from mangopi_cli import (  # noqa: E402
+    _process_bash_output,
+    _is_directory_heavy,
+    _filter_directory_output,
+    _limit_output_lines,
+)
 
-# ── 计数器与辅助函数 ─────────────────────────────────────────
 
-passed = 0
-failed = 0
+# ── 1. Empty / falsy output short-circuit ───────────────────────────────────
 
 
-def _t(name, command, output, expected):
-    """运行一个 _process_bash_output 测试用例。
+class TestEmptyOutputShortCircuit(unittest.TestCase):
+    """When output is empty, _process_bash_output returns it untouched."""
 
-    expected: 与 _process_bash_output(command, output) 返回值逐项相等的可迭代对象。
-    """
-    global passed, failed
-    try:
-        actual = _process_bash_output(command, list(output))
-        assert actual == expected, (
-            f"expected {expected!r}, got {actual!r} "
-            f"for command: {command!r}"
+    def test_01_empty_list(self):
+        # Empty list must short-circuit; no command branching happens.
+        self.assertEqual(_process_bash_output("ls -la", []), [])
+
+    def test_02_empty_list_with_directory_command(self):
+        # Even when the command is "directory-heavy", empty output is
+        # returned as-is (no filtering, no truncation marker).
+        self.assertEqual(_process_bash_output("find . -name '*.py'", []), [])
+
+
+# ── 2. Non-directory commands: pass-through (with line cap) ─────────────────
+
+
+class TestNonDirectoryCommandsPassThrough(unittest.TestCase):
+    """Commands not classified as directory-heavy must keep their output."""
+
+    def test_10_non_dir_command_unchanged(self):
+        self.assertEqual(
+            _process_bash_output("echo hello", ["hello"]),
+            ["hello"],
         )
-        passed += 1
-        print(f"  ✓ {name}")
-    except AssertionError as e:
-        failed += 1
-        print(f"  ✗ {name}  FAIL: {e}")
-    except Exception as e:
-        failed += 1
-        print(f"  ✗ {name}  ERROR: {type(e).__name__}: {e}")
+
+    def test_11_non_dir_command_keeps_git_paths(self):
+        """Non-dir commands must not invoke the directory filter, so .git
+        and node_modules references in arbitrary output are preserved."""
+        self.assertEqual(
+            _process_bash_output(
+                "echo ./node_modules/foo",
+                ["./node_modules/foo", "build/output.bin"],
+            ),
+            ["./node_modules/foo", "build/output.bin"],
+        )
+
+    def test_12_non_dir_command_preserves_1000_lines(self):
+        # 1000 lines is exactly the cap; nothing should be truncated.
+        lines = [f"line-{i}" for i in range(1000)]
+        self.assertEqual(_process_bash_output("cat big.txt", lines), lines)
 
 
-# ── 1. 空输出 / falsy 输出 —— 直接短路返回 ─────────────────
-
-def test_01_empty_list():
-    _t("空列表直接返回", "ls -la", [], [])
+# ── 3. Directory-heavy commands: filter lines referencing FILTERED_DIRS ─────
 
 
-def test_02_empty_list_directory_command():
-    _t("目录类命令遇到空输出仍直接返回", "find . -name '*.py'", [], [])
+class TestDirectoryHeavyFiltering(unittest.TestCase):
+    """When the command is directory-heavy, lines that reference any
+    FILTERED_DIRS path shape must be removed."""
+
+    def test_20_find_filters_node_modules(self):
+        self.assertEqual(
+            _process_bash_output(
+                "find . -type f",
+                ["./node_modules/lib/index.js", "./src/main.py"],
+            ),
+            ["./src/main.py"],
+        )
+
+    def test_21_find_filters_git(self):
+        self.assertEqual(
+            _process_bash_output(
+                "find . -type d",
+                ["./src", "./.git/objects/abc", "./README.md"],
+            ),
+            ["./src", "./README.md"],
+        )
+
+    def test_22_find_filters_multiple_dirs(self):
+        self.assertEqual(
+            _process_bash_output(
+                "find .",
+                [
+                    "./__pycache__/x.cpython-311.pyc",
+                    "./dist/bundle.js",
+                    "./build/output",
+                    "./src/a.py",
+                    "./.venv/lib/python",
+                ],
+            ),
+            ["./src/a.py"],
+        )
+
+    def test_23_tree_command_filters(self):
+        self.assertEqual(
+            _process_bash_output(
+                "tree -L 2",
+                ["./node_modules", "./src", "./.git"],
+            ),
+            ["./src"],
+        )
+
+    def test_24_ls_R_command_filters(self):
+        self.assertEqual(
+            _process_bash_output(
+                "ls -R",
+                ["./node_modules/foo", "./vendor/bar", "./src/main.py"],
+            ),
+            ["./src/main.py"],
+        )
+
+    def test_25a_du_filters_slash_separated_path(self):
+        # A path containing "/__pycache__/" is filtered; tab-separated
+        # pure-name rows survive (next test).
+        self.assertEqual(
+            _process_bash_output(
+                "du -sh *",
+                ["./__pycache__/x.cpython-311.pyc", "./src\t10K"],
+            ),
+            ["./src\t10K"],
+        )
+
+    def test_25b_du_keeps_tab_separated_pure_name(self):
+        # Plain "__pycache__" name (no slashes) is NOT in the path-shape
+        # set, so the row must be preserved.
+        self.assertEqual(
+            _process_bash_output(
+                "du -sh *",
+                ["__pycache__\t1K", "./src\t10K"],
+            ),
+            ["__pycache__\t1K", "./src\t10K"],
+        )
+
+    def test_26_fd_command_filters(self):
+        self.assertEqual(
+            _process_bash_output(
+                "fd py",
+                ["./node_modules/foo.py", "./.cache/data", "./src/main.py"],
+            ),
+            ["./src/main.py"],
+        )
+
+    def test_27_rg_command_filters(self):
+        self.assertEqual(
+            _process_bash_output(
+                "rg pattern",
+                ["./.git/config:token=abc", "./src/a.py:pattern"],
+            ),
+            ["./src/a.py:pattern"],
+        )
+
+    def test_28_filter_skips_unrelated_lines(self):
+        # When nothing matches a FILTERED_DIRS path shape, the output
+        # is unchanged.
+        self.assertEqual(
+            _process_bash_output(
+                "find . -name '*.py'",
+                ["./src/main.py", "./tests/test_a.py", "./docs/readme.py"],
+            ),
+            ["./src/main.py", "./tests/test_a.py", "./docs/readme.py"],
+        )
 
 
-# ── 2. 非目录类命令 —— 仅受行数限制，不做目录过滤 ──────────
-
-def test_10_non_dir_command_unchanged():
-    _t("非目录类命令且行数较少时不变",
-       "echo hello",
-       ["hello"],
-       ["hello"])
+# ── 4. Line-limit truncation (1000-line cap) ────────────────────────────────
 
 
-def test_11_non_dir_command_with_git_path_kept():
-    """非目录类命令不应过滤 .git 等路径, 完整保留原始输出。"""
-    _t("echo 命令遇到 .git 路径仍保留",
-       "echo ./node_modules/foo",
-       ["./node_modules/foo", "build/output.bin"],
-       ["./node_modules/foo", "build/output.bin"])
+class TestLineLimitTruncation(unittest.TestCase):
+    """Output over 1000 lines must be truncated and a marker appended."""
+
+    def test_30_exactly_1000_lines_not_truncated(self):
+        lines = [f"line-{i}" for i in range(1000)]
+        self.assertEqual(_process_bash_output("echo loop", lines), lines)
+
+    def test_31_over_1000_lines_truncated(self):
+        lines = [f"line-{i}" for i in range(1003)]
+        expected = lines[:1000] + ["", "... truncated 3 lines ..."]
+        self.assertEqual(
+            _process_bash_output("cat huge.txt", lines),
+            expected,
+        )
 
 
-def test_12_non_dir_command_preserves_1000_lines():
-    lines = [f"line-{i}" for i in range(1000)]
-    _t("非目录类命令, 1000 行刚好不截断", "cat big.txt", lines, lines)
+# ── 5. Filter + truncate composition ────────────────────────────────────────
 
 
-# ── 3. 目录类命令 + 过滤 —— 命中 FILTERED_DIRS 的行被剔除 ─
+class TestFilterThenTruncateComposition(unittest.TestCase):
+    """Filter runs first, then the 1000-line cap. These tests pin down
+    the ordering: filtered count is what the cap measures."""
 
-def test_20_find_filters_node_modules():
-    _t("find 命令过滤掉 node_modules 行",
-       "find . -type f",
-       ["./node_modules/lib/index.js", "./src/main.py"],
-       ["./src/main.py"])
+    def test_32a_filtered_count_exactly_1000_no_truncate(self):
+        # 1000 rows that survive the filter → exactly at the cap, no marker.
+        lines = [f"./src/file-{i}.py" for i in range(1000)]
+        self.assertEqual(
+            _process_bash_output("find . -name '*.py'", lines),
+            lines,
+        )
 
+    def test_32b_filtered_count_1001_truncated(self):
+        # 1001 rows survive the filter → cap triggers, 1 line dropped.
+        lines = [f"./src/file-{i}.py" for i in range(1001)]
+        expected = lines[:1000] + ["", "... truncated 1 lines ..."]
+        self.assertEqual(
+            _process_bash_output("find . -name '*.py'", lines),
+            expected,
+        )
 
-def test_21_find_filters_git():
-    _t("find 命令过滤掉 .git 行",
-       "find . -type d",
-       ["./src", "./.git/objects/abc", "./README.md"],
-       ["./src", "./README.md"])
+    def test_32c_filtered_count_600_no_truncate(self):
+        # 500 filtered + 600 survivors → 600 survivors, no cap triggered.
+        lines = (
+            [f"./node_modules/f{i}.js" for i in range(500)]
+            + [f"./src/file-{i}.py" for i in range(600)]
+        )
+        expected = [f"./src/file-{i}.py" for i in range(600)]
+        self.assertEqual(_process_bash_output("find .", lines), expected)
 
+    def test_33a_filtered_count_800_no_truncate(self):
+        # 500 filtered + 800 survivors → 800 survivors, no cap.
+        lines = (
+            [f"./node_modules/f{i}.js" for i in range(500)]
+            + [f"./src/f{i}.py" for i in range(800)]
+        )
+        expected = [f"./src/f{i}.py" for i in range(800)]
+        self.assertEqual(_process_bash_output("find .", lines), expected)
 
-def test_22_find_filters_multiple_dirs():
-    _t("find 命令过滤多个 FILTERED_DIRS",
-       "find .",
-       ["./__pycache__/x.cpython-311.pyc", "./dist/bundle.js",
-        "./build/output", "./src/a.py", "./.venv/lib/python"],
-       ["./src/a.py"])
-
-
-def test_23_tree_command_also_filters():
-    _t("tree 命令同样会过滤 (无需尾随空格)",
-       "tree -L 2",
-       ["./node_modules", "./src", "./.git"],
-       ["./src"])
-
-
-def test_24_ls_R_command_also_filters():
-    _t("ls -R 命令同样会过滤",
-       "ls -R",
-       ["./node_modules/foo", "./vendor/bar", "./src/main.py"],
-       ["./src/main.py"])
-
-
-def test_25_du_command_also_filters():
-    """du 命令触发过滤; 路径中带 __pycache__ 目录前缀才会被命中, tab 分隔的纯名称不会被命中。"""
-    _t("du 命令过滤带 /__pycache__/ 路径的行",
-       "du -sh *",
-       ["./__pycache__/x.cpython-311.pyc", "./src\t10K"],
-       ["./src\t10K"])
-    # tab 分隔的纯名称 "__pycache__" 不在过滤路径形态范围内, 应被保留
-    _t("du 命令不过滤 tab 分隔的纯目录名",
-       "du -sh *",
-       ["__pycache__\t1K", "./src\t10K"],
-       ["__pycache__\t1K", "./src\t10K"])
+    def test_33b_unfiltered_1200_lines_truncated(self):
+        # 1200 lines, none filtered → cap triggers, 200 dropped.
+        lines = [f"./src/f{i}.py" for i in range(1200)]
+        expected = lines[:1000] + ["", "... truncated 200 lines ..."]
+        self.assertEqual(_process_bash_output("find .", lines), expected)
 
 
-def test_26_fd_command_also_filters():
-    _t("fd 命令同样会过滤",
-       "fd py",
-       ["./node_modules/foo.py", "./.cache/data", "./src/main.py"],
-       ["./src/main.py"])
+# ── 6. _is_directory_heavy boundary cases ───────────────────────────────────
 
 
-def test_27_rg_command_also_filters():
-    _t("rg 命令同样会过滤",
-       "rg pattern",
-       ["./.git/config:token=abc", "./src/a.py:pattern"],
-       ["./src/a.py:pattern"])
+class TestIsDirectoryHeavyEdgeCases(unittest.TestCase):
+    """Direct unit tests of _is_directory_heavy() for substring matches.
 
+    The implementation does `k in command` against literal substrings
+    like "find " (with trailing space), "tree", "ls -R", "du ", "fd ", "rg ".
+    These tests pin down which substrings trigger the classifier and
+    protect against regressions on the boundary.
+    """
 
-def test_28_filter_skips_unrelated_lines():
-    _t("目录类命令不命中过滤的行全部保留",
-       "find . -name '*.py'",
-       ["./src/main.py", "./tests/test_a.py", "./docs/readme.py"],
-       ["./src/main.py", "./tests/test_a.py", "./docs/readme.py"])
+    def test_40_non_heavy_commands_not_filtered(self):
+        # Each command below is NOT directory-heavy and must keep all
+        # rows including ones that look like filtered paths.
+        commands = [
+            "ls -la",
+            "ls",
+            "grep -r pattern",
+            "cat file.txt",
+            "echo hi",
+            "git status",
+            "npm install",
+            "python script.py",
+        ]
+        for cmd in commands:
+            with self.subTest(cmd=cmd):
+                result = _process_bash_output(
+                    cmd, ["./.git/HEAD", "./node_modules/x"]
+                )
+                self.assertEqual(
+                    result,
+                    ["./.git/HEAD", "./node_modules/x"],
+                    f"误过滤: command={cmd!r} result={result!r}",
+                )
 
-
-# ── 4. 行数限制 —— 超过 1000 行时截断并追加提示 ────────────
-
-def test_30_exactly_1000_lines_not_truncated():
-    lines = [f"line-{i}" for i in range(1000)]
-    _t("恰好 1000 行不截断", "echo loop", lines, lines)
-
-
-def test_31_over_1000_lines_truncated():
-    lines = [f"line-{i}" for i in range(1003)]
-    expected = lines[:1000] + ["", "... truncated 3 lines ..."]
-    _t("1003 行被截断为 1000 行 + 截断提示", "cat huge.txt", lines, expected)
-
-
-def test_32_truncation_after_directory_filter():
-    """目录过滤先于行数限制, 验证组合顺序。"""
-    # 过滤后剩 1000 行刚好, 不截断
-    lines = [f"./src/file-{i}.py" for i in range(1000)]
-    _t("过滤后行数恰为 1000, 不截断",
-       "find . -name '*.py'", lines, lines)
-
-    # 过滤后剩 1001 行, 应截断
-    lines_over = [f"./src/file-{i}.py" for i in range(1001)]
-    expected_over = lines_over[:1000] + ["", "... truncated 1 lines ..."]
-    _t("过滤后行数为 1001, 触发截断",
-       "find . -name '*.py'", lines_over, expected_over)
-
-    lines_mixed = (
-        [f"./node_modules/f{i}.js" for i in range(500)]
-        + [f"./src/file-{i}.py" for i in range(600)]
-    )
-    expected_mixed = [f"./src/file-{i}.py" for i in range(600)]
-    _t("过滤后行数恰为 600, 不截断",
-       "find .", lines_mixed, expected_mixed)
-
-
-def test_33_filter_then_truncate_combo():
-    """过滤后行数仍超 1000, 应再截断。"""
-    lines = [f"./node_modules/f{i}.js" for i in range(500)] + \
-            [f"./src/f{i}.py" for i in range(800)]
-    # 过滤后剩 800 行, 未超 1000
-    expected = [f"./src/f{i}.py" for i in range(800)]
-    _t("过滤后剩 800 行, 不触发截断",
-       "find .", lines, expected)
-
-    lines2 = [f"./src/f{i}.py" for i in range(1200)]
-    expected2 = lines2[:1000] + ["", "... truncated 200 lines ..."]
-    _t("未过滤的 1200 行被截断", "find .", lines2, expected2)
-
-
-# ── 5. 边界场景 —— 不做目录类命令误判的回归保护 ───────────
-
-def test_40_non_heavy_commands_not_filtered():
-    """普通 ls (无 -R)、grep、cat、echo 等不被误判为目录类命令。"""
-    global passed, failed
-    try:
-        for cmd in ["ls -la", "ls", "grep -r pattern", "cat file.txt", "echo hi",
-                    "git status", "npm install", "python script.py"]:
-            result = _process_bash_output(cmd, ["./.git/HEAD", "./node_modules/x"])
-            assert result == ["./.git/HEAD", "./node_modules/x"], (
-                f"误过滤: command={cmd!r} result={result!r}")
-        passed += 1
-        print("  ✓ 普通命令不会触发目录过滤 (ls/grep/cat/echo/git/npm/python)")
-    except AssertionError as e:
-        failed += 1
-        print(f"  ✗ 普通命令误判  FAIL: {e}")
-
-
-def test_41_substring_match_does_not_misclassify():
-    """子串匹配可能在边界场景误判, 此处验证 'find' 子串的常见场景。"""
-    global passed, failed
-    cases = [
-        ("find . -name '*.py'", True),
-        ("findings.txt", False),       # 单词内嵌, 不含 "find " 子串
-        ("defined()", False),
-        ("ls", False),
-        ("ls -l", False),
-        ("ls -R", True),
-        ("tree", True),
-        ("du -sh", True),
-        ("du", False),
-        ("fd pattern", True),
-        ("rg foo", True),
-    ]
-    try:
+    def test_41_substring_match_does_not_misclassify(self):
+        # Tuple: (command, expected classification)
+        cases = [
+            ("find . -name '*.py'", True),
+            ("findings.txt", False),       # 'find' as a word fragment
+            ("defined()", False),          # 'find' substring inside word
+            ("ls", False),
+            ("ls -l", False),
+            ("ls -R", True),
+            ("tree", True),
+            ("du -sh", True),
+            ("du", False),
+            ("fd pattern", True),
+            ("rg foo", True),
+        ]
         for cmd, expected in cases:
-            actual = _is_directory_heavy(cmd)
-            assert actual == expected, (
-                f"_is_directory_heavy({cmd!r}) expected {expected}, got {actual}")
-        passed += 1
-        print("  ✓ _is_directory_heavy 边界判定正确 (find 子串不误判)")
-    except AssertionError as e:
-        failed += 1
-        print(f"  ✗ _is_directory_heavy 边界  FAIL: {e}")
+            with self.subTest(cmd=cmd):
+                actual = _is_directory_heavy(cmd)
+                self.assertEqual(
+                    actual,
+                    expected,
+                    f"_is_directory_heavy({cmd!r}) expected {expected}, "
+                    f"got {actual}",
+                )
 
 
-# ── 6. FILTERED_DIRS 各种路径形态都能被过滤 ────────────────
-
-def test_50_filter_patterns_variants():
-    """验证 _filter_directory_output 的多种路径形态都能被识别。"""
-    cmd = "find ."
-    raw = [
-        "./node_modules/a",          # ./d/
-        "src/node_modules/b",        # /d/
-        "node_modules/c",            # 起始 d/
-        "./dist:bundle.js",          # ./d:
-        "vendor/lib:0.0.1",          # /d:
-        "target/classes/X",          # /d/
-        "./.cache/data",             # ./d/
-        "endswith/__pycache__",      # 结尾 /d
-        "./.idea",                   # 起始 ./
-        ".venv",                     # 等于 d
-        "./build",                   # 起始 ./
-        "./src/keep_this.py",        # 不应过滤
-    ]
-    expected = ["./src/keep_this.py"]
-    _t("多种路径形态的过滤匹配", cmd, raw, expected)
+# ── 7. _filter_directory_output path-shape variants ─────────────────────────
 
 
-# ── 入口 ───────────────────────────────────────────────────
+class TestFilterDirectoryOutputPathShapes(unittest.TestCase):
+    """Direct unit tests of _filter_directory_output() for the various
+    path shapes that should be recognized as 'inside a filtered dir'.
+    """
+
+    def test_50_filter_patterns_variants(self):
+        """Many path shapes of the same filtered dir must all be filtered.
+
+        Row-by-row intent:
+            "./node_modules/a"        # ./d/
+            "src/node_modules/b"      # /d/
+            "node_modules/c"          # starting d/
+            "./dist:bundle.js"        # ./d:
+            "vendor/lib:0.0.1"        # /d:
+            "target/classes/X"        # /d/
+            "./.cache/data"           # ./d/
+            "endswith/__pycache__"    # trailing /d
+            "./.idea"                 # starting ./
+            ".venv"                   # exact match
+            "./build"                 # starting ./
+            "./src/keep_this.py"      # KEEP
+        """
+        cmd = "find ."
+        raw = [
+            "./node_modules/a",
+            "src/node_modules/b",
+            "node_modules/c",
+            "./dist:bundle.js",
+            "vendor/lib:0.0.1",
+            "target/classes/X",
+            "./.cache/data",
+            "endswith/__pycache__",
+            "./.idea",
+            ".venv",
+            "./build",
+            "./src/keep_this.py",
+        ]
+        expected = ["./src/keep_this.py"]
+        self.assertEqual(_process_bash_output(cmd, raw), expected)
+
+    def test_50_direct_filter_call_matches(self):
+        # Calling the helper directly must produce the same result as
+        # routing through _process_bash_output().
+        raw = [
+            "./node_modules/a",
+            "src/node_modules/b",
+            "./src/keep_this.py",
+        ]
+        self.assertEqual(
+            _filter_directory_output(raw),
+            ["./src/keep_this.py"],
+        )
+
+    def test_50_limit_output_lines_under_cap(self):
+        # The bare line-limiter is a no-op below the cap.
+        lines = [f"line-{i}" for i in range(1000)]
+        self.assertEqual(_limit_output_lines(lines), lines)
+
+    def test_50_limit_output_lines_over_cap(self):
+        # Over the cap → first 1000 + sentinel.
+        lines = [f"line-{i}" for i in range(1005)]
+        self.assertEqual(
+            _limit_output_lines(lines),
+            lines[:1000] + ["", "... truncated 5 lines ..."],
+        )
+
 
 if __name__ == "__main__":
-    print("=== _process_bash_output 单元测试 ===\n")
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-
-    print(f"\n{'='*40}")
-    print(f"通过: {passed}  失败: {failed}  总计: {passed + failed}")
-    if failed:
-        sys.exit(1)
+    # Run with verbose output
+    unittest.main(verbosity=2)

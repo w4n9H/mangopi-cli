@@ -1,17 +1,38 @@
-#!/usr/bin/env python3
-"""Test compact_conversation() —— 验证 turn 级逐轮丢弃降 token 的行为。"""
+"""Tests for ContextManager.compact_conversation() — turn-level token
+discard strategy.
 
-import sys
+Covers:
+    * Empty messages / system-only — no-op
+    * Under-threshold — nothing discarded
+    * Over-threshold with no old turns — discard recent turns to floor of 1
+    * Over-threshold with old turns — discard old turns turn-by-turn
+    * Old turns fully discarded but still over — discard recent turns
+    * System messages are always preserved
+    * Message order preserved (system → user → assistant → ...)
+    * Messages themselves are deep-copied, not mutated
+    * retain_turns parameter
+    * Tool-call turns discarded as atomic units
+    * Realistic 14-turn coding-session scenario
+"""
+import copy
 import os
+import sys
+import unittest
 
+# Add parent dir to sys.path so we can import mangopi_cli.
+# This file lives at <project>/test/test_compact_conversation.py,
+# so the project root is one level up from __file__'s directory.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mangopi_cli import ContextManager
+from mangopi_cli import ContextManager  # noqa: E402
 
-# ── 辅助函数 ──────────────────────────────────────────────
+
+# ── Message builders (module-level helpers) ─────────────────────────────────
+
 
 def make_user(content):
     return {"role": "user", "content": content}
+
 
 def make_assistant(content, tool_calls=None, reasoning=None):
     m = {"role": "assistant", "content": content}
@@ -21,17 +42,23 @@ def make_assistant(content, tool_calls=None, reasoning=None):
         m["reasoning_content"] = reasoning
     return m
 
+
 def make_tool(call_id, name, content):
     return {"role": "tool", "tool_call_id": call_id, "tool_name": name, "content": content}
+
 
 def make_tc(call_id, name="read", args='{"path": "x"}'):
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": args}}
 
+
 def long(n=1000):
+    """Long filler string used to push messages past the token threshold."""
     return "X" * n
 
-def build_turn(user_text, assistant_tc=None, tool_results=None, assistant_reply=None, reasoning=None):
-    """构建一个完整 turn: user → assistant(tc) → tool... → assistant(reply)"""
+
+def build_turn(user_text, assistant_tc=None, tool_results=None,
+               assistant_reply=None, reasoning=None):
+    """Build a full turn: user → assistant(tc) → tool... → assistant(reply)."""
     msgs = [make_user(user_text)]
     if assistant_tc:
         msgs.append(make_assistant("", assistant_tc, reasoning=reasoning))
@@ -42,518 +69,405 @@ def build_turn(user_text, assistant_tc=None, tool_results=None, assistant_reply=
         msgs.append(make_assistant(assistant_reply, reasoning=reasoning))
     return msgs
 
+
 def build_simple_turn(user_text, assistant_text):
-    """纯对话 turn: user → assistant"""
+    """Pure conversation turn: user → assistant (no tools)."""
     return [make_user(user_text), make_assistant(assistant_text)]
 
 
-# ── 测试用例 ──────────────────────────────────────────────
-
-passed = 0
-failed = 0
-
-def t(name, setup_fn, verify_fn):
-    global passed, failed
-    ctx = ContextManager()
-    setup_fn(ctx)
-    ctx.compact_conversation()
-    try:
-        verify_fn(ctx)
-        passed += 1
-        print(f"  ✓ {name}")
-    except AssertionError as e:
-        failed += 1
-        print(f"  ✗ {name}  FAIL: {e}")
-    except Exception as e:
-        failed += 1
-        import traceback
-        print(f"  ✗ {name}  ERROR: {e}")
-        traceback.print_exc()
+# ── Shared base: each test gets a fresh ContextManager ─────────────────────
 
 
-# ═══════════════════════════════════════════════════════════
-#  1. 空消息 / 仅 system — 不操作
-# ═══════════════════════════════════════════════════════════
+class _CompactConversationBase(unittest.TestCase):
+    """Base: provides a fresh ContextManager per test plus a `compact()`
+    convenience wrapper that mirrors the original test body shape.
+    """
 
-def test_01_empty_messages():
-    def setup(ctx):
-        ctx.messages = []
-    def verify(ctx):
-        assert len(ctx.messages) == 0
-    t("空消息不操作", setup, verify)
+    def setUp(self):
+        self.ctx = ContextManager()
+
+    def compact(self, **kwargs):
+        """Run compact_conversation on the shared self.ctx."""
+        self.ctx.compact_conversation(**kwargs)
 
 
-def test_02_only_system():
-    def setup(ctx):
-        ctx.messages = [
+# ── 1. Empty messages / system-only — no-op ────────────────────────────────
+
+
+class TestEmptyAndSystemOnly(_CompactConversationBase):
+    """When there's nothing to compact, messages must be left alone."""
+
+    def test_01_empty_messages(self):
+        # ctx.messages starts as []; compact must not crash or change it.
+        self.ctx.messages = []
+        self.compact()
+        self.assertEqual(len(self.ctx.messages), 0)
+
+    def test_02_only_system(self):
+        self.ctx.messages = [
             {"role": "system", "content": "sys1"},
             {"role": "system", "content": "sys2"},
         ]
-    def verify(ctx):
-        assert ctx.messages[0]["content"] == "sys1"
-        assert ctx.messages[1]["content"] == "sys2"
-        assert len(ctx.messages) == 2
-    t("仅 system 不操作", setup, verify)
+        self.compact()
+        self.assertEqual(len(self.ctx.messages), 2)
+        self.assertEqual(self.ctx.messages[0]["content"], "sys1")
+        self.assertEqual(self.ctx.messages[1]["content"], "sys2")
 
 
-# ═══════════════════════════════════════════════════════════
-#  2. 低于阈值 — 不丢任何 turn
-# ═══════════════════════════════════════════════════════════
+# ── 2. Under threshold — no turn discarded ─────────────────────────────────
 
-def test_03_under_threshold_no_trim():
-    """turns <= retain_turns=8, 且总 tokens 低于阈值 → 不变化"""
-    def setup(ctx):
-        ctx.auto_compact_threshold = 50_000  # 远大于消息量
-        ctx.messages = [
-            {"role": "system", "content": "sys"},
-        ]
+
+class TestUnderThreshold(_CompactConversationBase):
+    """When total tokens are below the threshold, no turns are discarded."""
+
+    def test_03_under_threshold_no_trim(self):
+        self.ctx.auto_compact_threshold = 50_000  # well above message total
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(5):
-            ctx.messages.extend(build_simple_turn(f"q{i}", f"a{i}"))
-    def verify(ctx):
-        assert len(ctx.messages) == 11, f"应保留全部 11 条消息, 实际: {len(ctx.messages)}"
-        users = [m for m in ctx.messages if m["role"] == "user"]
-        assert len(users) == 5, "所有 user 消息应保留"
-    t("低于阈值不丢 turn", setup, verify)
+            self.ctx.messages.extend(build_simple_turn(f"q{i}", f"a{i}"))
+        self.compact()
+        self.assertEqual(len(self.ctx.messages), 11)
+        users = [m for m in self.ctx.messages if m["role"] == "user"]
+        self.assertEqual(len(users), 5)
 
-
-def test_04_over_threshold_no_old_turns_discard_recent():
-    """只有 6 turn (无 old turn), 但超阈值 → 仍会丢弃 recent turns 直到低于阈值 (保底≥1)"""
-    def setup(ctx):
-        ctx.auto_compact_threshold = 10  # 极低阈值, 只够容纳 system + 1 turn
-        ctx.messages = [{"role": "system", "content": "sys"}]
+    def test_04_over_threshold_no_old_turns_discard_recent(self):
+        """6 turns with an ultra-low threshold → no old turns exist, so
+        recent turns must be discarded down to a floor of 1."""
+        self.ctx.auto_compact_threshold = 10
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(6):
-            ctx.messages.extend(build_simple_turn(f"q{i}", long(500)))
-    def verify(ctx):
-        # 无 old turn 但超阈值 → 从头丢 recent turns, 最后只剩 1 turn
-        users = [m["content"] for m in ctx.messages if m["role"] == "user"]
-        assert len(users) == 1, f"超阈值应丢弃至只剩 1 turn, 实际: {len(users)}"
-        assert "q5" in users, "应保留最后一个 turn"
-    t("超阈值无 old turn → 丢 recent 至剩 1", setup, verify)
+            self.ctx.messages.extend(build_simple_turn(f"q{i}", long(500)))
+        self.compact()
+        users = [m["content"] for m in self.ctx.messages if m["role"] == "user"]
+        self.assertEqual(len(users), 1)
+        self.assertIn("q5", users)
 
 
-# ═══════════════════════════════════════════════════════════
-#  3. 逐轮丢弃 old turns
-# ═══════════════════════════════════════════════════════════
+# ── 3. Discarding old turns one at a time ─────────────────────────────────
 
-def test_05_discard_one_old_turn():
-    """12 turn, 阈值刚好只能容纳 11 turn → 丢弃最早 1 个 turn"""
-    def setup(ctx):
-        ctx.messages = [{"role": "system", "content": "sys"}]
+
+class TestDiscardOldTurns(_CompactConversationBase):
+    """When there are old turns and total exceeds the threshold, old turns
+    are discarded one at a time until the total is back under threshold.
+    """
+
+    def _set_threshold_relative_to(self, n_turns_to_keep):
+        """Compute the token threshold so that exactly the most recent
+        n_turns_to_keep turns plus the system message will fit, while
+        dropping the rest."""
+        # system + n_turns_to_keep turns (= n_turns_to_keep*2 messages)
+        keep_msg_count = 1 + n_turns_to_keep * 2
+        kept = [self.ctx.messages[0]] + self.ctx.messages[-keep_msg_count * 1:]
+        # The most recent keep_msg_count messages after the system message:
+        kept = [self.ctx.messages[0]] + self.ctx.messages[-(keep_msg_count - 1):]
+        total = sum(self.ctx.estimated_tokens(m) for m in kept)
+        self.ctx.auto_compact_threshold = total + 5
+
+    def test_05_discard_one_old_turn(self):
+        """12 turns, threshold sized to drop the very first turn."""
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(12):
-            ctx.messages.extend(build_simple_turn(f"q{i}", f"reply_{i}"))
-        # 计算如果把所有 turn 都保留需要多少 token, 然后设置阈值刚好少 1 个 turn
-        all_tokens = ctx.total_tokens()
-        # 第一个 turn 的 token 数 = user + assistant
-        first_turn_tokens = ctx.estimated_tokens(ctx.messages[1]) + ctx.estimated_tokens(ctx.messages[2])
-        # 设置阈值: 全部 - 第一个 turn 的 token, 这样去掉最早 turn 就刚好低于阈值
-        ctx.auto_compact_threshold = all_tokens - first_turn_tokens
-    def verify(ctx):
-        users = [m["content"] for m in ctx.messages if m["role"] == "user"]
-        assert "q0" not in users, "最早的 turn q0 应该被丢弃"
-        assert "q1" in users, "q1 应该保留"
-        assert "q11" in users, "q11 应该保留"
-    t("丢弃 1 个旧 turn", setup, verify)
+            self.ctx.messages.extend(build_simple_turn(f"q{i}", f"reply_{i}"))
+        all_tokens = self.ctx.total_tokens()
+        first_turn_tokens = (
+            self.ctx.estimated_tokens(self.ctx.messages[1])
+            + self.ctx.estimated_tokens(self.ctx.messages[2])
+        )
+        self.ctx.auto_compact_threshold = all_tokens - first_turn_tokens
+        self.compact()
+        users = [m["content"] for m in self.ctx.messages if m["role"] == "user"]
+        self.assertNotIn("q0", users)
+        self.assertIn("q1", users)
+        self.assertIn("q11", users)
 
-
-def test_06_discard_multiple_old_turns():
-    """12 turn, 阈值只能容纳 5 turn → 丢弃最早 7 个 turn"""
-    def setup(ctx):
-        ctx.messages = [{"role": "system", "content": "sys"}]
+    def test_06_discard_multiple_old_turns(self):
+        """12 turns, threshold sized to keep only 5 turns."""
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(12):
-            ctx.messages.extend(build_simple_turn(f"turn_{i}", f"reply_{i}"))
-        # 保留 5 turn → 系 + 5*2 = 11 条消息
-        all_tokens = ctx.total_tokens()
-        keep_5_tokens = sum(ctx.estimated_tokens(m) for m in ctx.messages[:11])  # sys + 5 turns
-        ctx.auto_compact_threshold = keep_5_tokens + 10  # 略大于 5 turn
-    def verify(ctx):
-        users = [m["content"] for m in ctx.messages if m["role"] == "user"]
-        # 保留的应该是最近的 5 turn (turn_7 ~ turn_11)
-        assert len(users) == 5, f"应保留 5 turn, 实际: {len(users)}"
+            self.ctx.messages.extend(build_simple_turn(f"turn_{i}", f"reply_{i}"))
+        keep_5 = sum(self.ctx.estimated_tokens(m) for m in self.ctx.messages[:11])
+        self.ctx.auto_compact_threshold = keep_5 + 10
+        self.compact()
+        users = [m["content"] for m in self.ctx.messages if m["role"] == "user"]
+        self.assertEqual(len(users), 5)
         for i in range(7):
-            assert f"turn_{i}" not in users, f"turn_{i} 应该被丢弃"
+            self.assertNotIn(f"turn_{i}", users)
         for i in range(7, 12):
-            assert f"turn_{i}" in users, f"turn_{i} 应该保留"
-    t("丢弃多个旧 turn", setup, verify)
+            self.assertIn(f"turn_{i}", users)
 
 
-# ═══════════════════════════════════════════════════════════
-#  4. old turns 全部丢弃后仍超阈值 → 丢弃 recent turns
-# ═══════════════════════════════════════════════════════════
+# ── 4. Old turns fully discarded but still over — discard recent turns ─────
 
-def test_07_discard_recent_turns():
-    """阈值极低，old turns 全丢后仍超 → 逐步丢弃 recent turns (至少保留 1)"""
-    def setup(ctx):
-        ctx.messages = [{"role": "system", "content": "sys"}]
+
+class TestDiscardRecentTurns(_CompactConversationBase):
+    """When even after dropping all old turns the conversation is still
+    over the threshold, recent turns must be discarded down to a floor
+    of 1 (system is always preserved).
+    """
+
+    def test_07_discard_recent_turns(self):
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(10):
-            ctx.messages.extend(build_simple_turn(f"q{i}", long(500)))
-        # 阈值只能容纳 system + 1 turn
-        keep_1_turn_tokens = ctx.estimated_tokens(ctx.messages[0])  # sys
-        keep_1_turn_tokens += ctx.estimated_tokens(ctx.messages[-2])  # last user
-        keep_1_turn_tokens += ctx.estimated_tokens(ctx.messages[-1])  # last assistant
-        ctx.auto_compact_threshold = keep_1_turn_tokens + 5
-    def verify(ctx):
-        users = [m["content"] for m in ctx.messages if m["role"] == "user"]
-        assert len(users) == 1, f"应只保留 1 turn, 实际: {len(users)}"
-        assert "q9" in users, "应保留最后一个 turn"
-        assert ctx.messages[0]["role"] == "system", "system 应保留"
-    t("丢弃 recent turns 至剩 1", setup, verify)
+            self.ctx.messages.extend(build_simple_turn(f"q{i}", long(500)))
+        # Threshold sized to only hold the system + the LAST turn.
+        keep_1 = (
+            self.ctx.estimated_tokens(self.ctx.messages[0])
+            + self.ctx.estimated_tokens(self.ctx.messages[-2])
+            + self.ctx.estimated_tokens(self.ctx.messages[-1])
+        )
+        self.ctx.auto_compact_threshold = keep_1 + 5
+        self.compact()
+        users = [m["content"] for m in self.ctx.messages if m["role"] == "user"]
+        self.assertEqual(len(users), 1)
+        self.assertIn("q9", users)
+        self.assertEqual(self.ctx.messages[0]["role"], "system")
 
 
-# ═══════════════════════════════════════════════════════════
-#  5. System 消息永远保留
-# ═══════════════════════════════════════════════════════════
+# ── 5. System messages always preserved ────────────────────────────────────
 
-def test_08_system_always_preserved():
-    """无论丢弃多少 turn, system 消息始终在最前面"""
-    def setup(ctx):
-        ctx.messages = [
+
+class TestSystemAlwaysPreserved(_CompactConversationBase):
+    def test_08_system_always_preserved(self):
+        self.ctx.messages = [
             {"role": "system", "content": "sys A"},
             {"role": "system", "content": "sys B"},
         ]
         for i in range(12):
-            ctx.messages.extend(build_simple_turn(f"q{i}", long(500)))
-        # 极低阈值, 只保留 1 turn
-        sys_tokens = sum(ctx.estimated_tokens(m) for m in ctx.messages[:2])
-        one_turn_tokens = ctx.estimated_tokens(ctx.messages[-2]) + ctx.estimated_tokens(ctx.messages[-1])
-        ctx.auto_compact_threshold = sys_tokens + one_turn_tokens + 5
-    def verify(ctx):
-        assert ctx.messages[0]["role"] == "system"
-        assert ctx.messages[1]["role"] == "system"
-        assert ctx.messages[0]["content"] == "sys A"
-        assert ctx.messages[1]["content"] == "sys B"
-    t("system 始终保留", setup, verify)
+            self.ctx.messages.extend(build_simple_turn(f"q{i}", long(500)))
+        # Threshold: only system + last turn.
+        sys_tokens = sum(self.ctx.estimated_tokens(m) for m in self.ctx.messages[:2])
+        one_turn = (
+            self.ctx.estimated_tokens(self.ctx.messages[-2])
+            + self.ctx.estimated_tokens(self.ctx.messages[-1])
+        )
+        self.ctx.auto_compact_threshold = sys_tokens + one_turn + 5
+        self.compact()
+        self.assertEqual(self.ctx.messages[0]["role"], "system")
+        self.assertEqual(self.ctx.messages[1]["role"], "system")
+        self.assertEqual(self.ctx.messages[0]["content"], "sys A")
+        self.assertEqual(self.ctx.messages[1]["content"], "sys B")
 
 
-# ═══════════════════════════════════════════════════════════
-#  6. 消息顺序完整性
-# ═══════════════════════════════════════════════════════════
+# ── 6. Message order preserved ────────────────────────────────────────────
 
-def test_09_message_order_preserved():
-    """丢弃 turn 后, 剩余消息顺序正确: system → user → assistant → user → ..."""
-    def setup(ctx):
-        ctx.messages = [{"role": "system", "content": "sys"}]
+
+class TestMessageOrderPreserved(_CompactConversationBase):
+    def test_09_message_order_preserved(self):
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(15):
-            ctx.messages.extend(build_turn(
+            self.ctx.messages.extend(build_turn(
                 f"q{i}",
                 assistant_tc=[make_tc(f"c{i}")],
                 tool_results=[(f"c{i}", "read", long(300))],
                 assistant_reply=f"reply {i}",
             ))
-        # 只保留最近 2 turn
-        keep = 0
-        for m in ctx.messages:
-            keep += ctx.estimated_tokens(m)
-        # 实际上需要更精确。直接用最后几个 turn 的 token 和。
-        # 最后 2 turn: 每个 turn 4 条消息
-        last_turns_tokens = sum(ctx.estimated_tokens(m) for m in ctx.messages[-8:])
-        sys_tokens = ctx.estimated_tokens(ctx.messages[0])
-        ctx.auto_compact_threshold = sys_tokens + last_turns_tokens + 10
-    def verify(ctx):
-        roles = [m["role"] for m in ctx.messages]
-        assert roles[0] == "system"
-        # system 之后第一个非 system 应该是 user
+        # Keep just the last 2 turns (each = 4 messages).
+        last_2_turns_tokens = sum(
+            self.ctx.estimated_tokens(m) for m in self.ctx.messages[-8:]
+        )
+        sys_tokens = self.ctx.estimated_tokens(self.ctx.messages[0])
+        self.ctx.auto_compact_threshold = sys_tokens + last_2_turns_tokens + 10
+        self.compact()
+        roles = [m["role"] for m in self.ctx.messages]
+        self.assertEqual(roles[0], "system")
+        # First non-system role must be 'user'.
         for r in roles[1:]:
             if r != "system":
-                assert r == "user", f"system 后第一条应为 user, 实际: {r}"
+                self.assertEqual(r, "user")
                 break
-        # 检查 user 数量
-        users = [m for m in ctx.messages if m["role"] == "user"]
-        assert len(users) >= 1, "至少保留 1 个 turn"
-    t("消息顺序保持", setup, verify)
+        users = [m for m in self.ctx.messages if m["role"] == "user"]
+        self.assertGreaterEqual(len(users), 1)
 
 
-# ═══════════════════════════════════════════════════════════
-#  7. 保留 message 内容不被修改
-# ═══════════════════════════════════════════════════════════
+# ── 7. Messages themselves not mutated ─────────────────────────────────────
 
-def test_10_messages_not_modified():
-    """留存的消息只是 deep-copy，内容不被修改"""
-    def setup(ctx):
-        ctx.messages = [{"role": "system", "content": "sys"}]
+
+class TestMessagesNotModified(_CompactConversationBase):
+    def test_10_messages_not_modified(self):
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(12):
-            ctx.messages.extend(build_turn(
+            self.ctx.messages.extend(build_turn(
                 f"q{i}",
                 assistant_tc=[make_tc(f"c{i}")],
                 tool_results=[(f"c{i}", "read", long(300))],
                 assistant_reply=f"reply {i} with extra " + long(200),
                 reasoning=long(250) if i < 2 else None,
             ))
-        # 保留最近 4 turn
-        ctx.auto_compact_threshold = ctx.estimated_tokens(ctx.messages[0])  # sys
-        for m in ctx.messages[-16:]:  # last 4 turns = 16 messages
-            ctx.auto_compact_threshold += ctx.estimated_tokens(m)
-        ctx.auto_compact_threshold += 5
-    def verify(ctx):
-        tools = [m for m in ctx.messages if m["role"] == "tool"]
-        # 所有保留的 tool 内容不变
+        # Threshold: keep system + last 4 turns (= 16 messages).
+        self.ctx.auto_compact_threshold = self.ctx.estimated_tokens(self.ctx.messages[0])
+        for m in self.ctx.messages[-16:]:
+            self.ctx.auto_compact_threshold += self.ctx.estimated_tokens(m)
+        self.ctx.auto_compact_threshold += 5
+        self.compact()
+        tools = [m for m in self.ctx.messages if m["role"] == "tool"]
         for tool in tools:
-            assert "force compacted" not in tool["content"], "compact_conversation 不应修改 tool 内容"
-            assert tool["content"].startswith(long(300)[:10]), "tool 内容应保持原样"
-        # assistant with tool_calls 保留完整
-        assistants_with_tc = [m for m in ctx.messages if m["role"] == "assistant" and "tool_calls" in m]
+            self.assertNotIn("force compacted", tool["content"])
+            self.assertTrue(tool["content"].startswith(long(300)[:10]))
+        assistants_with_tc = [
+            m for m in self.ctx.messages
+            if m["role"] == "assistant" and "tool_calls" in m
+        ]
         for a in assistants_with_tc:
-            assert "tool_calls" in a
-    t("保留消息内容不被修改", setup, verify)
+            self.assertIn("tool_calls", a)
 
 
-# ═══════════════════════════════════════════════════════════
-#  8. retain_turns 参数
-# ═══════════════════════════════════════════════════════════
-
-def test_11_custom_retain_turns():
-    """retain_turns=3 → 最近 3 turn 为 recent, 其余为 old"""
-    ctx = ContextManager()
-    ctx.messages = [{"role": "system", "content": "sys"}]
-    for i in range(10):
-        ctx.messages.extend(build_simple_turn(f"q{i}", f"a{i}"))
-    # 计算全部 token, 减去最早 1 个 old turn
-    all_tokens = ctx.total_tokens()
-    first_turn_tokens = ctx.estimated_tokens(ctx.messages[1]) + ctx.estimated_tokens(ctx.messages[2])
-    ctx.auto_compact_threshold = all_tokens - first_turn_tokens
-    ctx.compact_conversation(retain_turns=3)
-
-    users = [m["content"] for m in ctx.messages if m["role"] == "user"]
-    # retain_turns=3 → 7 old turns → 只丢最早 1 个
-    assert "q0" not in users, f"最早 turn 应丢弃, 实际保留: {users}"
-    for i in range(1, 10):
-        assert f"q{i}" in users, f"q{i} 应该保留"
-
-    global passed
-    passed += 1
-    print(f"  ✓ 自定义 retain_turns=3 正确")
+# ── 8. retain_turns parameter ─────────────────────────────────────────────
 
 
-# ═══════════════════════════════════════════════════════════
-#  9. 综合: 工具调用 turn
-# ═══════════════════════════════════════════════════════════
+class TestCustomRetainTurns(_CompactConversationBase):
+    def test_11_custom_retain_turns(self):
+        """retain_turns=3 → only the most recent 3 turns are 'recent'; the
+        older turns are eligible to be discarded."""
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
+        for i in range(10):
+            self.ctx.messages.extend(build_simple_turn(f"q{i}", f"a{i}"))
+        all_tokens = self.ctx.total_tokens()
+        first_turn = (
+            self.ctx.estimated_tokens(self.ctx.messages[1])
+            + self.ctx.estimated_tokens(self.ctx.messages[2])
+        )
+        self.ctx.auto_compact_threshold = all_tokens - first_turn
+        self.compact(retain_turns=3)
+        users = [m["content"] for m in self.ctx.messages if m["role"] == "user"]
+        self.assertNotIn("q0", users)
+        for i in range(1, 10):
+            self.assertIn(f"q{i}", users)
 
-def test_12_tool_turns_discarded_together():
-    """一个 turn 内的 user + assistant(tc) + tool + assistant(reply) 作为一个整体丢弃"""
-    def setup(ctx):
-        ctx.messages = [{"role": "system", "content": "sys"}]
+
+# ── 9. Tool-call turns discarded as a unit ────────────────────────────────
+
+
+class TestToolTurnsDiscardedTogether(_CompactConversationBase):
+    def test_12_tool_turns_discarded_together(self):
+        """An entire turn (user + assistant(tc) + tool + assistant(reply))
+        must be either fully kept or fully discarded.
+        """
+        self.ctx.messages = [{"role": "system", "content": "sys"}]
         for i in range(12):
-            ctx.messages.extend(build_turn(
+            self.ctx.messages.extend(build_turn(
                 f"q{i}",
                 assistant_tc=[make_tc(f"c{i}")],
                 tool_results=[(f"c{i}", "read", long(300))],
                 assistant_reply=f"reply {i}",
             ))
-        # 保留最近 3 turn (12 messages) + system
-        keep = ctx.estimated_tokens(ctx.messages[0])
-        for m in ctx.messages[-12:]:
-            keep += ctx.estimated_tokens(m)
-        ctx.auto_compact_threshold = keep + 10
-    def verify(ctx):
-        users = [m["content"] for m in ctx.messages if m["role"] == "user"]
-        assert len(users) == 3, f"应保留 3 turn, 实际: {len(users)}"
+        # Threshold: keep system + last 3 turns (12 messages).
+        keep = self.ctx.estimated_tokens(self.ctx.messages[0])
+        for m in self.ctx.messages[-12:]:
+            keep += self.ctx.estimated_tokens(m)
+        self.ctx.auto_compact_threshold = keep + 10
+        self.compact()
+        users = [m["content"] for m in self.ctx.messages if m["role"] == "user"]
+        self.assertEqual(len(users), 3)
         for i in range(9, 12):
-            assert f"q{i}" in users, f"q{i} 应该保留"
-        # tool 消息也对应保留
-        tools = [m for m in ctx.messages if m["role"] == "tool"]
-        assert len(tools) == 3, f"应保留 3 条 tool, 实际: {len(tools)}"
-    t("工具 turn 整体丢弃", setup, verify)
+            self.assertIn(f"q{i}", users)
+        tools = [m for m in self.ctx.messages if m["role"] == "tool"]
+        self.assertEqual(len(tools), 3)
 
 
-# ═══════════════════════════════════════════════════════════
-#  10. 真实环境模拟: 多轮编程会话 + 压缩前后对比
-# ═══════════════════════════════════════════════════════════
+# ── 10. Realistic 14-turn coding-session scenario ──────────────────────────
 
-def test_13_real_scenario_with_output():
+
+class TestRealScenario(_CompactConversationBase):
+    """End-to-end simulation: build a 14-turn coding session with mixed
+    simple/tool turns and verify compact_conversation drops old turns
+    while preserving recent ones.
     """
-    模拟一个 14 轮的真实编程助手会话，其中部分 turn 携带大 tool 结果。
-    设置阈值触发 compact_conversation 逐步丢弃旧 turn。
-    输出压缩前后的每条消息/每个 turn 的对比。
-    """
-    ctx = ContextManager()
 
-    # ── 构造 14 轮会话 ──
-
-    ctx.messages = [
-        {"role": "system", "content": "You are a coding assistant. Be thorough and precise."},
-    ]
-
-    # Turn 1-4: 早期探索 (每个带大 tool 结果, 模拟 read 源码)
-    for i in range(1, 5):
-        ctx.messages.extend(build_turn(
-            f"读取项目中的 core_{i}.py",
-            assistant_tc=[make_tc(f"c{i}", "read", f'{{"path": "core_{i}.py"}}')],
-            tool_results=[(f"c{i}", "read", f"# core_{i}.py\n" + long(1200))],
-            assistant_reply=f"core_{i}.py 包含核心逻辑 {i}。" + long(300),
-            reasoning=f"分析 core_{i}.py 的架构..." + long(400),
+    @staticmethod
+    def _build_full_session():
+        """Construct the 14-turn session exactly as the original test did."""
+        msgs = [{"role": "system", "content": "You are a coding assistant. Be thorough and precise."}]
+        # Turns 1-4: early exploration with large tool results.
+        for i in range(1, 5):
+            msgs.extend(build_turn(
+                f"读取项目中的 core_{i}.py",
+                assistant_tc=[make_tc(f"c{i}", "read", f'{{"path": "core_{i}.py"}}')],
+                tool_results=[(f"c{i}", "read", f"# core_{i}.py\n" + long(1200))],
+                assistant_reply=f"core_{i}.py 包含核心逻辑 {i}。" + long(300),
+                reasoning=f"分析 core_{i}.py 的架构..." + long(400),
+            ))
+        # Turn 5: a pure dialogue turn.
+        msgs.extend(build_simple_turn(
+            "这些核心模块之间的依赖关系是什么？",
+            "模块之间存在循环依赖，core_1 依赖 core_2，core_2 依赖 core_3..." + long(500),
         ))
+        # Turns 6-9: mid-stream debugging (grep + bash).
+        for i in range(6, 10):
+            msgs.extend(build_turn(
+                f"搜索 bug_{i} 并运行测试",
+                assistant_tc=[
+                    make_tc(f"c{i}a", "grep", f'{{"pat": "bug_{i}"}}'),
+                    make_tc(f"c{i}b", "bash", f'{{"cmd": "pytest test_bug_{i}.py -v"}}'),
+                ],
+                tool_results=[
+                    (f"c{i}a", "grep", f"src/bug_{i}.py:10: bug_{i} found\n" + (" match " * 150)),
+                    (f"c{i}b", "bash", f"test_bug_{i}.py::test_fix PASSED\n" + (" ok " * 150)),
+                ],
+                assistant_reply=f"bug_{i} 已修复并测试通过。" + long(250),
+                reasoning=f"定位 bug_{i} 并验证修复..." + long(350),
+            ))
+        # Turns 10-14: latest work (compact).
+        for i in range(10, 15):
+            msgs.extend(build_turn(
+                f"最终优化 pass_{i}",
+                assistant_tc=[make_tc(f"c{i}", "write", f'{{"path": "opt_{i}.py"}}')],
+                tool_results=[(f"c{i}", "write", f"Written opt_{i}.py ({i*10} lines)")],
+                assistant_reply=f"opt_{i}.py 已创建。",
+            ))
+        return msgs
 
-    # Turn 5: 对话
-    ctx.messages.extend(build_simple_turn(
-        "这些核心模块之间的依赖关系是什么？",
-        "模块之间存在循环依赖，core_1 依赖 core_2，core_2 依赖 core_3..." + long(500),
-    ))
+    def _build_14_turn_session(self):
+        """Same as _build_full_session() but as an instance method (needed
+        because we want to use self.ctx.estimated_tokens)."""
+        return self._build_full_session()
 
-    # Turn 6-9: 中期调试 (每个带 grep + bash 工具)
-    for i in range(6, 10):
-        ctx.messages.extend(build_turn(
-            f"搜索 bug_{i} 并运行测试",
-            assistant_tc=[
-                make_tc(f"c{i}a", "grep", f'{{"pat": "bug_{i}"}}'),
-                make_tc(f"c{i}b", "bash", f'{{"cmd": "pytest test_bug_{i}.py -v"}}'),
-            ],
-            tool_results=[
-                (f"c{i}a", "grep", f"src/bug_{i}.py:10: bug_{i} found\n" + (" match " * 150)),
-                (f"c{i}b", "bash", f"test_bug_{i}.py::test_fix PASSED\n" + (" ok " * 150)),
-            ],
-            assistant_reply=f"bug_{i} 已修复并测试通过。" + long(250),
-            reasoning=f"定位 bug_{i} 并验证修复..." + long(350),
-        ))
+    def test_13_real_scenario_with_output(self):
+        """Build the 14-turn session, capture before/after stats, and
+        verify the documented invariants:
+            * turns_after < turns_before
+            * total_after < total_before
+            * system message is still first
+            * no tool message has been mutated to contain 'force compacted'
+        """
+        # Save the constructed messages BEFORE compact, so we can compute
+        # 'before' stats (ctx.messages is mutated by compact).
+        before_messages = self._build_full_session()
+        self.ctx.messages = copy.deepcopy(before_messages)
 
-    # Turn 10-14: 最新工作 (精简)
-    for i in range(10, 15):
-        ctx.messages.extend(build_turn(
-            f"最终优化 pass_{i}",
-            assistant_tc=[make_tc(f"c{i}", "write", f'{{"path": "opt_{i}.py"}}')],
-            tool_results=[(f"c{i}", "write", f"Written opt_{i}.py ({i*10} lines)")],
-            assistant_reply=f"opt_{i}.py 已创建。",
-        ))
+        total_before = self.ctx.total_tokens()
+        turns_before = self.ctx.split_turns()
 
-    # ── 压缩前统计 ──
+        # Threshold sized to retain system + last 6 turns (4 msgs each).
+        sys_tokens = self.ctx.estimated_tokens(self.ctx.messages[0])
+        recent_msg_count = 6 * 4
+        keep_tokens = sys_tokens + sum(
+            self.ctx.estimated_tokens(m)
+            for m in self.ctx.messages[-recent_msg_count:]
+        )
+        self.ctx.auto_compact_threshold = keep_tokens + 15
 
-    total_before = ctx.total_tokens()
-    msg_count_before = len(ctx.messages)
-    turns_before = ctx.split_turns()
+        self.compact()
 
-    def show_turn(idx, turn):
-        """返回 turn 的摘要"""
-        roles = " → ".join(m["role"][:4] for m in turn)
-        user_msg = next((m["content"][:50] for m in turn if m["role"] == "user"), "?")
-        tokens = sum(ctx.estimated_tokens(m) for m in turn)
-        tool_count = sum(1 for m in turn if m["role"] == "tool")
-        return f"Turn {idx}: {tokens:>5}t  [{tool_count}tools]  {user_msg}..."
+        total_after = self.ctx.total_tokens()
+        turns_after = self.ctx.split_turns()
 
-    # ── 设置阈值: 只保留最近 6 turn (丢弃 8 个旧 turn) ──
-    sys_tokens = ctx.estimated_tokens(ctx.messages[0])
-    # 最后 6 turn 的消息: 消息数 = 5 * 4 = 20 条 (每个 turn 4 条)
-    recent_msg_count = 6 * 4  # 最后 6 turn 各有 4 条消息 (user, assistant+tc, tool, assistant)
-    keep_tokens = sys_tokens
-    for m in ctx.messages[-recent_msg_count:]:
-        keep_tokens += ctx.estimated_tokens(m)
-    ctx.auto_compact_threshold = keep_tokens + 15
+        # Print a brief before/after summary so the test still doubles as
+        # a useful diagnostic when run with `-v`.
+        print(
+            f"\n  turns: {len(turns_before)} → {len(turns_after)}; "
+            f"tokens: {total_before} → {total_after}; "
+            f"msgs: {len(before_messages)} → {len(self.ctx.messages)}"
+        )
 
-    # ── 执行压缩 ──
-    ctx.compact_conversation()
+        # Invariants:
+        self.assertLess(len(turns_after), len(turns_before))
+        self.assertLess(total_after, total_before)
+        self.assertEqual(self.ctx.messages[0]["role"], "system")
+        for m in self.ctx.messages:
+            if m["role"] == "tool":
+                self.assertNotIn("force compacted", m.get("content", ""))
 
-    # ── 压缩后统计 ──
-
-    total_after = ctx.total_tokens()
-    msg_count_after = len(ctx.messages)
-    turns_after = ctx.split_turns()
-
-    # ── 输出 ──
-
-    sep = "=" * 76
-    print(f"\n{sep}")
-    print("  真实环境模拟 — compact_conversation 压缩前后对比")
-    print(f"{sep}")
-
-    print(f"\n📊 总体统计:")
-    print(f"  消息总数: {msg_count_before} → {msg_count_after} (-{msg_count_before - msg_count_after})")
-    print(f"  Turn 数:  {len(turns_before)} → {len(turns_after)} (-{len(turns_before) - len(turns_after)})")
-    print(f"  总 tokens: {total_before:>6} → {total_after:>6}  "
-          f"(-{total_before - total_after}, {(total_before - total_after) / max(total_before, 1) * 100:.0f}%)")
-    print(f"  阈值: {ctx.auto_compact_threshold}t")
-
-    print(f"\n📋 Turn 丢弃明细:")
-    print(f"  {'':-<55}")
-    kept_users = {m["content"][:50] for m in ctx.messages if m["role"] == "user"}
-    for idx, turn in enumerate(turns_before, 1):
-        user_msg = next((m["content"][:50] for m in turn if m["role"] == "user"), "?")
-        tokens = sum(ctx.estimated_tokens(m) for m in turn)
-        kept = user_msg in kept_users
-        marker = "✓ 保留" if kept else "✗ 丢弃"
-        print(f"  {marker}  {show_turn(idx, turn)}")
-    print(f"  {'':-<55}")
-
-    # 角色 token 变化
-    def role_tokens(msgs):
-        d = {}
-        for m in msgs:
-            r = m["role"]
-            d[r] = d.get(r, 0) + ctx.estimated_tokens(m)
-        return d
-
-    before_by_role = role_tokens(ctx.messages)  # 注意: ctx.messages 已经是压缩后的
-    # 重建压缩前的消息来计算角色 token
-    # (不方便重建，用近似的: 记录压缩前的所有消息)
-    ctx_before = ContextManager()
-    ctx_before.messages = [
-        {"role": "system", "content": "You are a coding assistant. Be thorough and precise."},
-    ]
-    for i in range(1, 5):
-        ctx_before.messages.extend(build_turn(
-            f"读取项目中的 core_{i}.py",
-            assistant_tc=[make_tc(f"c{i}", "read", f'{{"path": "core_{i}.py"}}')],
-            tool_results=[(f"c{i}", "read", f"# core_{i}.py\n" + long(1200))],
-            assistant_reply=f"core_{i}.py 包含核心逻辑 {i}。" + long(300),
-            reasoning=f"分析 core_{i}.py 的架构..." + long(400),
-        ))
-    ctx_before.messages.extend(build_simple_turn(
-        "这些核心模块之间的依赖关系是什么？",
-        "模块之间存在循环依赖..." + long(500),
-    ))
-    for i in range(6, 10):
-        ctx_before.messages.extend(build_turn(
-            f"搜索 bug_{i} 并运行测试",
-            assistant_tc=[
-                make_tc(f"c{i}a", "grep", f'{{"pat": "bug_{i}"}}'),
-                make_tc(f"c{i}b", "bash", f'{{"cmd": "pytest test_bug_{i}.py -v"}}'),
-            ],
-            tool_results=[
-                (f"c{i}a", "grep", f"src/bug_{i}.py:10: bug_{i} found\n" + (" match " * 150)),
-                (f"c{i}b", "bash", f"test_bug_{i}.py::test_fix PASSED\n" + (" ok " * 150)),
-            ],
-            assistant_reply=f"bug_{i} 已修复。" + long(250),
-            reasoning=f"定位 bug_{i}..." + long(350),
-        ))
-    for i in range(10, 15):
-        ctx_before.messages.extend(build_turn(
-            f"最终优化 pass_{i}",
-            assistant_tc=[make_tc(f"c{i}", "write", f'{{"path": "opt_{i}.py"}}')],
-            tool_results=[(f"c{i}", "write", f"Written opt_{i}.py")],
-            assistant_reply=f"opt_{i}.py 已创建。",
-        ))
-    before_by_role = role_tokens(ctx_before.messages)
-
-    print(f"\n📊 各角色 token 变化:")
-    after_by_role = role_tokens(ctx.messages)
-    for role in ["system", "user", "assistant", "tool"]:
-        b = before_by_role.get(role, 0)
-        a = after_by_role.get(role, 0)
-        delta = a - b
-        sign = "+" if delta > 0 else ""
-        bar = "▓" * min(abs(delta) // 30, 40)
-        print(f"  {role:<10}: {b:>6}t → {a:>6}t  ({sign}{delta}t) {bar}")
-
-    # ── 断言 ──
-    assert len(turns_after) < len(turns_before), "压缩后 turn 数应减少"
-    assert total_after < total_before, "压缩后 tokens 应减少"
-    assert ctx.messages[0]["role"] == "system", "system 应在最前"
-    # 保留的 turn 内容应原样
-    for m in ctx.messages:
-        if m["role"] == "tool":
-            assert "force compacted" not in m.get("content", ""), "compact_conversation 不修改 tool 内容"
-
-    global passed
-    passed += 1
-    print(f"\n  ✓ 真实环境模拟 — 压缩前后对比测试通过")
-
-
-# ── 入口 ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=== compact_conversation 单元测试 ===\n")
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn) and name != "test_11_custom_retain_turns":
-            fn()
-    # test_11 显式调用
-    test_11_custom_retain_turns()
-    print(f"\n{'='*40}")
-    print(f"通过: {passed}  失败: {failed}  总计: {passed+failed}")
-    if failed:
-        sys.exit(1)
+    # Run with verbose output
+    unittest.main(verbosity=2)

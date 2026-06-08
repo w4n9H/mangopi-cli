@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 import glob as globlib
 import platform
+import base64
+import mimetypes
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -23,7 +25,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.21"
+__version__ = "0.1.22"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -276,8 +278,8 @@ def helper():
 # --- Utils function ---
 FILTERED_DIRS = [
     ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", ".turbo", ".idea",
-    ".vscode", ".mypy_cache", ".pytest_cache", ".cache", "target", "vendor"
-]
+    ".vscode", ".mypy_cache", ".pytest_cache", ".cache", "target", "vendor"]
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
 def _is_directory_heavy(command: str) -> bool:  # 判断是否是目录遍历类命令
@@ -575,7 +577,7 @@ class ToolBase:
     def confirm(self, args): return True
 
     @staticmethod
-    def ok(content="", **extra): return {"success": True, "content": content, **extra}
+    def ok(content: str | dict = "", **extra): return {"success": True, "content": content, **extra}
 
     @staticmethod
     def fail(content="", **extra): return {"success": False, "content": content, **extra}
@@ -583,14 +585,19 @@ class ToolBase:
 
 class ReadTool(ToolBase):
     name = "read"
-    description = "Read a file from the local filesystem"
+    description = "Read a file from the local filesystem (text or image; images are auto-routed to vision)"
     params = {
-        "path": {"type": "string", "description": "Path to the file to read"},
+        "path": {"type": "string", "description": "Path to the file to read (text or image: png/jpg/jpeg/gif/webp)"},
         "offset": {"type": "number?", "description": "Line number to start reading from (0-indexed, default 0)"},
         "limit": {"type": "number?", "description": "Maximum number of lines to read (default: all lines)"}}
 
     def run(self, args):
-        lines = open(args["path"]).readlines()
+        path = args["path"]
+        ext = os.path.splitext(path)[1].lower()
+        if ext in IMAGE_EXTS and "offset" not in args and "limit" not in args:
+            return ViewImageTool().run({"path": path})
+        with open(path) as f:
+            lines = f.readlines()
         offset, limit = args.get("offset", 0), args.get("limit", len(lines))
         selected = lines[offset: offset + limit]
         return self.ok("".join(f"{offset + idx + 1:4}| {line}" for idx, line in enumerate(selected)))
@@ -868,6 +875,58 @@ class GoalTool(ToolBase):
     _HANDLERS = {"plan": _action_plan, "step": _action_step, "show": _action_show, "finish": _action_finish}
 
 
+class ViewImageTool(ToolBase):
+    name = "view_image"
+    description = (
+        "Load a local image (screenshot, UI mockup, error screen, diagram) into the model's vision context. "
+        "Accepts an absolute path to a file on disk; URLs are not supported. "
+        "Supported formats: png, jpg, jpeg, gif, webp.")
+    params = {"path": {"type": "string",
+                       "description": "Absolute path to a local image file (png/jpg/jpeg/gif/webp). "
+                                      "URL inputs are rejected."}}
+    preview_lines = 0
+    preview_width = 200
+    use_spinner = True
+    MAX_BYTES = 5 * 1024 * 1024  # 5 MB hard cap
+
+    @staticmethod
+    def _is_url(s: str) -> bool: return s.startswith("http://") or s.startswith("https://")
+
+    def preview(self, args): return (args.get("path") or "")[:self.preview_width]
+
+    def run(self, args):
+        path = (args.get("path") or "").strip()
+        if not path:
+            return self.fail("view_image error: 'path' is required")
+        if self._is_url(path):
+            return self.fail("view_image error: URL inputs are not supported. "
+                             "Download the image to a local file first, then pass the file path.")
+        err = _validate_file_path(path)
+        if err:
+            return self.fail(f"view_image error: {err}")
+        try:
+            size = os.path.getsize(path)
+        except OSError as e:
+            return self.fail(f"view_image error: cannot stat file: {e}")
+        if size == 0:
+            return self.fail("view_image error: image file is empty")
+        if size > self.MAX_BYTES:
+            return self.fail(f"view_image error: image too large ({size:,} bytes, max {self.MAX_BYTES})")
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in IMAGE_EXTS:
+            return self.fail(f"view_image error: unsupported image format '{ext}' (supported: png,jpg,jpeg,gif,webp)")
+        try:
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+        except OSError as e:
+            return self.fail(f"view_image error: cannot read file: {e}")
+        mime, _ = mimetypes.guess_type(path)
+        if not mime:
+            mime = "image/png"
+        data_uri = f"data:{mime};base64,{b64}"
+        return self.ok({"type": "image", "text": f"Image: {path} ({size} bytes,{mime})", "image_url": data_uri})
+
+
 class AttemptCompletionTool(ToolBase):
     name = "attempt_completion"
     description = "Indicate that the task is complete and provide the final result/answer to the user"
@@ -882,7 +941,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), AttemptCompletionTool()]
+        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), ViewImageTool(), AttemptCompletionTool()]
 }
 
 
@@ -924,9 +983,15 @@ class ContextManager:
         content.update({"ts": int(time.time())})
         self.messages.append(content)
 
-    def append_tool(self, tool_call_id: str, tool_name: str, content: str):
-        self.messages.append({"role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name,
-                              "content": content, "ts": int(time.time())})
+    def append_tool(self, tool_call_id: str, tool_name: str, content: Any):
+        msg = {
+            "role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name, "ts": int(time.time())}
+        if isinstance(content, dict) and content.get("type") == "image":
+            msg["content"] = [{"type": "text", "text": content.get("text", "image")},
+                              {"type": "image_url", "image_url": {"url": content["image_url"]}}]
+        else:
+            msg["content"] = content if content is not None else ""
+        self.messages.append(msg)
 
     def load(self, persist_file: str):
         if os.path.exists(persist_file):
@@ -1020,6 +1085,8 @@ class ContextManager:
                 if m.get("tool_name") in self.white_tool_list:  # white tool pass
                     continue
                 content = m.get("content", "")
+                if isinstance(content, list):  # base64 编码的二进制数据, head/tail 文本截断对它毫无意义
+                    continue
                 if content and not content.endswith("<compacted>"):  # compacted pass
                     rule = COMPACT_RULES["tool"]
                     if _age >= rule.get("max_age", 0):  # new tool pass
@@ -1307,16 +1374,22 @@ def run_tool(tool_name, tool_args):
         if tool.use_spinner:
             console.start_spinner()
         result = tool.run(tool_args)
-        tool_status = result["success"]
-        tool_content = result["content"]
+        tool_status, tool_content = result["success"], result["content"]
         if tool.use_spinner:
             console.end_spinner()
-        tool.after(tool_content)
+        tool.after(tool_content)  # 需要注意区分 str 和 dict
 
-        if not tool_content:
+        if isinstance(tool_content, dict) and tool_content.get("type") == "image":
+            display_str = tool_content.get("text", "[image]")
+        elif tool_content is None:
+            display_str = ""
+        else:
+            display_str = str(tool_content)
+
+        if not display_str:
             print(f"  {DIM}⎿  (no output){RESET}")
         else:
-            result_lines = tool_content.split("\n")
+            result_lines = display_str.split("\n")
             lines_to_show = result_lines[:tool.preview_lines]
             preview_lines = [
                 line if len(line) <= tool.preview_width else line[:tool.preview_width - 3] + "..."
@@ -1371,6 +1444,9 @@ class SystemPrompt:
             "Use **edit** (not write) for small in-place changes; ensure `old` is unique or pass `all=true`.\n",
             "Use **search_memory** for long-term knowledge, **append_memory** only for "
             "architecture decisions / persistent preferences (not ephemeral context).\n",
+            "Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
+            "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
+            "but call `view_image` directly when the path is computed or generated.\n",
             "Always finish with **attempt_completion** to present the final result.\n\n",]
 
     @staticmethod

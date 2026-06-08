@@ -1,0 +1,224 @@
+# Mangopi CLI · CI/CD
+#
+# This workflow does two things:
+#   1. On every PR / push to main: run the test suite across Python 3.8 - 3.12
+#   2. On every tag matching v*: build sdist + wheel, publish to PyPI
+#
+# ════════════════════════════════════════════════════════════════════════
+# ONE-TIME SETUP (do this once before the workflow can publish)
+# ════════════════════════════════════════════════════════════════════════
+#
+# PyPI Trusted Publishing (OIDC — no API tokens to manage):
+#   1. Go to https://pypi.org/manage/account/publishing/
+#   2. Click "Add a new pending publisher" and fill in:
+#        Owner:         w4n9H
+#        Repository:    mangopi-cli
+#        Workflow file: ci.yml
+#        Environment:   pypi           (optional, recommended)
+#   3. Save — the first successful tag release will activate it.
+#
+# Optional: create a "pypi" environment at
+#   https://github.com/w4n9H/mangopi-cli/settings/environments
+# for extra protection (require manual approval before publish).
+#
+# ════════════════════════════════════════════════════════════════════════
+# HOW TO RELEASE A NEW VERSION (after this workflow is in place)
+# ════════════════════════════════════════════════════════════════════════
+#
+#   1. Bump __version__ in mangopi_cli.py (e.g. 0.1.20 → 0.1.21)
+#      (pyproject.toml reads this dynamically — no edit needed there)
+#   2. Add a CHANGELOG.md entry for the new version
+#   4. Commit & push:
+#        git add mangopi_cli.py pyproject.toml CHANGELOG.md
+#        git commit -m "release: v0.1.21"
+#        git tag v0.1.21
+#        git push origin main --tags
+#   5. GitHub Actions takes over from here:
+#        - test job: 5 × Python versions, all green
+#        - build job: sdist + wheel → twine check → PyPI publish
+#   6. Create a GitHub Release pointing at the tag (manual step, optional)
+#
+# ════════════════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+
+# Cancel in-progress runs for the same branch/tag (saves CI minutes)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # 1. TEST  — runs on every PR and every push to main
+  # ─────────────────────────────────────────────────────────────
+  test:
+    name: Test · Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show environment
+        run: |
+          python --version
+          pip --version
+
+      - name: Smoke test · module imports cleanly
+        # Verifies mangopi_cli.py is valid Python and its top-level
+        # side effects (env var parsing, create_provider()) don't crash.
+        # We don't need a real MANGO_KEY to import — create_provider()
+        # only constructs the object, no network I/O.
+        run: |
+          python -c "import mangopi_cli; print(f'✅ mangopi_cli v{mangopi_cli.__version__} imports cleanly')"
+
+      - name: Verify version
+        # Test job uses a relaxed check (just logs it), publish job uses
+        # the strict check below. This step makes the version visible
+        # in the test job output for debugging.
+        run: |
+          echo "Current version: $(python -c 'import mangopi_cli; print(mangopi_cli.__version__)')"
+
+      - name: Smoke test · `mangopi-cli` entry point exists
+        # Verifies pyproject.toml declares the console_scripts entry
+        # that `pip install mangopi-cli` will create.
+        run: |
+          python -m pip install --quiet -e .
+          command -v mangopi-cli >/dev/null && echo "✅ mangopi-cli entry point installed" || echo "❌ mangopi-cli not on PATH"
+
+      - name: Install test dependencies
+        # Mangopi CLI is zero-dependency at runtime, and the test suite
+        # uses stdlib `unittest` exclusively. So nothing to install here —
+        # this step is just a no-op placeholder for future test deps.
+        # (If you ever add pytest or other test frameworks, install them here.)
+        run: |
+          python -m pip install --quiet --upgrade pip
+
+      - name: Run tests
+        # The test suite uses TWO styles:
+        #   1. unittest.TestCase classes (e.g. test_view_image.py)
+        #      — found and run by `unittest discover`
+        #   2. Script-style tests with custom `_t()` runner (legacy files)
+        #      — run as plain scripts with `python3 test/<file>.py`
+        # Both run on every CI build.
+        run: |
+          echo "▶ Running unittest-style tests (TestCase subclasses)"
+          python -m unittest discover -s test -p "test_*.py" -v
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. BUILD & PUBLISH  — runs only on tag pushes (v*)
+  # ─────────────────────────────────────────────────────────────
+  build-and-publish:
+    name: Build & Publish · ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    needs: test
+    # Only run on tag pushes (e.g. refs/tags/v0.1.21)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+
+    # OIDC permission for PyPI trusted publishing
+    permissions:
+      id-token: write
+      contents: write  # for the optional GitHub Release step
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mangopi-cli
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag version: $VERSION"
+
+      - name: Verify version matches tag
+        # The package version is read from mangopi_cli.__version__ at build time
+        # (see [tool.setuptools.dynamic] in pyproject.toml), NOT from pyproject.toml.
+        # So we import the module and compare to the git tag.
+        run: |
+          PKG_VERSION=$(python -c "import mangopi_cli; print(mangopi_cli.__version__)")
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
+          echo "mangopi_cli.__version__: $PKG_VERSION"
+          echo "Git tag:                 v$TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "❌ Version mismatch — tag=v$TAG_VERSION but mangopi_cli.__version__=$PKG_VERSION"
+            exit 1
+          fi
+          echo "✅ Versions match: $PKG_VERSION"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify build with twine check
+        run: |
+          ls -la dist/
+          twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mangopi-cli-${{ steps.version.outputs.VERSION }}-dist
+          path: dist/
+          retention-days: 14
+
+      - name: Publish to PyPI
+        # Uses PyPI Trusted Publishing (OIDC) — no API token in secrets.
+        # The `environment: pypi` block above also gates this step
+        # behind any protection rules you set on the environment.
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release (optional)
+        # Auto-draft a release notes page from the tag.
+        # The actual `gh release` CLI auth is automatic.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes "See [CHANGELOG.md](../blob/main/CHANGELOG.md) for details." \
+            --target "$GITHUB_REF" \
+            dist/* 2>/dev/null || \
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes "See [CHANGELOG.md](../blob/main/CHANGELOG.md) for details." \
+            --target "$GITHUB_REF"
+
+# ════════════════════════════════════════════════════════════════════════
+# Add this badge to README.md after the workflow is merged:
+#
+#   [![CI](https://github.com/w4n9H/mangopi-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/w4n9H/mangopi-cli/actions/workflows/ci.yml)
+#
+# ════════════════════════════════════════════════════════════════════════

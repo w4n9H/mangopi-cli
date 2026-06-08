@@ -1,15 +1,28 @@
-#!/usr/bin/env python3
-"""Test _check_command_safety() —— 覆盖 7 类危险命令规则及安全命令分支。"""
+"""Tests for _check_command_safety() — covers 7 categories of dangerous
+command rules and the safe-command branches.
 
-import sys
+Categories (matched against mangopi_cli.dangerous_i18n):
+    1: rm / unlink
+    2: mkfs / fdisk / parted / dd
+    3: chmod 7xx7 / chown ... root
+    4: sudo rm / su - / su root
+    5: kill -9 1 / killall -9 / pkill -9
+    6: export PATH / unset PATH / writing into /etc/
+    7: history -c / > /dev/null 2>&1
+"""
 import os
+import sys
+import unittest
 
-# 将项目根目录加到 sys.path，以便 import mangopi_cli 中的 _check_command_safety
+# Add parent dir to sys.path so we can import mangopi_cli.
+# This file lives at <project>/test/test_check_command_safety.py,
+# so the project root is one level up from __file__'s directory.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mangopi_cli import _check_command_safety, _i18n
+from mangopi_cli import _check_command_safety, _i18n  # noqa: E402
 
-# ── 危险类别 → i18n key 映射（与 mangopi_cli.py 中的 dangerous_i18n 保持一致）──
+
+# ── Dangerous category id → i18n key map (mirrors dangerous_i18n in mangopi_cli.py) ──
 
 DANGEROUS_KEYS = {
     1: "safety.danger.rm",
@@ -21,353 +34,360 @@ DANGEROUS_KEYS = {
     7: "safety.danger.history",
 }
 
-# ── 计数器与辅助函数 ─────────────────────────────────────────
 
-passed = 0
-failed = 0
+def _expected_reason(category_id):
+    """Resolve the i18n string for a given danger category (1-7)."""
+    return _i18n(DANGEROUS_KEYS[category_id])
 
 
-def _t(name, cmd, expected_dangerous, expected_id=None):
-    """运行一个测试用例。
+# ── Shared assertions ────────────────────────────────────────────────────────
 
-    expected_dangerous=True 时必须同时提供 expected_id（1-7），
-    表示预期命中的危险类别。
+
+class _CommandSafetyBase(unittest.TestCase):
+    """Base class: helpers for asserting _check_command_safety() outcomes.
+
+    Subclasses get `assertSafe(cmd)` and `assertDangerous(cmd, category_id)`
+    so the per-test bodies stay readable.
     """
-    global passed, failed
-    is_dangerous, reason = _check_command_safety(cmd)
-    try:
-        assert bool(is_dangerous) == bool(expected_dangerous), (
-            f"expected dangerous={expected_dangerous}, got dangerous={is_dangerous} "
-            f"for command: {cmd!r}"
+
+    def assertSafe(self, cmd):
+        """Command must be classified as safe (is_dangerous=False, reason=None)."""
+        is_dangerous, reason = _check_command_safety(cmd)
+        self.assertFalse(
+            is_dangerous,
+            f"expected safe, got dangerous for command: {cmd!r}",
         )
-        if expected_dangerous:
-            assert expected_id is not None, "expected_id is required when expected_dangerous=True"
-            expected_reason = _i18n(DANGEROUS_KEYS[expected_id])
-            assert reason == expected_reason, (
-                f"expected reason {expected_reason!r} (id={expected_id}), "
-                f"got reason {reason!r}"
-            )
-        else:
-            assert reason is None, f"expected reason=None, got reason={reason!r} for command: {cmd!r}"
-        passed += 1
-        print(f"  ✓ {name}")
-    except AssertionError as e:
-        failed += 1
-        print(f"  ✗ {name}  FAIL: {e}")
-    except Exception as e:
-        failed += 1
-        print(f"  ✗ {name}  ERROR: {type(e).__name__}: {e}")
+        self.assertIsNone(
+            reason,
+            f"expected reason=None, got reason={reason!r} for command: {cmd!r}",
+        )
 
+    def assertDangerous(self, cmd, category_id):
+        """Command must be classified as dangerous in the given category (1-7)."""
+        is_dangerous, reason = _check_command_safety(cmd)
+        self.assertTrue(
+            is_dangerous,
+            f"expected dangerous (category {category_id}), got safe for command: {cmd!r}",
+        )
+        expected_reason = _expected_reason(category_id)
+        self.assertEqual(
+            reason,
+            expected_reason,
+            f"expected reason {expected_reason!r} (category {category_id}), "
+            f"got reason {reason!r}",
+        )
 
-def _td(name, cmd, expected_id):
-    """便捷包装: 预期命中危险类别 expected_id（1-7）的命令。"""
-    _t(name, cmd, True, expected_id=expected_id)
 
+# ── 1. Empty and whitespace-only commands — safe ─────────────────────────────
 
-# ── 1. 空命令与纯空白命令 —— 安全 ───────────────────────────
 
-def test_01_empty_string():
-    _t("空字符串视为安全", "", False)
+class TestEmptyAndWhitespace(_CommandSafetyBase):
+    """Empty / whitespace-only commands should never trip a danger rule."""
 
+    def test_01_empty_string(self):
+        self.assertSafe("")
 
-def test_02_whitespace_only():
-    _t("纯空白命令视为安全", "   \t  \n  ", False)
+    def test_02_whitespace_only(self):
+        self.assertSafe("   \t  \n  ")
 
 
-# ── 2. 常见安全命令 ────────────────────────────────────────
+# ── 2. Common safe commands ─────────────────────────────────────────────────
 
-def test_03_safe_ls():
-    _t("ls 视为安全", "ls -la", False)
 
+class TestSafeCommonCommands(_CommandSafetyBase):
+    """Everyday commands that must remain classified as safe."""
 
-def test_04_safe_cat():
-    _t("cat 视为安全", "cat /etc/hosts", False)
+    def test_03_safe_ls(self):
+        self.assertSafe("ls -la")
 
+    def test_04_safe_cat(self):
+        self.assertSafe("cat /etc/hosts")
 
-def test_05_safe_echo():
-    _t("echo 视为安全", "echo hello world", False)
+    def test_05_safe_echo(self):
+        self.assertSafe("echo hello world")
 
+    def test_06_safe_chmod_644(self):
+        self.assertSafe("chmod 644 file.txt")
 
-def test_06_safe_chmod_normal_mode():
-    _t("chmod 644 视为安全", "chmod 644 file.txt", False)
+    def test_07_safe_chmod_755(self):
+        self.assertSafe("chmod -R 755 dir/")
 
+    def test_08_safe_chown(self):
+        self.assertSafe("chown user:user file")
 
-def test_07_safe_chmod_755():
-    _t("chmod 755 视为安全", "chmod -R 755 dir/", False)
+    def test_09_safe_kill_15(self):
+        self.assertSafe("kill -15 1234")
 
+    def test_10_safe_kill_9_normal_pid(self):
+        self.assertSafe("kill -9 1234")
 
-def test_08_safe_chown():
-    _t("chown 非 root 视为安全", "chown user:user file", False)
+    def test_11_safe_su_user(self):
+        self.assertSafe("su postgres")
 
+    def test_12_safe_export_other(self):
+        self.assertSafe("export FOO=bar")
 
-def test_09_safe_kill_15():
-    _t("kill -15 视为安全", "kill -15 1234", False)
+    def test_13_safe_unset_other(self):
+        self.assertSafe("unset FOO")
 
+    def test_14_safe_history_no_c(self):
+        self.assertSafe("history | grep foo")
 
-def test_10_safe_kill_9_pid():
-    _t("kill -9 普通 PID 视为安全", "kill -9 1234", False)
+    def test_15_safe_write_tmp(self):
+        self.assertSafe("echo foo > /tmp/file")
 
 
-def test_11_safe_su_user():
-    _t("su 普通用户视为安全", "su postgres", False)
+# ── 3. Category 1: rm / unlink ──────────────────────────────────────────────
 
 
-def test_12_safe_export_other():
-    _t("export 非 PATH 视为安全", "export FOO=bar", False)
+class TestCategory1Rm(_CommandSafetyBase):
+    """Category 1 — rm / unlink patterns."""
 
+    def test_20_rm_rf(self):
+        self.assertDangerous("rm -rf /", 1)
 
-def test_13_safe_unset_other():
-    _t("unset 非 PATH 视为安全", "unset FOO", False)
+    def test_21_rm_fr(self):
+        self.assertDangerous("rm -fr foo", 1)
 
+    def test_22_rm_r(self):
+        self.assertDangerous("rm -r build/", 1)
 
-def test_14_safe_history_no_c():
-    _t("history 无 -c 视为安全", "history | grep foo", False)
+    def test_23_rm_f(self):
+        self.assertDangerous("rm -f file", 1)
 
+    def test_24_rm_no_flag(self):
+        self.assertDangerous("rm foo", 1)
 
-def test_15_safe_write_tmp():
-    _t("重定向到 /tmp 视为安全", "echo foo > /tmp/file", False)
+    def test_25_unlink(self):
+        self.assertDangerous("unlink /tmp/file", 1)
 
+    def test_26_rm_case_insensitive(self):
+        self.assertDangerous("RM -RF /", 1)
 
-# ── 3. 类别 1: rm / unlink ─────────────────────────────────
+    def test_27_rm_strip_whitespace(self):
+        self.assertDangerous("   rm -rf /  ", 1)
 
-def test_20_rm_rf():
-    _td("rm -rf 视为危险 (类别1)", "rm -rf /", 1)
 
+class TestCategory1RmFalsePositives(_CommandSafetyBase):
+    """Words that contain 'rm' as a substring must not trigger the rm rule.
 
-def test_21_rm_fr():
-    _td("rm -fr 视为危险 (类别1)", "rm -fr foo", 1)
+    The regex uses \\b word boundaries, so 'rmdir', bare 'rm', and 'firmware'
+    should all be classified as safe.
+    """
 
+    def test_28_rmdir_safe(self):
+        # rmdir is not rm; \brm\s+ cannot match the start of "rmdir".
+        self.assertSafe("rmdir old_dir")
 
-def test_22_rm_r():
-    _td("rm -r 视为危险 (类别1)", "rm -r build/", 1)
+    def test_29_rm_alone_safe(self):
+        # Bare 'rm' has no \s+ after it; no rm-pattern can match.
+        self.assertSafe("rm")
 
+    def test_30_firmware_word_boundary(self):
+        # 'firmware' contains 'rm', but \b cannot match between 'fi' and 'rm'.
+        self.assertSafe("firmware_update_tool")
 
-def test_23_rm_f():
-    _td("rm -f 视为危险 (类别1)", "rm -f file", 1)
 
+# ── 4. Category 2: mkfs / fdisk / parted / dd ───────────────────────────────
 
-def test_24_rm_no_flag():
-    _td("rm 无参数 视为危险 (类别1)", "rm foo", 1)
 
+class TestCategory2DiskOps(_CommandSafetyBase):
+    """Category 2 — disk-destroying commands."""
 
-def test_25_unlink():
-    _td("unlink 视为危险 (类别1)", "unlink /tmp/file", 1)
+    def test_31_mkfs_ext4(self):
+        self.assertDangerous("mkfs.ext4 /dev/sda1", 2)
 
+    def test_32_mkfs_bare(self):
+        self.assertDangerous("mkfs /dev/sda1", 2)
 
-def test_26_rm_case_insensitive():
-    _td("RM 大写 仍视为危险 (类别1)", "RM -RF /", 1)
+    def test_33_fdisk(self):
+        self.assertDangerous("fdisk -l", 2)
 
+    def test_34_parted(self):
+        self.assertDangerous("parted /dev/sda", 2)
 
-def test_27_rm_strip_whitespace():
-    _td("rm 前后空白自动裁剪", "   rm -rf /  ", 1)
+    def test_35_dd_if_of(self):
+        self.assertDangerous("dd if=/dev/zero of=/dev/sda", 2)
 
+    def test_36_dd_if_of_pipe(self):
+        self.assertDangerous("gunzip -c disk.img | dd if=/dev/stdin of=/dev/sda", 2)
 
-def test_28_rmdir_safe():
-    """rmdir 不是 rm, \brm\s+ 无法在 "rmdir" 中匹配, 应视为安全。"""
-    _t("rmdir 不应触发 rm 规则", "rmdir old_dir", False)
 
+# ── 5. Category 3: chmod 7xx7 / chown root ──────────────────────────────────
 
-def test_29_rm_alone_safe():
-    """裸 'rm' 没有 \s+ 跟随, 任何 rm 模式都无法命中。"""
-    _t("裸 rm 不应触发", "rm", False)
 
+class TestCategory3ChmodChown(_CommandSafetyBase):
+    """Category 3 — chmod 7xx7 (and sticky/sgid variants) and chown ... root."""
 
-def test_30_firmware_word_boundary():
-    """firmware 中含有 'rm' 子串, 但 \b 无法在 fi 与 rm 之间匹配, 应视为安全。"""
-    _t("firmware 不应触发 rm 规则", "firmware_update_tool", False)
+    def test_40_chmod_777(self):
+        self.assertDangerous("chmod 777 file", 3)
 
+    def test_41_chmod_R_777(self):
+        self.assertDangerous("chmod -R 777 /var/www", 3)
 
-# ── 4. 类别 2: mkfs / fdisk / parted / dd ──────────────────
+    def test_42_chmod_1777(self):
+        self.assertDangerous("chmod 1777 /tmp", 3)
 
-def test_31_mkfs_ext4():
-    _td("mkfs.ext4 视为危险 (类别2)", "mkfs.ext4 /dev/sda1", 2)
+    def test_43_chmod_2777(self):
+        self.assertDangerous("chmod 2777 dir", 3)
 
+    def test_44_chmod_0777(self):
+        self.assertDangerous("chmod 0777 file", 3)
 
-def test_32_mkfs_bare():
-    _td("mkfs 视为危险 (类别2)", "mkfs /dev/sda1", 2)
+    def test_45_chown_root(self):
+        self.assertDangerous("chown user:root file", 3)
 
+    def test_46_chown_R_root(self):
+        self.assertDangerous("chown -R root /etc", 3)
 
-def test_33_fdisk():
-    _td("fdisk 视为危险 (类别2)", "fdisk -l", 2)
 
+class TestCategory3ChmodChownFalsePositives(_CommandSafetyBase):
+    """chmod modes that don't end in '7' must NOT trigger the 7xx7 rule."""
 
-def test_34_parted():
-    _td("parted 视为危险 (类别2)", "parted /dev/sda", 2)
+    def test_47_chmod_644_safe(self):
+        self.assertSafe("chmod 644 file")
 
+    def test_48_chmod_2700_safe(self):
+        # 2700 = 2,7,0,0 — the \d*7\d*7 pattern requires a trailing 7, so
+        # this should NOT match.
+        self.assertSafe("chmod 2700 dir")
 
-def test_35_dd_if_of():
-    _td("dd if= of= 视为危险 (类别2)", "dd if=/dev/zero of=/dev/sda", 2)
 
+# ── 6. Category 4: sudo rm / su - / su root ─────────────────────────────────
 
-def test_36_dd_if_of_pipe():
-    _td("dd 复合管道 仍视为危险 (类别2)", "gunzip -c disk.img | dd if=/dev/stdin of=/dev/sda", 2)
 
+class TestCategory4SudoSu(_CommandSafetyBase):
+    """Category 4 — sudo + rm, su -, su root.
 
-# ── 5. 类别 3: chmod 危险模式 / chown root ────────────────
+    Note: 'sudo rm ...' will typically match the rm pattern (category 1)
+    first, because that pattern appears earlier in dangerous_patterns
+    and we return on the first hit.
+    """
 
-def test_40_chmod_777():
-    _td("chmod 777 视为危险 (类别3)", "chmod 777 file", 3)
+    def test_50_sudo_rm_matches_rm_first(self):
+        # Matches both rm (cat 1) and sudo (cat 4); first hit in
+        # dangerous_patterns wins → category 1.
+        self.assertDangerous("sudo rm -rf /var/log", 1)
 
+    def test_51_su_dash_c(self):
+        self.assertDangerous("su -c whoami", 4)
 
-def test_41_chmod_R_777():
-    _td("chmod -R 777 视为危险 (类别3)", "chmod -R 777 /var/www", 3)
+    def test_52_su_root(self):
+        self.assertDangerous("su root", 4)
 
 
-def test_42_chmod_1777():
-    _td("chmod 1777 (sticky+777) 视为危险 (类别3)", "chmod 1777 /tmp", 3)
+class TestCategory4SudoSuFalsePositives(_CommandSafetyBase):
+    """sudo/su variants that must NOT trigger."""
 
+    def test_53_su_dash_alone_safe(self):
+        # Known limitation: 'su -' alone does not match \bsu\s+- because
+        # there's no word boundary between '-' and end-of-string.
+        self.assertSafe("su -")
 
-def test_43_chmod_2777():
-    _td("chmod 2777 (sgid+777) 视为危险 (类别3)", "chmod 2777 dir", 3)
+    def test_54_sudo_other_safe(self):
+        self.assertSafe("sudo apt update")
 
 
-def test_44_chmod_0777():
-    _td("chmod 0777 视为危险 (类别3)", "chmod 0777 file", 3)
+# ── 7. Category 5: kill -9 PID 1 / killall -9 / pkill -9 ────────────────────
 
 
-def test_45_chown_root():
-    _td("chown ... root 视为危险 (类别3)", "chown user:root file", 3)
+class TestCategory5Kill9(_CommandSafetyBase):
+    """Category 5 — kill -9 on PID 1, killall/pkill -9, negative-PID kill -9."""
 
+    def test_60_kill_9_pid1(self):
+        self.assertDangerous("kill -9 1", 5)
 
-def test_46_chown_dash_R_root():
-    _td("chown -R root 视为危险 (类别3)", "chown -R root /etc", 3)
+    def test_61_kill_9_negative_pid(self):
+        self.assertDangerous("kill -9 -1", 5)
 
+    def test_62_kill_9_negative_pid_long(self):
+        self.assertDangerous("kill -9 -1234", 5)
 
-def test_47_chmod_644_safe():
-    _t("chmod 644 不应触发 (非 7X7X)", "chmod 644 file", False)
+    def test_63_killall_9(self):
+        self.assertDangerous("killall -9 nginx", 5)
 
+    def test_64_pkill_9(self):
+        self.assertDangerous("pkill -9 python", 5)
 
-def test_48_chmod_2700_safe():
-    """chmod 2700 = 2,7,0,0 —— 模式 \d*7\d*7 要求以 7 结尾, 2700 不匹配。"""
-    _t("chmod 2700 不应触发 (末位非 7)", "chmod 2700 dir", False)
 
+class TestCategory5Kill9FalsePositives(_CommandSafetyBase):
+    """pkill/kill variants that must NOT trigger."""
 
-# ── 6. 类别 4: sudo rm / su - / su root ───────────────────
+    def test_65_pkill_f_safe(self):
+        # pkill -f without -9 must not match.
+        self.assertSafe("pkill -f nginx")
 
-def test_50_sudo_rm():
-    """'sudo rm ...' 同时命中 rm 模式 (类别1) 与 sudo 模式 (类别4),
-    由于 rm 模式在 dangerous_patterns 列表中更靠前, '先命中先返回' 判为类别1。"""
-    _td("sudo rm 命中 rm 模式优先 (类别1)", "sudo rm -rf /var/log", 1)
 
+# ── 8. Category 6: export PATH / unset PATH / writing into /etc/ ────────────
 
-def test_51_su_dash_c():
-    """'su -' 末尾的 - 因 \b 缺失不会触发, 真实场景用 'su -c' 才会命中。"""
-    _td("su -c 视为危险 (类别4)", "su -c whoami", 4)
 
+class TestCategory6EnvEtcRedirect(_CommandSafetyBase):
+    """Category 6 — PATH manipulation and writes under /etc/."""
 
-def test_52_su_root():
-    _td("su root 视为危险 (类别4)", "su root", 4)
+    def test_70_export_PATH(self):
+        self.assertDangerous("export PATH=/usr/local/bin:$PATH", 6)
 
+    def test_71_unset_PATH(self):
+        self.assertDangerous("unset PATH", 6)
 
-def test_53_su_dash_alone_safe():
-    """已知限制: 'su -' (单独) 因 \b 缺失不触发, 视为安全。"""
-    _t("裸 'su -' 不应触发 (词边界限制)", "su -", False)
+    def test_72_echo_etc(self):
+        self.assertDangerous("echo nameserver 8.8.8.8 > /etc/resolv.conf", 6)
 
+    def test_73_append_etc(self):
+        self.assertDangerous("echo foo >> /etc/hosts", 6)
 
-def test_54_sudo_other_safe():
-    """sudo 后接非 rm 命令, 不应触发。"""
-    _t("sudo apt 不应触发", "sudo apt update", False)
+    def test_74_cat_redirect_etc(self):
+        self.assertDangerous("cat > /etc/passwd", 6)
 
+    def test_75_export_PATH_case(self):
+        self.assertDangerous("EXPORT PATH=/tmp", 6)
 
-# ── 7. 类别 5: kill -9 PID 1 / killall -9 / pkill -9 ─────
 
-def test_60_kill_9_pid1():
-    _td("kill -9 1 视为危险 (类别5)", "kill -9 1", 5)
+class TestCategory6EnvEtcRedirectFalsePositives(_CommandSafetyBase):
+    """Reads from /etc/ must not trigger — only writes (redirects) do."""
 
+    def test_76_cat_etc_safe(self):
+        self.assertSafe("cat /etc/hosts")
 
-def test_61_kill_9_negative_pid():
-    _td("kill -9 -1 视为危险 (类别5)", "kill -9 -1", 5)
 
+# ── 9. Category 7: history -c / > /dev/null 2>&1 ────────────────────────────
 
-def test_62_kill_9_negative_pid_long():
-    _td("kill -9 -1234 视为危险 (类别5)", "kill -9 -1234", 5)
 
+class TestCategory7HistoryDevNull(_CommandSafetyBase):
+    """Category 7 — history -c and stdout/stderr discarding redirects."""
 
-def test_63_killall_9():
-    _td("killall -9 视为危险 (类别5)", "killall -9 nginx", 5)
+    def test_80_history_c(self):
+        self.assertDangerous("history -c", 7)
 
+    def test_81_dev_null_redirect(self):
+        self.assertDangerous("echo foo > /dev/null 2>&1", 7)
 
-def test_64_pkill_9():
-    _td("pkill -9 视为危险 (类别5)", "pkill -9 python", 5)
+    def test_82_dev_null_redirect_alt(self):
+        # '>>?' covers both '>' and '>>'.
+        self.assertDangerous("echo foo >> /dev/null 2>&1", 7)
 
 
-def test_65_pkill_f_safe():
-    """pkill -f 不带 -9, 不应触发。"""
-    _t("pkill -f 不应触发", "pkill -f nginx", False)
+# ── 10. Multi-category / precedence scenarios ───────────────────────────────
 
 
-# ── 8. 类别 6: export PATH / unset PATH / 写入 /etc/ ─────
+class TestCategoryPrecedence(_CommandSafetyBase):
+    """When multiple rules could match, the first one in dangerous_patterns
+    wins (we return on first hit). These tests pin down that ordering."""
 
-def test_70_export_PATH():
-    _td("export PATH= 视为危险 (类别6)", "export PATH=/usr/local/bin:$PATH", 6)
+    def test_90_rm_with_sudo_still_category_1(self):
+        # rm pattern sits before sudo pattern in dangerous_patterns.
+        self.assertDangerous("sudo rm -rf /tmp/x", 1)
 
+    def test_91_sudo_before_rm_still_category_1(self):
+        # Even with 'sudo' at the front, the inner 'rm' substring is
+        # matched by the rm pattern (cat 1) before sudo (cat 4).
+        self.assertDangerous("sudo bash -c 'rm -rf /'", 1)
 
-def test_71_unset_PATH():
-    _td("unset PATH 视为危险 (类别6)", "unset PATH", 6)
+    def test_92_dd_in_safe_context(self):
+        # dd appearing inside an echo string still matches the dd pattern.
+        self.assertDangerous("echo dd if=/dev/zero of=/dev/null", 2)
 
-
-def test_72_echo_etc():
-    _td("echo > /etc/ 视为危险 (类别6)", "echo nameserver 8.8.8.8 > /etc/resolv.conf", 6)
-
-
-def test_73_append_etc():
-    _td(">> /etc/ 视为危险 (类别6)", "echo foo >> /etc/hosts", 6)
-
-
-def test_74_cat_redirect_etc():
-    _td("cat > /etc/ 视为危险 (类别6)", "cat > /etc/passwd", 6)
-
-
-def test_75_export_PATH_case():
-    _td("EXPORT PATH= 大写仍视为危险 (类别6)", "EXPORT PATH=/tmp", 6)
-
-
-def test_76_cat_etc_safe():
-    """读取 /etc/ 不应触发 (仅重定向才触发)。"""
-    _t("cat /etc/hosts 不应触发", "cat /etc/hosts", False)
-
-
-# ── 9. 类别 7: history -c / /dev/null 2>&1 ────────────────
-
-def test_80_history_c():
-    _td("history -c 视为危险 (类别7)", "history -c", 7)
-
-
-def test_81_dev_null_redirect():
-    _td("> /dev/null 2>&1 视为危险 (类别7)", "echo foo > /dev/null 2>&1", 7)
-
-
-def test_82_dev_null_redirect_alt():
-    """>> 形式也应匹配 (>>? 涵盖 > 和 >>)。"""
-    _td(">> /dev/null 2>&1 视为危险 (类别7)", "echo foo >> /dev/null 2>&1", 7)
-
-
-# ── 10. 综合场景 ─────────────────────────────────────────
-
-def test_90_multi_category_first_wins():
-    """rm 与 sudo 同时出现, rm 模式更靠前, 优先命中类别 1。"""
-    _td("rm -rf 配合 sudo 仍判为类别1 (rm)", "sudo rm -rf /tmp/x", 1)
-
-
-def test_91_sudo_before_rm_hits_rm():
-    """'sudo bash -c rm ...' 仍因含 rm 子串, 命中 rm 模式 (类别1) 优先于 sudo 模式 (类别4)。"""
-    _td("sudo 在前的命令仍判为类别1 (rm 先命中)", "sudo bash -c 'rm -rf /'", 1)
-
-
-def test_92_dd_in_safe_context():
-    """dd 出现在 echo 中也算 dd 模式命中, 类别 2。"""
-    _td("dd 出现在 echo 中 仍视为危险 (类别2)", "echo dd if=/dev/zero of=/dev/null", 2)
-
-
-# ── 入口 ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=== _check_command_safety 单元测试 ===\n")
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-
-    print(f"\n{'='*40}")
-    print(f"通过: {passed}  失败: {failed}  总计: {passed + failed}")
-    if failed:
-        sys.exit(1)
+    # Run with verbose output
+    unittest.main(verbosity=2)

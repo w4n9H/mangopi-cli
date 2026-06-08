@@ -1,62 +1,51 @@
-#!/usr/bin/env python3
-"""Test GrepTool —— 覆盖 grep 工具的正则搜索行为:
+"""Tests for GrepTool — covers recursive regex content search.
 
-  - schema/metadata 正确性
-  - 无效正则返回 fail
-  - 命中格式: "filepath:line_num:content" (line 1-based, content rstrip)
-  - 递归子目录命中
-  - 目录 / 二进制 / 不存在文件被静默跳过
-  - 无命中时返回 ok("none")
-  - 命中上限 500
-  - 默认 path="."
-  - 正则语义 (锚点、字符类、量词、贪婪/非贪婪、分组)
+Covers:
+    * Metadata / schema correctness (name, params, required fields)
+    * Invalid regex returns failure with a clear message
+    * Hit format: "{filepath}:{line_num}:{content}" (1-based, rstripped)
+    * Regex semantics: anchors, character classes, quantifiers,
+      greedy/lazy filtering, grouping, alternation
+    * Recursive subdirectory traversal
+    * Silent skipping of directories, binary files, and unreadable files
+    * "none" sentinel when there are no hits
+    * 500-hit truncation cap
+    * Default path="." and trailing-slash tolerance
 """
-
 import os
 import re
 import sys
 import tempfile
+import unittest
 
-# 将项目根目录加到 sys.path，以便 import mangopi_cli 中的 GrepTool
+# Add parent dir to sys.path so we can import mangopi_cli.
+# This file lives at <project>/test/test_grep_tool.py, so the project
+# root is one level up from __file__'s directory.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mangopi_cli import GrepTool
-
-# ── 计数器与辅助函数 ─────────────────────────────────────────
-
-passed = 0
-failed = 0
+from mangopi_cli import GrepTool  # noqa: E402
 
 
-def _run(name, fn):
-    """运行一个零参测试函数，捕获断言与异常。"""
-    global passed, failed
-    try:
-        fn()
-        passed += 1
-        print(f"  ✓ {name}")
-    except AssertionError as e:
-        failed += 1
-        print(f"  ✗ {name}  FAIL: {e}")
-    except Exception as e:
-        failed += 1
-        print(f"  ✗ {name}  ERROR: {type(e).__name__}: {e}")
+# ── Module-level helpers ─────────────────────────────────────────────────────
 
 
 def _tool():
+    """Convenience constructor — keeps test bodies short."""
     return GrepTool()
 
 
 def _write(path, content):
+    """Create parent dirs as needed, then write text content to path."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
 
 def _parse_hits(content):
-    """把 GrepTool 输出解析为 [(filepath, line_num, text), ...]。
+    """Parse GrepTool output into [(filepath, line_num, text), ...].
 
-    行格式: "{filepath}:{line_num}:{line_content}"
+    Hit line format: "{filepath}:{line_num}:{line_content}"
+    Empty content ("none" sentinel) returns an empty list.
     """
     if content == "none":
         return []
@@ -64,414 +53,473 @@ def _parse_hits(content):
     for line in content.split("\n"):
         if not line:
             continue
-        # 从右侧切 ":line_num:" → 末次切分
         m = re.match(r"^(?P<path>.+?):(?P<num>\d+):(?P<text>.*)$", line)
-        assert m, f"hit line does not match format: {line!r}"
+        if not m:
+            raise AssertionError(
+                f"hit line does not match expected format: {line!r}"
+            )
         out.append((m.group("path"), int(m.group("num")), m.group("text")))
     return out
 
 
-# ── 1. 元数据 / schema ──────────────────────────────────────
-
-def test_01_name_is_grep():
-    assert _tool().name == "grep"
+# ── 1. Metadata / schema ─────────────────────────────────────────────────────
 
 
-def test_02_params_keys():
-    params = _tool().params
-    assert "pat" in params and "path" in params
-    # pat 必填, path 可选
-    assert not params["pat"]["type"].endswith("?")
-    assert params["path"]["type"].endswith("?")
+class TestGrepToolMetadata(unittest.TestCase):
+    """Static checks: name, params, and OpenAI-style schema."""
+
+    def test_01_name_is_grep(self):
+        self.assertEqual(_tool().name, "grep")
+
+    def test_02_params_keys(self):
+        params = _tool().params
+        self.assertIn("pat", params)
+        self.assertIn("path", params)
+        # `pat` is required (type does NOT end with "?")
+        self.assertFalse(params["pat"]["type"].endswith("?"))
+        # `path` is optional (type ends with "?")
+        self.assertTrue(params["path"]["type"].endswith("?"))
+
+    def test_03_schema_required_only_pat(self):
+        sch = _tool().schema()
+        self.assertEqual(sch["type"], "function")
+        self.assertEqual(sch["function"]["name"], "grep")
+        required = sch["function"]["parameters"]["required"]
+        self.assertEqual(required, ["pat"])
+        props = sch["function"]["parameters"]["properties"]
+        self.assertEqual(set(props.keys()), {"pat", "path"})
+        self.assertEqual(props["pat"]["type"], "string")
+        self.assertEqual(props["path"]["type"], "string")
 
 
-def test_03_schema_required_only_pat():
-    sch = _tool().schema()
-    assert sch["type"] == "function"
-    assert sch["function"]["name"] == "grep"
-    required = sch["function"]["parameters"]["required"]
-    assert required == ["pat"], f"expected required=['pat'], got {required}"
-    props = sch["function"]["parameters"]["properties"]
-    assert set(props.keys()) == {"pat", "path"}
-    assert props["pat"]["type"] == "string"
-    assert props["path"]["type"] == "string"
+# ── 2. Invalid regex handling ───────────────────────────────────────────────
 
 
-# ── 2. 无效正则 → fail ──────────────────────────────────────
+class TestGrepToolInvalidRegex(unittest.TestCase):
+    """Malformed patterns must return failure (not raise)."""
 
-def test_10_unbalanced_paren_is_fail():
-    with tempfile.TemporaryDirectory() as tmp:
-        r = _tool().run({"pat": "(unclosed", "path": tmp})
-        assert r["success"] is False
-        assert "invalid regex" in r["content"]
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        # Best-effort cleanup of the entire tmpdir tree.
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_10_unbalanced_paren_is_fail(self):
+        r = _tool().run({"pat": "(unclosed", "path": self.tmpdir})
+        self.assertFalse(r["success"])
+        self.assertIn("invalid regex", r["content"])
+
+    def test_11_trailing_backslash_is_fail(self):
+        # Trailing "\" is an invalid escape (no char to escape).
+        r = _tool().run({"pat": "abc\\", "path": self.tmpdir})
+        self.assertFalse(r["success"])
+        self.assertIn("invalid regex", r["content"])
+
+    def test_12_invalid_quantifier_is_fail(self):
+        r = _tool().run({"pat": "*invalid", "path": self.tmpdir})
+        self.assertFalse(r["success"])
+        self.assertIn("invalid regex", r["content"])
 
 
-def test_11_trailing_backslash_is_fail():
-    with tempfile.TemporaryDirectory() as tmp:
-        # 末尾的 \ 是 Python regex 中的 invalid escape (需要一个可转义字符)
-        r = _tool().run({"pat": "abc\\", "path": tmp})
-        assert r["success"] is False
-        assert "invalid regex" in r["content"]
+# ── 3. Hit format & basic behavior ──────────────────────────────────────────
 
 
-def test_12_invalid_quantifier_is_fail():
-    with tempfile.TemporaryDirectory() as tmp:
-        r = _tool().run({"pat": "*invalid", "path": tmp})
-        assert r["success"] is False
-        assert "invalid regex" in r["content"]
+class TestGrepToolHitFormat(unittest.TestCase):
+    """Hit line format and the 'none' sentinel for zero matches."""
 
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
 
-# ── 3. 命中格式 & 基础行为 ─────────────────────────────────
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-def test_20_single_hit_format():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "hello world\nsecond line\n")
-        r = _tool().run({"pat": "hello", "path": tmp})
-        assert r["success"] is True
+    def test_20_single_hit_format(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "hello world\nsecond line\n")
+        r = _tool().run({"pat": "hello", "path": self.tmpdir})
+        self.assertTrue(r["success"])
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
+        self.assertEqual(len(hits), 1)
         path, num, text = hits[0]
-        assert num == 1, f"line number should be 1-based, got {num}"
-        assert text == "hello world", f"expected stripped line, got {text!r}"
-        assert path.endswith("a.txt"), f"path should end with a.txt, got {path!r}"
+        self.assertEqual(num, 1)  # 1-based line numbers
+        self.assertEqual(text, "hello world")
+        self.assertTrue(
+            path.endswith("a.txt"),
+            f"path should end with a.txt, got {path!r}",
+        )
 
-
-def test_21_multiple_lines_in_one_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"),
-               "alpha\nbeta alpha\n\ngamma\nALPHA\n")
-        r = _tool().run({"pat": "alpha", "path": tmp})
-        assert r["success"] is True
+    def test_21_multiple_lines_in_one_file(self):
+        _write(
+            os.path.join(self.tmpdir, "a.txt"),
+            "alpha\nbeta alpha\n\ngamma\nALPHA\n",
+        )
+        r = _tool().run({"pat": "alpha", "path": self.tmpdir})
+        self.assertTrue(r["success"])
         hits = _parse_hits(r["content"])
-        # 第 1 行 alpha, 第 2 行 beta alpha, ALPHA 大小写不同 → 不命中
+        # ALPHA (capital) must not match — case-sensitive by default.
         nums = [h[1] for h in hits]
-        assert nums == [1, 2], f"expected line numbers [1, 2], got {nums}"
+        self.assertEqual(nums, [1, 2])
 
+    def test_22_no_match_returns_none_string(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "no match here\n")
+        r = _tool().run({"pat": "zzz", "path": self.tmpdir})
+        self.assertTrue(r["success"])
+        self.assertEqual(r["content"], "none")
 
-def test_22_no_match_returns_none_string():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "no match here\n")
-        r = _tool().run({"pat": "zzz", "path": tmp})
-        assert r["success"] is True
-        assert r["content"] == "none"
+    def test_23_empty_directory_returns_none(self):
+        r = _tool().run({"pat": "anything", "path": self.tmpdir})
+        self.assertTrue(r["success"])
+        self.assertEqual(r["content"], "none")
 
-
-def test_23_empty_directory_returns_none():
-    with tempfile.TemporaryDirectory() as tmp:
-        r = _tool().run({"pat": "anything", "path": tmp})
-        assert r["success"] is True
-        assert r["content"] == "none"
-
-
-def test_24_line_is_rstripped():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "matched   \n")
-        r = _tool().run({"pat": "matched", "path": tmp})
+    def test_24_line_is_rstripped(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "matched   \n")
+        r = _tool().run({"pat": "matched", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
-        # 尾部空白应被 rstrip 去掉
-        assert hits[0][2] == "matched", f"expected rstripped line, got {hits[0][2]!r}"
+        self.assertEqual(len(hits), 1)
+        # Trailing whitespace stripped.
+        self.assertEqual(hits[0][2], "matched")
 
-
-def test_25_case_sensitive_by_default():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "Foo foo FOO\n")
-        r = _tool().run({"pat": "foo", "path": tmp})
+    def test_25_case_sensitive_by_default(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "Foo foo FOO\n")
+        r = _tool().run({"pat": "foo", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        # 第二个 foo 命中 (1-based line 1)
-        assert len(hits) == 1
-        assert hits[0][2] == "Foo foo FOO"
+        # Only the lowercase "foo" on line 1 matches.
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0][2], "Foo foo FOO")
 
 
-# ── 4. 正则语义 ────────────────────────────────────────────
-
-def test_30_anchors():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "abc\nxabc\nabcx\n")
-        r = _tool().run({"pat": "^abc$", "path": tmp})
-        hits = _parse_hits(r["content"])
-        nums = [h[1] for h in hits]
-        assert nums == [1], f"^abc$ should match only line 1, got {nums}"
+# ── 4. Regex semantics ──────────────────────────────────────────────────────
 
 
-def test_31_character_class():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "a1\nb2\nc3\n")
-        r = _tool().run({"pat": "[ac]\\d", "path": tmp})
+class TestGrepToolRegexSemantics(unittest.TestCase):
+    """Verify regex constructs: anchors, classes, quantifiers, groups."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_30_anchors(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "abc\nxabc\nabcx\n")
+        r = _tool().run({"pat": "^abc$", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
         nums = [h[1] for h in hits]
-        assert nums == [1, 3], f"expected [1, 3], got {nums}"
+        self.assertEqual(nums, [1])
 
+    def test_31_character_class(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "a1\nb2\nc3\n")
+        r = _tool().run({"pat": "[ac]\\d", "path": self.tmpdir})
+        hits = _parse_hits(r["content"])
+        nums = [h[1] for h in hits]
+        self.assertEqual(nums, [1, 3])
 
-def test_32_quantifier():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "ab\nabc\nabcd\n")
+    def test_32_quantifier(self):
         # abc?d? = "ab" + optional "c" + optional "d"
-        # → 三种长度都应该被命中
-        r = _tool().run({"pat": "abc?d?", "path": tmp})
+        _write(os.path.join(self.tmpdir, "a.txt"), "ab\nabc\nabcd\n")
+        r = _tool().run({"pat": "abc?d?", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
         nums = [h[1] for h in hits]
-        assert nums == [1, 2, 3], f"expected [1, 2, 3], got {nums}"
+        self.assertEqual(nums, [1, 2, 3])
 
+    def test_33_greedy_vs_lazy_filter_behavior(self):
+        """GrepTool uses re.search() to decide which lines to include, and
+        outputs the full line (rstripped) — not the matched slice. So
+        greedy vs lazy doesn't change the visible text, only which lines
+        match.
 
-def test_33_greedy_vs_lazy_filter_behavior():
-    """GrepTool 用 re.search() 判断"行是否被选中", 输出为整行 rstrip, 不是匹配片段。
-
-    因此贪婪 / 非贪婪在输出文本上不可见, 但它们仍会影响哪些行被命中。
-    此处验证: 同样的行, 用 <a> 子串 pattern 能命中, 用 <b> 子串 pattern 也能命中
-    (两段 <...> 都是完整 token, 不需要测试匹配长度)。
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "<a><b>\n")
-        r_a = _tool().run({"pat": "<a>", "path": tmp})
-        r_b = _tool().run({"pat": "<b>", "path": tmp})
+        Part A: two patterns hit the same line; both return the full line.
+        """
+        _write(os.path.join(self.tmpdir, "a.txt"), "<a><b>\n")
+        r_a = _tool().run({"pat": "<a>", "path": self.tmpdir})
+        r_b = _tool().run({"pat": "<b>", "path": self.tmpdir})
         hits_a = _parse_hits(r_a["content"])
         hits_b = _parse_hits(r_b["content"])
-        # 两个 pattern 都能在同 1 行命中, 输出的 text 都是整行
-        assert len(hits_a) == 1
-        assert len(hits_b) == 1
-        assert hits_a[0][2] == "<a><b>", f"expected full line, got {hits_a[0][2]!r}"
-        assert hits_b[0][2] == "<a><b>", f"expected full line, got {hits_b[0][2]!r}"
+        self.assertEqual(len(hits_a), 1)
+        self.assertEqual(len(hits_b), 1)
+        self.assertEqual(hits_a[0][2], "<a><b>")
+        self.assertEqual(hits_b[0][2], "<a><b>")
 
-    # 显式验证 regex 决定了行是否被选中: 锚点区分
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "abc\nxyz\n")
-        r_anchor = _tool().run({"pat": "^abc$", "path": tmp})
+        # Part B: an anchored pattern must NOT match lines that don't
+        # fully satisfy the anchor.
+        _write(os.path.join(self.tmpdir, "a.txt"), "abc\nxyz\n")
+        r_anchor = _tool().run({"pat": "^abc$", "path": self.tmpdir})
         hits_anchor = _parse_hits(r_anchor["content"])
-        # ^abc$ 只在第 1 行命中
-        assert len(hits_anchor) == 1
-        assert hits_anchor[0][1] == 1
+        self.assertEqual(len(hits_anchor), 1)
+        self.assertEqual(hits_anchor[0][1], 1)
 
-
-def test_34_group_and_alternation():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "cat\ndog\ncow\n")
-        r = _tool().run({"pat": "(cat|dog)", "path": tmp})
+    def test_34_group_and_alternation(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "cat\ndog\ncow\n")
+        r = _tool().run({"pat": "(cat|dog)", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
         nums = [h[1] for h in hits]
-        assert nums == [1, 2], f"expected [1, 2], got {nums}"
+        self.assertEqual(nums, [1, 2])
 
 
-# ── 5. 递归搜索 ────────────────────────────────────────────
+# ── 5. Recursive traversal ──────────────────────────────────────────────────
 
-def test_40_matches_in_subdirectory():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "sub", "deep", "a.txt"), "needle\n")
-        r = _tool().run({"pat": "needle", "path": tmp})
+
+class TestGrepToolRecursion(unittest.TestCase):
+    """Subdirectories must be walked transparently."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_40_matches_in_subdirectory(self):
+        _write(os.path.join(self.tmpdir, "sub", "deep", "a.txt"), "needle\n")
+        r = _tool().run({"pat": "needle", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
+        self.assertEqual(len(hits), 1)
         path = hits[0][0]
-        # 路径应包含子目录
-        assert "sub" in path and "a.txt" in path, f"path should contain subdir, got {path!r}"
+        # Reported path must include both the subdir and the file.
+        self.assertIn("sub", path)
+        self.assertIn("a.txt", path)
 
-
-def test_41_matches_in_deeply_nested():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a", "b", "c", "d", "e", "leaf.txt"), "deep\n")
-        r = _tool().run({"pat": "deep", "path": tmp})
+    def test_41_matches_in_deeply_nested(self):
+        _write(
+            os.path.join(self.tmpdir, "a", "b", "c", "d", "e", "leaf.txt"),
+            "deep\n",
+        )
+        r = _tool().run({"pat": "deep", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
-        assert "leaf.txt" in hits[0][0]
+        self.assertEqual(len(hits), 1)
+        self.assertIn("leaf.txt", hits[0][0])
 
-
-def test_42_search_path_is_dir_not_root():
-    """显式传 path 不会扫描 cwd 的其他目录 (隔离性)。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "inside.txt"), "token\n")
-        # 另起一个临时目录, 里面也有 token
+    def test_42_search_path_is_dir_not_root(self):
+        """Explicit `path` must NOT bleed into other cwd directories."""
+        # In self.tmpdir, we have a real hit.
+        _write(os.path.join(self.tmpdir, "inside.txt"), "token\n")
+        # In a separate dir, we have a hit that should be ignored.
         with tempfile.TemporaryDirectory() as other:
             _write(os.path.join(other, "outside.txt"), "token\n")
-            r = _tool().run({"pat": "token", "path": tmp})
+            r = _tool().run({"pat": "token", "path": self.tmpdir})
             hits = _parse_hits(r["content"])
-            assert len(hits) == 1
-            assert "inside.txt" in hits[0][0]
-            assert "outside.txt" not in hits[0][0]
+            self.assertEqual(len(hits), 1)
+            self.assertIn("inside.txt", hits[0][0])
+            self.assertNotIn("outside.txt", hits[0][0])
 
 
-# ── 6. 跳过: 目录 / 二进制 / 不存在 ─────────────────────────
+# ── 6. Skips: directories / binary / nonexistent ─────────────────────────────
 
-def test_50_directories_are_skipped():
-    """glob 返回的目录条目本身不应被当成文件打开。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        # 在子目录里放一个命中文件
-        _write(os.path.join(tmp, "sub", "a.txt"), "matched\n")
-        r = _tool().run({"pat": "matched", "path": tmp})
-        # 命中仍能找到, 说明子目录被正确遍历 (目录本身没触发 open 异常)
-        assert r["success"] is True
+
+class TestGrepToolSkips(unittest.TestCase):
+    """Tool must silently skip files it can't read instead of failing."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_50_directories_are_skipped(self):
+        """glob() yields directory entries; they must not be opened as files."""
+        _write(os.path.join(self.tmpdir, "sub", "a.txt"), "matched\n")
+        r = _tool().run({"pat": "matched", "path": self.tmpdir})
+        self.assertTrue(r["success"])
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
-        assert "a.txt" in hits[0][0]
+        self.assertEqual(len(hits), 1)
+        self.assertIn("a.txt", hits[0][0])
 
-
-def test_51_binary_file_silently_skipped():
-    """含无效 UTF-8 字节的二进制文件应被静默跳过 (open 抛异常 → except continue)。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        # 写一个含无效 UTF-8 字节的文件
-        bin_path = os.path.join(tmp, "blob.bin")
+    def test_51_binary_file_silently_skipped(self):
+        """Files with invalid UTF-8 bytes must be silently skipped (open()
+        raises → the `except: continue` path)."""
+        bin_path = os.path.join(self.tmpdir, "blob.bin")
         with open(bin_path, "wb") as f:
             f.write(b"\xff\xfe\xfd\x00\x01invalid seq")
-        # 另写一个含可解码命中的文本文件
-        _write(os.path.join(tmp, "a.txt"), "findme\n")
-        r = _tool().run({"pat": "findme", "path": tmp})
-        assert r["success"] is True
-        # findme 仍能找到, blob.bin 被跳过不报错
+        # Plus a real text file with a hit.
+        _write(os.path.join(self.tmpdir, "a.txt"), "findme\n")
+        r = _tool().run({"pat": "findme", "path": self.tmpdir})
+        self.assertTrue(r["success"])
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
-        assert "a.txt" in hits[0][0]
-        assert "blob.bin" not in r["content"]
+        self.assertEqual(len(hits), 1)
+        self.assertIn("a.txt", hits[0][0])
+        self.assertNotIn("blob.bin", r["content"])
 
-
-def test_52_empty_file_is_fine():
-    """空文件应能正常迭代 0 次, 不报错。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        with open(os.path.join(tmp, "empty.txt"), "w", encoding="utf-8") as f:
-            pass  # 0 字节
-        _write(os.path.join(tmp, "a.txt"), "found\n")
-        r = _tool().run({"pat": "found", "path": tmp})
+    def test_52_empty_file_is_fine(self):
+        """Zero-byte file must not blow up the iterator."""
+        # 0-byte file
+        open(os.path.join(self.tmpdir, "empty.txt"), "w", encoding="utf-8").close()
+        _write(os.path.join(self.tmpdir, "a.txt"), "found\n")
+        r = _tool().run({"pat": "found", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
+        self.assertEqual(len(hits), 1)
 
-
-def test_53_directory_heavy_path_works():
-    """含多个子目录与文件的典型结构不应触发任何 open 错误。"""
-    with tempfile.TemporaryDirectory() as tmp:
+    def test_53_directory_heavy_path_works(self):
+        """A tree with multiple subdirectories and files must walk cleanly."""
         for i in range(3):
-            _write(os.path.join(tmp, f"d{i}", "x.txt"), f"hit{i}\n")
-        r = _tool().run({"pat": "hit", "path": tmp})
+            _write(os.path.join(self.tmpdir, f"d{i}", "x.txt"), f"hit{i}\n")
+        r = _tool().run({"pat": "hit", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 3
+        self.assertEqual(len(hits), 3)
 
 
-# ── 7. 命中上限 500 ────────────────────────────────────────
+# ── 7. Hit cap of 500 ───────────────────────────────────────────────────────
 
-def test_60_exactly_500_hits_all_returned():
-    with tempfile.TemporaryDirectory() as tmp:
-        # 500 行, 全部命中
-        _write(os.path.join(tmp, "a.txt"),
-               "\n".join(f"line {i}" for i in range(500)) + "\n")
-        r = _tool().run({"pat": "line", "path": tmp})
-        assert r["success"] is True
+
+class TestGrepToolHitCap(unittest.TestCase):
+    """GrepTool must truncate output to 500 hits."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_60_exactly_500_hits_all_returned(self):
+        _write(
+            os.path.join(self.tmpdir, "a.txt"),
+            "\n".join(f"line {i}" for i in range(500)) + "\n",
+        )
+        r = _tool().run({"pat": "line", "path": self.tmpdir})
+        self.assertTrue(r["success"])
         hits = _parse_hits(r["content"])
-        assert len(hits) == 500, f"expected 500 hits, got {len(hits)}"
+        self.assertEqual(len(hits), 500)
 
-
-def test_61_more_than_500_hits_truncated():
-    with tempfile.TemporaryDirectory() as tmp:
-        # 501 行, 应截断到 500
-        _write(os.path.join(tmp, "a.txt"),
-               "\n".join(f"line {i}" for i in range(501)) + "\n")
-        r = _tool().run({"pat": "line", "path": tmp})
-        assert r["success"] is True
+    def test_61_more_than_500_hits_truncated(self):
+        _write(
+            os.path.join(self.tmpdir, "a.txt"),
+            "\n".join(f"line {i}" for i in range(501)) + "\n",
+        )
+        r = _tool().run({"pat": "line", "path": self.tmpdir})
+        self.assertTrue(r["success"])
         hits = _parse_hits(r["content"])
-        assert len(hits) == 500, f"expected 500 (truncated), got {len(hits)}"
+        self.assertEqual(len(hits), 500)
 
-
-def test_62_1000_hits_truncated_to_500():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"),
-               "\n".join(f"hit {i}" for i in range(1000)) + "\n")
-        r = _tool().run({"pat": "hit", "path": tmp})
+    def test_62_1000_hits_truncated_to_500(self):
+        _write(
+            os.path.join(self.tmpdir, "a.txt"),
+            "\n".join(f"hit {i}" for i in range(1000)) + "\n",
+        )
+        r = _tool().run({"pat": "hit", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 500
+        self.assertEqual(len(hits), 500)
 
 
-# ── 8. 多文件聚合 ──────────────────────────────────────────
+# ── 8. Multi-file aggregation ───────────────────────────────────────────────
 
-def test_70_hits_across_multiple_files():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "shared\n")
-        _write(os.path.join(tmp, "b.txt"), "shared\n")
-        _write(os.path.join(tmp, "sub", "c.txt"), "shared\n")
-        r = _tool().run({"pat": "shared", "path": tmp})
+
+class TestGrepToolMultiFile(unittest.TestCase):
+    """Hits from several files must be aggregated into one response."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_70_hits_across_multiple_files(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "shared\n")
+        _write(os.path.join(self.tmpdir, "b.txt"), "shared\n")
+        _write(os.path.join(self.tmpdir, "sub", "c.txt"), "shared\n")
+        r = _tool().run({"pat": "shared", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 3
+        self.assertEqual(len(hits), 3)
         files = sorted(h[0] for h in hits)
-        assert any("a.txt" in f for f in files)
-        assert any("b.txt" in f for f in files)
-        assert any("c.txt" in f for f in files)
+        self.assertTrue(any("a.txt" in f for f in files))
+        self.assertTrue(any("b.txt" in f for f in files))
+        self.assertTrue(any("c.txt" in f for f in files))
 
-
-def test_71_file_path_includes_subdir():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "sub", "x.txt"), "tag\n")
-        r = _tool().run({"pat": "tag", "path": tmp})
+    def test_71_file_path_includes_subdir(self):
+        _write(os.path.join(self.tmpdir, "sub", "x.txt"), "tag\n")
+        r = _tool().run({"pat": "tag", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
-        assert len(hits) == 1
-        # 路径应当是绝对或相对 tmpdir 下的 sub/x.txt
+        self.assertEqual(len(hits), 1)
         path = hits[0][0]
-        assert os.sep + "sub" + os.sep + "x.txt" in path or "sub/x.txt" in path, (
-            f"path should contain sub/x.txt, got {path!r}")
+        # Reported path should reference the subdir/file structure.
+        expected = os.sep + "sub" + os.sep + "x.txt"
+        self.assertTrue(
+            expected in path or "sub/x.txt" in path,
+            f"path should contain sub/x.txt, got {path!r}",
+        )
 
 
-# ── 9. line_num 1-based & 空行 ─────────────────────────────
+# ── 9. Line numbering & empty lines ─────────────────────────────────────────
 
-def test_80_line_numbers_are_1_based():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"),
-               "\n"          # 1: 空行
-               "x\n"         # 2
-               "\n"          # 3: 空行
-               "y\n")        # 4
-        r = _tool().run({"pat": "x|y", "path": tmp})
+
+class TestGrepToolLineNumbers(unittest.TestCase):
+    """Line numbers must be 1-based; empty lines must not match '.'."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_80_line_numbers_are_1_based(self):
+        #     1: empty
+        #     2: x
+        #     3: empty
+        #     4: y
+        _write(
+            os.path.join(self.tmpdir, "a.txt"),
+            "\n" + "x\n" + "\n" + "y\n",
+        )
+        r = _tool().run({"pat": "x|y", "path": self.tmpdir})
         hits = _parse_hits(r["content"])
         nums = sorted(h[1] for h in hits)
-        assert nums == [2, 4], f"expected line numbers [2, 4], got {nums}"
+        self.assertEqual(nums, [2, 4])
+
+    def test_81_empty_line_does_not_match_anything(self):
+        _write(os.path.join(self.tmpdir, "a.txt"), "\n\n\n")
+        # No characters → '.' cannot match.
+        r = _tool().run({"pat": ".", "path": self.tmpdir})
+        self.assertEqual(r["content"], "none")
 
 
-def test_81_empty_line_does_not_match_anything():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "\n\n\n")
-        # 没有任何字符, 任何 pattern 都不应命中
-        r = _tool().run({"pat": ".", "path": tmp})
-        assert r["content"] == "none", f"empty lines should not match '.', got {r['content']!r}"
+# ── 10. Default path behavior ───────────────────────────────────────────────
 
 
-# ── 10. path 默认值 (省略时为 ".") ─────────────────────────
+class TestGrepToolPathDefault(unittest.TestCase):
+    """`path` is optional; omitting it must search cwd."""
 
-def test_90_omitted_path_uses_cwd():
-    """省略 path 时, 应从 cwd 搜索 (实现为 args.get('path', '.') + '/**')。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        # 在 cwd 放一个命中文件
-        _write(os.path.join(tmp, "marker.txt"), "in-cwd\n")
-        old_cwd = os.getcwd()
+    def setUp(self):
+        # A fresh tmpdir we chdir into for the cwd-dependent test, plus
+        # a private tmpdir for the trailing-slash test.
+        self.tmpdir = tempfile.mkdtemp()
+        self.altdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        # Make sure we restore cwd before tearing down.
         try:
-            os.chdir(tmp)
-            r = _tool().run({"pat": "in-cwd"})  # 不传 path
-            assert r["success"] is True
-            assert "marker.txt" in r["content"]
+            os.chdir(self._restore_cwd)
+        except (AttributeError, OSError):
+            pass
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        shutil.rmtree(self.altdir, ignore_errors=True)
+
+    def test_90_omitted_path_uses_cwd(self):
+        """Omitting `path` should search cwd (defaults to '.' in glob)."""
+        _write(os.path.join(self.tmpdir, "marker.txt"), "in-cwd\n")
+        old_cwd = os.getcwd()
+        self._restore_cwd = old_cwd
+        try:
+            os.chdir(self.tmpdir)
+            r = _tool().run({"pat": "in-cwd"})  # no `path` arg
+            self.assertTrue(r["success"])
+            self.assertIn("marker.txt", r["content"])
         finally:
             os.chdir(old_cwd)
 
+    def test_91_path_with_trailing_slash_works(self):
+        """Trailing separator must not break the glob."""
+        _write(os.path.join(self.altdir, "a.txt"), "x\n")
+        r = _tool().run({"pat": "x", "path": self.altdir + os.sep})
+        self.assertTrue(r["success"])
+        self.assertIn("a.txt", r["content"])
 
-def test_91_path_with_trailing_slash_works():
-    """path 末尾有 / 不应破坏 glob。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "a.txt"), "x\n")
-        r = _tool().run({"pat": "x", "path": tmp + os.sep})
-        assert r["success"] is True
-        assert "a.txt" in r["content"]
-
-
-# ── 入口 ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=== GrepTool 单元测试 ===\n")
-    for name, fn in sorted(globals().items()):
-        if not (name.startswith("test_") and callable(fn)):
-            continue
-        try:
-            fn()
-        except AssertionError as e:
-            failed += 1
-            print(f"  ✗ {name}  FAIL: {e}")
-        except Exception as e:
-            failed += 1
-            print(f"  ✗ {name}  ERROR: {type(e).__name__}: {e}")
-        else:
-            passed += 1
-            print(f"  ✓ {name}")
-
-    print(f"\n{'='*40}")
-    print(f"通过: {passed}  失败: {failed}  总计: {passed + failed}")
-    if failed:
-        sys.exit(1)
+    # Run with verbose output
+    unittest.main(verbosity=2)

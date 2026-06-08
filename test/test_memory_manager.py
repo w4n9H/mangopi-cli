@@ -1,56 +1,55 @@
-#!/usr/bin/env python3
-"""Test MemoryManager —— 重点覆盖 search() 的评分公式与排序：
+"""Tests for MemoryManager — focus on `search()` scoring & sort.
 
-  score = Σ(关键词出现次数 × 10)
-        + min(len(chunk) // 200, 5)              # 长度 bonus (0..5)
-        + max(0, 30 - int(Δdays))                # mtime bonus (0..30, 30天内线性衰减)
+Score formula (per matching chunk):
+    score = (count(keyword) × 10) × num_keywords  + length_bonus + mtime_bonus
+    length_bonus = min(len(chunk) // 200, 5)             # 0..5
+    mtime_bonus  = max(0, 30 - days_since_mtime)         # 0..30, linear decay
 
-同时覆盖 _tokenize / _split_chunks 静态方法与 search 边界 (空 query / 无文件 /
-无命中 / top_k / 大小写 / 子串匹配 / content 截断到 2000 字符)。
+Covers:
+    * `_tokenize` static method
+    * `_split_chunks` static method
+    * `search()` boundary cases (empty query, no .md files, no hits,
+      non-.md ignored)
+    * Hit format & substring/case behavior
+    * Content truncation to 2000 chars
+    * Scoring components: keyword frequency, length bonus, mtime bonus
+    * Multi-keyword additive scoring
+    * Combined ranking (keyword-count vs mtime)
+    * `top_k` truncation
+    * Multi-file aggregation & chunk-split behavior
 """
-
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
+import unittest
 
-# 将项目根目录加到 sys.path，以便 import mangopi_cli 中的 MemoryManager
+# Add parent dir to sys.path so we can import mangopi_cli.
+# This file lives at <project>/test/test_memory_manager.py,
+# so the project root is one level up from __file__'s directory.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mangopi_cli import MemoryManager
-
-# ── 计数器与辅助函数 ─────────────────────────────────────────
-
-passed = 0
-failed = 0
-skipped = 0
+from mangopi_cli import MemoryManager  # noqa: E402
 
 
-def _run(name, fn):
-    """运行一个零参测试函数，捕获断言与异常。"""
-    global passed, failed
-    try:
-        fn()
-        passed += 1
-        print(f"  ✓ {name}")
-    except AssertionError as e:
-        failed += 1
-        print(f"  ✗ {name}  FAIL: {e}")
-    except Exception as e:
-        failed += 1
-        print(f"  ✗ {name}  ERROR: {type(e).__name__}: {e}")
+# ── Module-level helpers ─────────────────────────────────────────────────────
 
 
-def _make_manager(tmpdir):
-    """构造一个指向临时目录的 MemoryManager，隔离 .mangocli/memory。"""
+NO_HIT_PREFIX = "No memory found."
+
+
+def _make_manager(memory_dir):
+    """Build a MemoryManager pointed at an isolated tempdir (so we don't
+    touch the real ~/.mangocli/memory)."""
     mm = MemoryManager()
-    mm.memory_dir = tmpdir
+    mm.memory_dir = memory_dir
     return mm
 
 
 def _write(path, text, mtime=None):
-    """写文件并可选地设置 mtime (epoch seconds)。"""
+    """Write `text` to `path`; optionally set mtime (epoch seconds)."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     if mtime is not None:
@@ -58,469 +57,516 @@ def _write(path, text, mtime=None):
 
 
 def _parse_results(out):
-    """把 search() 返回的字符串解析为 [(filename, score_int, content), ...]。
+    """Parse `search()`'s string output into [(file, score, content), ...].
 
-    每条记录的格式: "# {file} (score={score})\\n{content}"
-    多条记录之间用 "\\n\\n---\\n\\n" 分隔。
+    Format per record: "# {file} (score={score})\\n{content}"
+    Multi-record separator: "\\n\\n---\\n\\n".
+    Sentinel strings (`'empty query'`, the `'No memory found.'` tip) are
+    returned as-is for the caller to assert on.
     """
     assert isinstance(out, str), f"expected str, got {type(out)}"
-    if out in ("empty query", "No memory found."):
+    if out == "empty query" or out.startswith(NO_HIT_PREFIX):
         return out
     records = out.split("\n\n---\n\n")
     parsed = []
-    pat = re.compile(r"^# (?P<file>[^ ]+) \(score=(?P<score>-?\d+)\)\n(?P<content>.*)$", re.DOTALL)
+    pat = re.compile(
+        r"^# (?P<file>[^ ]+) \(score=(?P<score>-?\d+)\)\n(?P<content>.*)$",
+        re.DOTALL,
+    )
     for rec in records:
         m = pat.match(rec)
-        assert m, f"record does not match expected format: {rec!r}"
-        parsed.append((m.group("file"), int(m.group("score")), m.group("content")))
+        if not m:
+            raise AssertionError(
+                f"record does not match expected format: {rec!r}"
+            )
+        parsed.append(
+            (m.group("file"), int(m.group("score")), m.group("content"))
+        )
     return parsed
 
 
-# ── 1. _tokenize 静态方法 ───────────────────────────────────
-
-def test_01_tokenize_basic():
-    assert MemoryManager._tokenize("Hello World") == ["hello", "world"]
+# ── 1. _tokenize static method ─────────────────────────────────────────────
 
 
-def test_02_tokenize_lowercase_and_strip():
-    assert MemoryManager._tokenize("  Foo   BAR  ") == ["foo", "bar"]
+class TestTokenize(unittest.TestCase):
+    """`_tokenize` splits on whitespace and lower-cases; it intentionally
+    does NOT strip punctuation (matches `search()`'s substring matching).
+    """
+
+    def test_01_tokenize_basic(self):
+        self.assertEqual(
+            MemoryManager._tokenize("Hello World"),
+            ["hello", "world"],
+        )
+
+    def test_02_tokenize_lowercase_and_strip(self):
+        self.assertEqual(
+            MemoryManager._tokenize("  Foo   BAR  "),
+            ["foo", "bar"],
+        )
+
+    def test_03_tokenize_empty_and_whitespace(self):
+        self.assertEqual(MemoryManager._tokenize(""), [])
+        self.assertEqual(MemoryManager._tokenize("   \t  "), [])
+
+    def test_04_tokenize_keeps_internal_punct(self):
+        # Punctuation is preserved as part of the token.
+        self.assertEqual(
+            MemoryManager._tokenize("foo,bar.baz"),
+            ["foo,bar.baz"],
+        )
 
 
-def test_03_tokenize_empty_and_whitespace():
-    assert MemoryManager._tokenize("") == []
-    assert MemoryManager._tokenize("   \t  ") == []
+# ── 2. _split_chunks static method ─────────────────────────────────────────
 
 
-def test_04_tokenize_keeps_internal_punct():
-    """_tokenize 仅按空白切分 + 小写化，不剔除标点 (与 search 的子串匹配一致)。"""
-    assert MemoryManager._tokenize("foo,bar.baz") == ["foo,bar.baz"]
+class TestSplitChunks(unittest.TestCase):
+    """`_split_chunks` splits on blank lines (`\\n\\s*\\n`) and skips empties."""
+
+    def test_10_split_chunks_on_blank_line(self):
+        self.assertEqual(
+            MemoryManager._split_chunks("alpha\n\nbeta\n\ngamma"),
+            ["alpha", "beta", "gamma"],
+        )
+
+    def test_11_split_chunks_skips_empty(self):
+        self.assertEqual(
+            MemoryManager._split_chunks("\n\nfoo\n\n   \n\nbar\n\n"),
+            ["foo", "bar"],
+        )
+
+    def test_12_split_chunks_preserves_newlines_inside_block(self):
+        self.assertEqual(
+            MemoryManager._split_chunks("line1\nline2\nline3\n\nline4"),
+            ["line1\nline2\nline3", "line4"],
+        )
 
 
-# ── 2. _split_chunks 静态方法 ──────────────────────────────
-
-def test_10_split_chunks_on_blank_line():
-    text = "alpha\n\nbeta\n\ngamma"
-    assert MemoryManager._split_chunks(text) == ["alpha", "beta", "gamma"]
+# ── 3. search() boundary cases (empty query / no match / no files) ─────────
 
 
-def test_11_split_chunks_skips_empty():
-    text = "\n\nfoo\n\n   \n\nbar\n\n"
-    assert MemoryManager._split_chunks(text) == ["foo", "bar"]
+class TestSearchBoundaryCases(unittest.TestCase):
+    """`search()` short-circuits or returns the documented 'No memory
+    found.' sentinel for the obvious non-match inputs.
+    """
 
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
 
-def test_12_split_chunks_preserves_newlines_inside_block():
-    text = "line1\nline2\nline3\n\nline4"
-    assert MemoryManager._split_chunks(text) == ["line1\nline2\nline3", "line4"]
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
+    def test_20_empty_query_returns_empty_query(self):
+        mm = _make_manager(self.tmpdir)
+        self.assertEqual(mm.search(""), "empty query")
 
-# ── 3. search —— 边界 / 短路 ───────────────────────────────
+    def test_21_whitespace_only_query_returns_empty_query(self):
+        mm = _make_manager(self.tmpdir)
+        self.assertEqual(mm.search("   \t  "), "empty query")
 
-def test_20_empty_query_returns_empty_query():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        assert mm.search("") == "empty query"
-
-
-def test_21_whitespace_only_query_returns_empty_query():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        assert mm.search("   \t  ") == "empty query"
-
-
-def test_22_no_memory_dir_returns_no_match():
-    """内存目录存在但无 .md 文件时，应返回 'No memory found.'。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        # 放一个非 .md 文件，确保过滤生效
-        with open(os.path.join(tmp, "ignore.txt"), "w") as f:
+    def test_22_no_memory_dir_returns_no_match(self):
+        """memory_dir exists but has no .md files → 'No memory found.'"""
+        mm = _make_manager(self.tmpdir)
+        # Place a non-.md file to verify the glob filter excludes it.
+        with open(os.path.join(self.tmpdir, "ignore.txt"), "w") as f:
             f.write("apple banana")
-        assert mm.search("apple") == "No memory found."
+        self.assertTrue(mm.search("apple").startswith(NO_HIT_PREFIX))
+
+    def test_23_no_matching_chunks_returns_no_match(self):
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "这是一些完全不相关的笔记\n\n另一段内容",
+        )
+        self.assertTrue(mm.search("python").startswith(NO_HIT_PREFIX))
+
+    def test_24_non_md_files_are_ignored(self):
+        """Only *.md files participate in search."""
+        mm = _make_manager(self.tmpdir)
+        _write(os.path.join(self.tmpdir, "notes.txt"), "python 是好语言")
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), "无相关内容")
+        self.assertTrue(mm.search("python").startswith(NO_HIT_PREFIX))
 
 
-def test_23_no_matching_chunks_returns_no_match():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "这是一些完全不相关的笔记\n\n另一段内容")
-        assert mm.search("python") == "No memory found."
+# ── 4. search() basic hit format & substring behavior ───────────────────────
 
 
-def test_24_non_md_files_are_ignored():
-    """只有 *.md 文件参与搜索。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "notes.txt"), "python 是好语言")
-        _write(os.path.join(tmp, "2024-01-01.md"), "无相关内容")
-        assert mm.search("python") == "No memory found."
+class TestSearchHitFormat(unittest.TestCase):
+    """Single-hit output format, case-insensitivity, substring matching,
+    and content truncation to 2000 chars.
+    """
 
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
 
-# ── 4. search —— 基础命中与输出格式 ────────────────────────
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-def test_30_single_hit_format():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        # chunk 较短 (<200 字符) → length_bonus=0
-        _write(os.path.join(tmp, "2024-01-01.md"), "我们用 python 写了一个工具")
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list)
-        assert len(results) == 1
+    def test_30_single_hit_format(self):
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "我们用 python 写了一个工具",
+        )
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
         file, score, content = results[0]
-        assert file == "2024-01-01.md"
-        # 1*10 (count) + 0 (len<200) + 30 (mtime 0 天) = 40
-        assert score == 40, f"expected 40, got {score}"
-        assert "python" in content
+        self.assertEqual(file, "2024-01-01.md")
+        # 1×10 (count) + 0 (len<200) + 30 (mtime=now) = 40
+        self.assertEqual(score, 40)
+        self.assertIn("python", content)
+
+    def test_31_case_insensitive(self):
+        mm = _make_manager(self.tmpdir)
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), "Python is GREAT")
+        r1 = _parse_results(mm.search("python"))
+        r2 = _parse_results(mm.search("PYTHON"))
+        self.assertIsInstance(r1, list)
+        self.assertIsInstance(r2, list)
+        self.assertEqual(len(r1), 1)
+        self.assertEqual(len(r2), 1)
+        self.assertEqual(r1[0][1], r2[0][1])
+
+    def test_32_substring_match(self):
+        """`search` uses substring `in`/`count`, not word-boundary matching."""
+        mm = _make_manager(self.tmpdir)
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), "category catalog")
+        results = _parse_results(mm.search("cat"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        # "cat" appears 2 times → 20 points.
+        _, score, _ = results[0]
+        self.assertGreaterEqual(score, 20)
+
+    def test_33_content_truncated_to_2000(self):
+        mm = _make_manager(self.tmpdir)
+        long_chunk = "python " + ("x" * 3000)
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), long_chunk)
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        _, _, content = results[0]
+        # Content is chunk[:2000].
+        self.assertEqual(len(content), 2000)
 
 
-def test_31_case_insensitive():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"), "Python is GREAT")
-        # 大写关键词也能命中 (子串匹配，大小写不敏感)
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        out2 = mm.search("PYTHON")
-        results2 = _parse_results(out2)
-        assert isinstance(results2, list) and len(results2) == 1
-        assert results[0][1] == results2[0][1], "大小写不同得分应一致"
+# ── 5. search() scoring: keyword frequency ─────────────────────────────────
 
 
-def test_32_substring_match():
-    """search 用的是子串 in/count, 不是词边界匹配。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"), "category catalog")
-        out = mm.search("cat")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        # "cat" 出现 2 次 → 20 分
-        file, score, _ = results[0]
-        assert score >= 20, f"expected score>=20 (2次*10), got {score}"
+class TestSearchKeywordFrequency(unittest.TestCase):
+    """Higher keyword frequency → higher score (everything else equal)."""
 
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
 
-def test_33_content_truncated_to_2000():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        long_chunk = "python " + ("x" * 3000)  # 远超 2000 字符
-        _write(os.path.join(tmp, "2024-01-01.md"), long_chunk)
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        file, score, content = results[0]
-        # content 是 chunk[:2000]，加上 'python ' + 'x'*1993 = 2000
-        assert len(content) == 2000, f"expected content length 2000, got {len(content)}"
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
+    def test_40_keyword_frequency_score(self):
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "apple apple apple\n\nbanana",
+        )
+        results = _parse_results(mm.search("apple"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        _, score, _ = results[0]
+        # 3 × 10 + 0 (len<200) + 30 (mtime=now) = 60
+        self.assertEqual(score, 60)
 
-# ── 5. search —— 评分核心：关键词频次 ───────────────────────
-
-def test_40_keyword_frequency_score():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        # chunk 长度 < 200 → length_bonus=0; mtime≈now → mtime_bonus=30
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "apple apple apple\n\nbanana")  # 第一段 3 个 apple, 第二段无 apple
-        out = mm.search("apple")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        file, score, _ = results[0]
-        # 3 次出现 × 10 + 0 (len 17 < 200) + 30 (mtime 0 天) = 60
-        assert score == 60, f"expected 60, got {score}"
-
-
-def test_41_keyword_frequency_higher_score():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "python\n\npython python\n\npython python python")
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 3
+    def test_41_keyword_frequency_higher_score(self):
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "python\n\npython python\n\npython python python",
+        )
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 3)
         scores = [r[1] for r in results]
-        # 频次越高 score 越大 (length_bonus 和 mtime_bonus 三段相同, 都被 len<200, mtime≈now)
-        assert scores[0] > scores[1] > scores[2], (
-            f"scores should be strictly decreasing, got {scores}")
-        # 验证 1/2/3 次对应的精确分数: 1*10 + 0 + 30 = 40, 2*10+0+30=50, 3*10+0+30=60
-        assert sorted(scores) == [40, 50, 60], f"expected [40, 50, 60], got {sorted(scores)}"
+        # Strictly decreasing by score.
+        self.assertTrue(scores[0] > scores[1] > scores[2])
+        # 1×10+0+30=40, 2×10+0+30=50, 3×10+0+30=60.
+        self.assertEqual(sorted(scores), [40, 50, 60])
 
 
-# ── 6. search —— 评分核心：多关键词累加 ─────────────────────
-
-def test_50_multi_keyword_additive():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "python and java are popular")
-        out = mm.search("python java")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        file, score, _ = results[0]
-        # python 1 次 + java 1 次 → 20; + length_bonus(0) + mtime_bonus(30) = 50
-        assert score == 50, f"expected 50, got {score}"
+# ── 6. search() scoring: multi-keyword additivity ───────────────────────────
 
 
-def test_51_multi_keyword_partial_match():
-    """chunk 包含 keywords 子集时, 缺失的关键词不影响分数, 不导致 skip。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"), "we love python")
-        out = mm.search("python rust")  # 第二个 keyword 缺失
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        # 仅 python 命中 → 1*10 + 0 + 30 = 40
-        assert results[0][1] == 40, f"expected 40, got {results[0][1]}"
+class TestSearchMultiKeyword(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_50_multi_keyword_additive(self):
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "python and java are popular",
+        )
+        results = _parse_results(mm.search("python java"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        _, score, _ = results[0]
+        # 1×10 (python) + 1×10 (java) + 0 (len<200) + 30 (mtime=now) = 50
+        self.assertEqual(score, 50)
+
+    def test_51_multi_keyword_partial_match(self):
+        """A chunk containing only some keywords still matches (no skip)."""
+        mm = _make_manager(self.tmpdir)
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), "we love python")
+        results = _parse_results(mm.search("python rust"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        # Only "python" matches → 1×10 + 0 + 30 = 40.
+        self.assertEqual(results[0][1], 40)
 
 
-# ── 7. search —— 评分核心：长度 bonus ──────────────────────
+# ── 7. search() scoring: length bonus (0..5) ───────────────────────────────
 
-def test_60_length_bonus_capped_at_5():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        # 三个不同长度的 chunk, 都含 1 次 python, mtime 同为现在
-        # content 会被截断到 2000 字符, 用截断后的实际长度作 key
+
+class TestSearchLengthBonus(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_60_length_bonus_capped_at_5(self):
+        """Three chunks of len 56 / 506 / 2000 → length bonus 0 / 2 / 5."""
+        mm = _make_manager(self.tmpdir)
         bodies = [
-            "python" + "x" * 50,       # 原 len=56   → 截断后 56   → length_bonus=0
-            "python" + "x" * 500,      # 原 len=506  → 截断后 506  → length_bonus=2
-            "python" + "x" * 2000,     # 原 len=2006 → 截断后 2000 → length_bonus=5 (cap)
+            "python" + "x" * 50,        # len=56   → length_bonus=0
+            "python" + "x" * 500,       # len=506  → length_bonus=2
+            "python" + "x" * 2000,      # len=2006 → trunc to 2000 → length_bonus=5
         ]
         text = "\n\n".join(bodies)
-        _write(os.path.join(tmp, "2024-01-01.md"), text)
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 3
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), text)
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 3)
         scores_by_len = {len(r[2]): r[1] for r in results}
-        # mtime 0 天 → +30; count*10=10; length_bonus=0/2/5 → 总分 40/42/45
+        # mtime 0 days → +30; count=1×10; length_bonus 0/2/5 → totals 40/42/45.
         expected = {56: 40, 506: 42, 2000: 45}
         for trunc_len, exp_score in expected.items():
-            assert trunc_len in scores_by_len, (
-                f"missing result with content_len={trunc_len}, got {sorted(scores_by_len)}")
-            assert scores_by_len[trunc_len] == exp_score, (
-                f"content_len={trunc_len} expected score {exp_score}, "
-                f"got {scores_by_len[trunc_len]}")
+            self.assertIn(trunc_len, scores_by_len)
+            self.assertEqual(
+                scores_by_len[trunc_len], exp_score,
+                f"content_len={trunc_len} expected {exp_score}, "
+                f"got {scores_by_len[trunc_len]}",
+            )
 
-
-def test_61_length_bonus_just_under_boundary():
-    """长度 = 200, 400, 600, 800, 1000, 2000 时 length_bonus=1, 2, 3, 4, 5, 5。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
+    def test_61_length_bonus_just_under_boundary(self):
+        """Length 200/400/600/800/1000/2000 → bonus 1/2/3/4/5/5."""
+        mm = _make_manager(self.tmpdir)
         chunks = {n: "python" + "x" * (n * 200 - 6) for n in (1, 2, 3, 4, 5, 10)}
         for n, body in chunks.items():
-            assert len(body) == n * 200
+            self.assertEqual(len(body), n * 200)
         text = "\n\n".join(chunks.values())
-        _write(os.path.join(tmp, "2024-01-01.md"), text)
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == len(chunks)
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), text)
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), len(chunks))
         scores_by_len = {len(r[2]): r[1] for r in results}
-        # 1*10 (count) + (n//200) (length_bonus) + 30 (mtime 0 天)
-        # n=1 → 41, n=2 → 42, n=3 → 43, n=4 → 44, n=5/10 → 45 (cap at 5)
         expected = {200: 41, 400: 42, 600: 43, 800: 44, 1000: 45, 2000: 45}
         for length, exp_score in expected.items():
-            assert length in scores_by_len, (
-                f"missing chunk with content_len={length}, got {sorted(scores_by_len)}")
-            assert scores_by_len[length] == exp_score, (
-                f"content_len={length} expected score {exp_score}, "
-                f"got {scores_by_len[length]}")
+            self.assertIn(length, scores_by_len)
+            self.assertEqual(scores_by_len[length], exp_score)
 
 
-# ── 8. search —— 评分核心：mtime bonus ─────────────────────
-
-def test_70_mtime_bonus_fresh_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"), "python rocks")
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        # 刚写入 → Δdays = 0 → mtime_bonus = 30
-        # 1*10 + 0 (len<200) + 30 = 40
-        assert results[0][1] == 40, f"expected 40, got {results[0][1]}"
+# ── 8. search() scoring: mtime bonus (0..30, decays linearly) ───────────────
 
 
-def test_71_mtime_bonus_decays_to_zero_at_30_days():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        path = os.path.join(tmp, "2024-01-01.md")
+class TestSearchMtimeBonus(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_70_mtime_bonus_fresh_file(self):
+        mm = _make_manager(self.tmpdir)
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), "python rocks")
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        # 1×10 + 0 (len<200) + 30 (mtime=now) = 40
+        self.assertEqual(results[0][1], 40)
+
+    def test_71_mtime_bonus_decays_to_zero_at_30_days(self):
+        mm = _make_manager(self.tmpdir)
+        path = os.path.join(self.tmpdir, "2024-01-01.md")
         _write(path, "python rocks")
-        # 把 mtime 设为 30 天前 (取整)
+        # Set mtime to 30 days ago (rounded).
         mtime_30d_ago = time.time() - 30 * 86400
         os.utime(path, (mtime_30d_ago, mtime_30d_ago))
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        # 30 天 → mtime_bonus = max(0, 30-30) = 0
-        # 1*10 + 0 + 0 = 10
-        assert results[0][1] == 10, f"expected 10, got {results[0][1]}"
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        # 30 days → mtime_bonus = max(0, 30-30) = 0 → score 10.
+        self.assertEqual(results[0][1], 10)
 
-
-def test_72_mtime_bonus_beyond_30_days_clamps_to_zero():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        path = os.path.join(tmp, "2024-01-01.md")
+    def test_72_mtime_bonus_beyond_30_days_clamps_to_zero(self):
+        mm = _make_manager(self.tmpdir)
+        path = os.path.join(self.tmpdir, "2024-01-01.md")
         _write(path, "python rocks")
-        # 设为 365 天前
         mtime_old = time.time() - 365 * 86400
         os.utime(path, (mtime_old, mtime_old))
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        # 365 天 → mtime_bonus = max(0, 30-365) = 0
-        assert results[0][1] == 10, f"expected 10, got {results[0][1]}"
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        # 365 days → mtime_bonus = max(0, 30-365) = 0 → score 10.
+        self.assertEqual(results[0][1], 10)
 
-
-def test_73_mtime_bonus_newer_file_ranks_higher():
-    """mtime 较新的文件在相同关键词频次下得分更高。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        new_path = os.path.join(tmp, "2024-02-01.md")  # 更新
-        old_path = os.path.join(tmp, "2024-01-01.md")
+    def test_73_mtime_bonus_newer_file_ranks_higher(self):
+        """Newer mtime wins when keyword frequency is equal."""
+        mm = _make_manager(self.tmpdir)
+        new_path = os.path.join(self.tmpdir, "2024-02-01.md")  # newer
+        old_path = os.path.join(self.tmpdir, "2024-01-01.md")
         _write(new_path, "python")
         _write(old_path, "python")
-        # 旧文件 mtime 设为 10 天前
+        # Old file's mtime is 10 days ago.
         os.utime(old_path, (time.time() - 10 * 86400,) * 2)
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 2
-        # 新文件 mtime_bonus=30, 旧文件 mtime_bonus=20
-        # 排序: 新文件 (40) 在前
-        assert results[0][0] == "2024-02-01.md", f"newest file should rank first, got {results[0]}"
-        assert results[1][0] == "2024-01-01.md"
-        assert results[0][1] - results[1][1] == 10, (
-            f"score diff should equal mtime bonus diff (10), got {results[0][1] - results[1][1]}")
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 2)
+        # New file bonus=30, old file bonus=20 → newer file should rank first.
+        self.assertEqual(results[0][0], "2024-02-01.md")
+        self.assertEqual(results[1][0], "2024-01-01.md")
+        self.assertEqual(results[0][1] - results[1][1], 10)
 
 
-# ── 9. search —— 综合排序 ─────────────────────────────────
+# ── 9. search() combined ranking ───────────────────────────────────────────
 
-def test_80_higher_keyword_count_ranks_above_higher_mtime():
-    """词频对总分的贡献 (×10) 应能压过 mtime 差异 (<=30)。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        # 文件 A: 新 (mtime=now), 1 次 python → 10 + 0 + 30 = 40
-        path_a = os.path.join(tmp, "2024-01-01.md")
+
+class TestSearchCombinedRanking(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_80_higher_keyword_count_ranks_above_higher_mtime(self):
+        """Higher keyword frequency (×10) should outweigh mtime bonus (<=30)."""
+        mm = _make_manager(self.tmpdir)
+        # File A: mtime=now, 1×python → 10 + 0 + 30 = 40
+        path_a = os.path.join(self.tmpdir, "2024-01-01.md")
         _write(path_a, "python")
-        # 文件 B: 旧 10 天 (mtime_bonus=20), 4 次 python → 40 + 0 + 20 = 60
-        path_b = os.path.join(tmp, "2024-02-01.md")
+        # File B: mtime=10 days ago, 4×python → 40 + 0 + 20 = 60
+        path_b = os.path.join(self.tmpdir, "2024-02-01.md")
         _write(path_b, "python python python python")
         os.utime(path_b, (time.time() - 10 * 86400,) * 2)
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 2
-        # B (60) > A (40) → B 在前
-        assert results[0][0] == "2024-02-01.md"
-        assert results[1][0] == "2024-01-01.md"
-        assert results[0][1] == 60
-        assert results[1][1] == 40
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 2)
+        # B (60) > A (40) → B ranks first.
+        self.assertEqual(results[0][0], "2024-02-01.md")
+        self.assertEqual(results[1][0], "2024-01-01.md")
+        self.assertEqual(results[0][1], 60)
+        self.assertEqual(results[1][1], 40)
 
 
-# ── 10. search —— top_k 截断 ─────────────────────────────
+# ── 10. search() top_k truncation ──────────────────────────────────────────
 
-def test_90_top_k_limits_results():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        # 3 个 chunk 都命中, top_k=2 只返回前 2
+
+class TestSearchTopK(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_90_top_k_limits_results(self):
+        mm = _make_manager(self.tmpdir)
         text = "python a\n\npython b\n\npython c"
-        _write(os.path.join(tmp, "2024-01-01.md"), text)
-        out = mm.search("python", top_k=2)
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 2
-        # 默认情况下, 3 个 chunk 全返回
-        out_all = mm.search("python", top_k=10)
-        results_all = _parse_results(out_all)
-        assert len(results_all) == 3
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), text)
+        # top_k=2 returns only the first 2.
+        results = _parse_results(mm.search("python", top_k=2))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 2)
+        # Default returns all 3.
+        results_all = _parse_results(mm.search("python", top_k=10))
+        self.assertEqual(len(results_all), 3)
+
+    def test_91_top_k_one_returns_single_best(self):
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "python\n\npython python\n\npython python python",
+        )
+        results = _parse_results(mm.search("python", top_k=1))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        # The highest-frequency (3×) chunk must be the winner.
+        self.assertEqual(results[0][2].count("python"), 3)
+        self.assertEqual(results[0][1], 60)
 
 
-def test_91_top_k_one_returns_single_best():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "python\n\npython python\n\npython python python")
-        out = mm.search("python", top_k=1)
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1
-        # 频次最高 (3次) 的 chunk 应胜出
-        assert results[0][2].count("python") == 3
-        assert results[0][1] == 60
+# ── 11. search() multi-file & chunk-split behavior ─────────────────────────
 
 
-# ── 11. search —— 多文件 / 跨 chunk 行为 ─────────────────
+class TestSearchMultiFile(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
 
-def test_100_multiple_files_aggregated():
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"), "python first")
-        _write(os.path.join(tmp, "2024-02-01.md"), "python second")
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 2
-        # mtime 同为 now, 频次相同 → 分数相同
-        assert results[0][1] == results[1][1] == 40
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
+    def test_100_multiple_files_aggregated(self):
+        mm = _make_manager(self.tmpdir)
+        _write(os.path.join(self.tmpdir, "2024-01-01.md"), "python first")
+        _write(os.path.join(self.tmpdir, "2024-02-01.md"), "python second")
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0][1], 40)
+        self.assertEqual(results[1][1], 40)
 
-def test_101_chunks_split_on_blank_line_only():
-    """_split_chunks 用 \\n\\s*\\n 切, 单换行不切分; 只有真正匹配的 chunk 才会出现在结果中。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        # 切分后应得 2 个 chunk:
-        #   chunk1 = "line1\nline2\nline3" (含 line2)
-        #   chunk2 = "another chunk"      (不含 line2, 应被过滤)
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "line1\nline2\nline3\n\nanother chunk")
-        out = mm.search("line2")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 1, (
-            f"只有 chunk1 命中, 应只返回 1 条; got {len(results)}")
-        # chunk1 整体作为 content 返回, 其中含 line1/line2/line3
-        assert "line1" in results[0][2]
-        assert "line2" in results[0][2]
-        assert "line3" in results[0][2]
-        # chunk2 不应出现
-        assert "another" not in results[0][2]
+    def test_101_chunks_split_on_blank_line_only(self):
+        """Only the chunk that contains the keyword should appear in results."""
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "line1\nline2\nline3\n\nanother chunk",
+        )
+        results = _parse_results(mm.search("line2"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 1)
+        # Whole chunk1 returned as content.
+        self.assertIn("line1", results[0][2])
+        self.assertIn("line2", results[0][2])
+        self.assertIn("line3", results[0][2])
+        self.assertNotIn("another", results[0][2])
 
-
-def test_101b_two_chunks_both_match_independently():
-    """两个 chunk 各自命中时, 都会被独立计分并返回。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "python in chunk1\n\npython in chunk2")
-        out = mm.search("python")
-        results = _parse_results(out)
-        assert isinstance(results, list) and len(results) == 2
+    def test_101b_two_chunks_both_match_independently(self):
+        """Two matching chunks are returned as independent results."""
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "python in chunk1\n\npython in chunk2",
+        )
+        results = _parse_results(mm.search("python"))
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 2)
         contents = {r[2] for r in results}
-        assert "python in chunk1" in contents
-        assert "python in chunk2" in contents
+        self.assertIn("python in chunk1", contents)
+        self.assertIn("python in chunk2", contents)
 
-
-def test_102_results_separator_is_dashes():
-    """多条记录之间用 '\\n\\n---\\n\\n' 分隔。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        mm = _make_manager(tmp)
-        _write(os.path.join(tmp, "2024-01-01.md"),
-               "python a\n\npython b")
+    def test_102_results_separator_is_dashes(self):
+        """Multi-record separator is '\\n\\n---\\n\\n'."""
+        mm = _make_manager(self.tmpdir)
+        _write(
+            os.path.join(self.tmpdir, "2024-01-01.md"),
+            "python a\n\npython b",
+        )
         out = mm.search("python")
-        assert "\n\n---\n\n" in out, f"expected '---' separator in output: {out!r}"
+        self.assertIn("\n\n---\n\n", out)
 
-
-# ── 入口 ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=== MemoryManager 单元测试 ===\n")
-    for name, fn in sorted(globals().items()):
-        if not (name.startswith("test_") and callable(fn)):
-            continue
-        try:
-            fn()
-        except AssertionError as e:
-            failed += 1
-            print(f"  ✗ {name}  FAIL: {e}")
-        except Exception as e:
-            failed += 1
-            print(f"  ✗ {name}  ERROR: {type(e).__name__}: {e}")
-        else:
-            passed += 1
-            print(f"  ✓ {name}")
-
-    print(f"\n{'='*40}")
-    print(f"通过: {passed}  失败: {failed}  总计: {passed + failed}")
-    if failed:
-        sys.exit(1)
+    # Run with verbose output
+    unittest.main(verbosity=2)
