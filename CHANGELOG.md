@@ -15,6 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.22] - 2026-06-08
+
+### Added
+- **`view_image` tool** (`ViewImageTool`) — loads a local image (screenshot / UI mockup / error screen / diagram) into the model's vision context. Accepts absolute paths only (URLs rejected), supports `png` / `jpg` / `jpeg` / `gif` / `webp`, with a 5 MB hard cap and base64 data-URI encoding for the multimodal payload
+- **`read` tool** — when called on a `png` / `jpg` / `jpeg` / `gif` / `webp` path (without `offset` / `limit`), it auto-routes the file to `ViewImageTool`, so image inputs are transparent to the model
+- **GitHub Actions CI/CD** (`.github/workflows/ci.yml`):
+  - PR / push to `main`: runs the test suite across a Python 3.8 – 3.12 matrix on Linux, macOS, and Windows
+  - Tag matching `v*`: builds sdist + wheel via `python -m build` and publishes to PyPI using OIDC Trusted Publishing (no API tokens to manage)
+- **`test_view_image.py`** unit tests covering path validation, URL rejection, size cap, format allowlist, and happy-path base64 encoding
+
+### Changed
+- Test suite converted from script-style to standard `unittest` style for clean integration with CI test discovery
+
+### Fixed
+- `TypeError: unsupported operand type(s) for |: 'type' and 'type'` on Python 3.8 / 3.9 — `ToolBase.ok()` annotation changed from `str | dict` to `Any` (PEP 604 union syntax is rejected on those interpreters)
+
+---
+
 ## [0.1.21] - 2026-06-04
 
 ### Added
