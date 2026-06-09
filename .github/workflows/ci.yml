@@ -81,6 +81,13 @@ jobs:
           python --version
           pip --version
 
+      - name: Syntax check (catches 3.10+ syntax on older Python)
+        # Catches SyntaxError (e.g. PEP 604 `X | Y` unions) before any
+        # module-level side effects in mangopi_cli.py run. Cheaper than
+        # import, fails on the actual offending line.
+        run: |
+          python -m py_compile mangopi_cli.py && echo "✅ syntax OK for Python ${{ matrix.python-version }}"
+
       - name: Smoke test · module imports cleanly
         # Verifies mangopi_cli.py is valid Python and its top-level
         # side effects (env var parsing, create_provider()) don't crash.
@@ -209,12 +216,10 @@ jobs:
           gh release create "v$VERSION" \
             --title "v$VERSION" \
             --notes "See [CHANGELOG.md](../blob/main/CHANGELOG.md) for details." \
-            --target "v$VERSION" \
-            dist/* 2>/dev/null || \
+            dist/* || \
           gh release create "v$VERSION" \
             --title "v$VERSION" \
-            --notes "See [CHANGELOG.md](../blob/main/CHANGELOG.md) for details." \
-            --target "v$VERSION"
+            --notes "See [CHANGELOG.md](../blob/main/CHANGELOG.md) for details."
 
 # ════════════════════════════════════════════════════════════════════════
 # Add this badge to README.md after the workflow is merged:

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.24] - 2026-06-09
+
+### Fixed
+- ci: drop `--target` from `gh release create` (HTTP 422 fix)
+- ci: add syntax check step to catch 3.10+ syntax early
+
+---
+
 ## [0.1.23] - 2026-06-08
 
 ### Fixed
