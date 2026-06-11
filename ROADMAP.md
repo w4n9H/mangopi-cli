@@ -162,30 +162,54 @@ Every new feature follows these rules, in order of priority:
 
 ---
 
-### 4. Web Fetch (Depends on Third-Party)
+### 4. Web Search (Bocha AI Search)
 
-**Status:** 🟡 Planned — **flagged: third-party dependency**
+**Status:** 🟡 Planned
 
-**Problem:** The AI frequently needs to consult the latest docs / GitHub issues / blog posts. Right now the user has to `cat` a local file by hand.
+**Problem:** The AI frequently needs to consult the latest docs / GitHub issues / blog posts. Right now the user has to `cat` a local file by hand. A raw URL→text fetch only returns a single page; what the AI actually needs is a **synthesized, citation-backed answer across multiple sources** — i.e., a search engine result, not a HTML parser.
 
-**Approach (a third-party dep is unavoidable here):**
+**Approach:**
 
-- New tool `web_fetch(url)`: convert a web page to markdown / plain text for the LLM
-- **Key decision: this feature uses the opt-in switch** (see Long-Term §4):
-  - Off by default
-  - User enables via `export MANGO_OPT_FEATURES=fetch`
-  - Recommended implementation: `trafilatura` (lightweight, pure-Python, high accuracy, Apache 2.0)
-  - When disabled, the tool returns `error: web_fetch requires MANGO_OPT_FEATURES=fetch`
+- New tool `web_search(query, top_k=10)`: call the **博查 (Bocha) AI Search** API, return a synthesized answer + source list
+- Endpoint: `https://api.bochaai.com/v1/ai-search`
+- Single configuration: `MANGO_SEARCH_API_KEY` (no provider selector — see "Why Bocha" below)
+- **Return shape** (fed to the LLM as a single markdown block):
 
-**Why not pure stdlib:** stdlib `html.parser` only parses HTML — extracting body text, stripping nav, and Markdown-ifying requires a lot of glue code that doesn't pay for itself. Be honest about the tradeoff and go opt-in.
+  ```markdown
+  ## Answer
+  <synthesized answer from Bocha>
 
-**Why it fits the philosophy:** The zero-dependency baseline holds (`pip install mangopi-cli` doesn't pull in `trafilatura`); users who need this feature opt in; the implementation is a single-file `try-import` block.
+  ## Sources
+  1. [title](url) — snippet
+  2. [title](url) — snippet
+  ...
+  ```
+
+- The tool can be **called multiple times per turn** to gather different angles; the main agent merges them.
+
+**Why Bocha (not Metaso / not multi-provider):**
+
+- **API contract stability**: Bocha's response shape (`messages` + `references`) is stable; Metaso's differs by mode (research vs concise) and the API is still iterating. CLI tools need predictable callers.
+- **English + Chinese balance**: Bocha is more even across both; Metaso skews Chinese.
+- **Lower normalization cost**: less code in the single-file budget, fits the "Stdlib First" principle.
+- **No `MANGO_SEARCH_PROVIDER` env var**: deliberately pick one. Adding a provider switch doubles the adapter surface for marginal benefit. If we ever migrate to another provider, that's a one-shot PR — not a permanent abstraction.
+
+**Why it fits the philosophy:** Pure stdlib — `urllib.request` + `json` are enough to call the API and parse the response. The "third party" here is the **API provider**, not a Python package: no `pip install`, no opt-in dep, no `MANGO_OPT_FEATURES` flag. This is the cleanest possible answer to "the AI needs the live web."
 
 **Acceptance criteria:**
 
-- [ ] `MANGO_OPT_FEATURES=fetch` enables `web_fetch`
-- [ ] Default `pip install mangopi-cli` does not install `trafilatura`
-- [ ] Clear errors and retries on timeout / 4xx / 5xx
+- [ ] `web_search` works end-to-end against `api.bochaai.com`
+- [ ] `MANGO_SEARCH_API_KEY` config flow validated; clear error on missing key, 401, 429, or 5xx
+- [ ] Sources are surfaced in the LLM context (not just the synthesized answer)
+- [ ] End-to-end test with a real multi-source query (e.g., "compare FastAPI vs Flask in 2026")
+
+**Explicitly out of scope:**
+
+- ❌ Raw URL fetching & HTML→Markdown parsing (a separate `web_fetch` tool only if the community demands it later)
+- ❌ Multi-provider abstraction / `MANGO_SEARCH_PROVIDER` switch (single opinionated choice)
+- ❌ Paid-tier / enterprise features of Bocha
+- ❌ Local search index / RAG over the user's own documents (different project)
+- ❌ Crawling / spidering (search APIs already do the indexing)
 
 ---
 
@@ -291,11 +315,11 @@ Every new feature follows these rules, in order of priority:
 
 ```bash
 # Comma-separated list of opt-in features
-export MANGO_OPT_FEATURES=fetch,mcp,stream
+export MANGO_OPT_FEATURES=mcp,stream
 
 # Or in ~/.mangocli/config.json
 {
-  "opt_features": ["fetch", "mcp", "stream"]
+  "opt_features": ["mcp", "stream"]
 }
 ```
 
@@ -308,14 +332,13 @@ export MANGO_OPT_FEATURES=fetch,mcp,stream
 
   ```toml
   [project.optional-dependencies]
-  fetch  = ["trafilatura>=1.6"]
   mcp    = ["mcp>=1.0"]
   stream = ["sseclient-py>=1.7"]
   ```
 
   ```bash
   # User install
-  pip install mangopi-cli[fetch,mcp]
+  pip install mangopi-cli[mcp]
   ```
 
 **Hard constraints:**
@@ -328,8 +351,8 @@ export MANGO_OPT_FEATURES=fetch,mcp,stream
 
 - [ ] Opt-in parsing logic fits in < 30 lines at the top of `mangopi_cli.py`
 - [ ] `pip install mangopi-cli` installs no opt-in deps
-- [ ] `pip install mangopi-cli[fetch,mcp]` enables them in one go
-- [ ] All three example opt-in features (fetch / mcp / stream) work end-to-end
+- [ ] `pip install mangopi-cli[mcp,stream]` enables them in one go
+- [ ] Both example opt-in features (mcp / stream) work end-to-end
 
 ---
 
@@ -358,4 +381,4 @@ Apache License 2.0 · this ROADMAP document shares the codebase license.
 
 ---
 
-Last updated: 2026-06-04
+Last updated: 2026-06-10

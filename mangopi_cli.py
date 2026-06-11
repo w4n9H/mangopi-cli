@@ -25,7 +25,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.24"
+__version__ = "0.1.25"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -380,6 +380,34 @@ def _request(url: str, body: dict, headers: dict = None, timeout: int = 300, max
         else:
             break
     raise last_exception
+
+
+def _bocha_search_api(
+        query: str = None,
+        freshness: str = "noLimit",  # 搜索指定时间范围内的网页 oneDay oneWeek oneMonth oneYear
+        summary: bool = True,  # 是否显示文本摘要
+        include: str = "",  # 指定搜索的网站范围。多个域名使用|或,分隔，最多不能超过20个
+        exclude: str = "",  # 排除搜索的网站范围。多个域名使用|或,分隔，最多不能超过20个
+        count: int = 10,  # 返回结果的条数（实际返回结果数量可能会小于count指定的数量），可填范围1-50，默认10
+        bocha_key: str = None, bocha_url: str = "https://api.bocha.cn/v1/web-search"):
+    headers = {"Content-Type": "application/json", "Accept": "application/json", "Authorization": f"Bearer {bocha_key}"}
+    payload = {"query": query, "freshness": freshness, "summary": summary,
+               "include": include, "exclude": exclude, "count": count}
+    rlist = []
+    bocha_json = _request(url=bocha_url, body=payload, headers=headers)
+    if isinstance(bocha_json["data"], dict):
+        if isinstance(bocha_json["data"]["webPages"], dict):
+            for m in bocha_json["data"]["webPages"]["value"]:
+                rlist.append(
+                    {
+                        "date": m.get("dateLastCrawled", ""),
+                        "title": m.get("name", ""),
+                        "link": m.get("url", ""),
+                        "summary": m.get("summary", ""),
+                        "content": m.get("content", "")
+                    }
+                )
+    return rlist
 
 
 def _goal_load() -> Optional[Dict[str, Any]]:
@@ -875,6 +903,83 @@ class GoalTool(ToolBase):
     _HANDLERS = {"plan": _action_plan, "step": _action_step, "show": _action_show, "finish": _action_finish}
 
 
+class WebSearchTool(ToolBase):
+    name = "web_search"
+    description = (
+        "Search the live web via the Bocha (博查) AI Search API and return a list of results with "
+        "per-page AI summaries. Use this when the user asks for the latest docs, news, blog posts, "
+        "or any information that requires looking up something beyond the local filesystem. "
+        "Requires the MANGO_SEARCH_API_KEY env var to be set; returns a clear error otherwise."
+    )
+    params = {
+        "query": {"type": "string", "description": "Natural-language search query, e.g. 'FastAPI vs Flask in 2026'."},
+        "top_k": {"type": "number?", "description": "How many results to return (1-50, default 10)."},
+        "freshness": {"type": "string?",
+                      "description": "Time filter for results: 'noLimit' (default), "
+                                     "'oneDay', 'oneWeek', 'oneMonth', 'oneYear'."},
+    }
+    preview_lines = 0
+    preview_width = 200
+    use_spinner = True
+    _VALID_FRESHNESS = ("noLimit", "oneDay", "oneWeek", "oneMonth", "oneYear")
+
+    def preview(self, args): return (args.get("query") or "")[:self.preview_width]
+
+    def run(self, args):
+        query = (args.get("query") or "").strip()
+        if not query:
+            return self.fail("web_search error: 'query' is required")
+        api_key = os.environ.get("MANGO_SEARCH_API_KEY")
+        if not api_key:
+            return self.fail("web_search error: MANGO_SEARCH_API_KEY env var is not set")
+        raw_k = args.get("top_k")
+        try:
+            top_k = int(raw_k) if raw_k not in (None, "") else 10
+        except (TypeError, ValueError):
+            return self.fail(f"web_search error: 'top_k' must be an integer in [1, 50], got {raw_k!r}")
+        if not 1 <= top_k <= 50:
+            return self.fail(f"web_search error: 'top_k' must be in [1, 50], got {top_k}")
+        freshness = (args.get("freshness") or "noLimit").strip()
+        if freshness not in self._VALID_FRESHNESS:
+            return self.fail(f"web_search error: 'freshness' must be one of "
+                             f"{'/'.join(self._VALID_FRESHNESS)}, got {freshness!r}")
+
+        try:
+            results = _bocha_search_api(query=query, count=top_k, freshness=freshness, bocha_key=api_key)
+        except Exception as err:
+            return self.fail(f"web_search error: Bocha API call failed: {err}")
+        if not results:
+            return self.ok(f"(no results for query: {query})")
+
+        lines = [f"## Answer (Bocha · {len(results)} result(s) for: {query})", ""]
+        sources = []
+        for i, r in enumerate(results, 1):
+            title = (r.get("title") or "(untitled)").strip()
+            link = (r.get("link") or "").strip()
+            date = (r.get("date") or "").strip()
+            summary = (r.get("summary") or "").strip()
+            content = (r.get("content") or "").strip()
+
+            header = f"### {i}. [{title}]({link})" if link else f"### {i}. {title}"
+            lines.append(header)
+            if date:
+                lines.append(f"*Date: {date}*")
+            lines.append("")
+            if summary:
+                lines.append(f"> {summary}")
+                lines.append("")
+            if content and content != summary:
+                snippet = content if len(content) <= 500 else content[:500] + "..."
+                lines.append(snippet)
+                lines.append("")
+
+            sources.append(f"{i}. [{title}]({link})" if link else f"{i}. {title}")
+
+        lines.append("## Sources")
+        lines.extend(sources)
+        return self.ok("\n".join(lines).rstrip())
+
+
 class ViewImageTool(ToolBase):
     name = "view_image"
     description = (
@@ -941,7 +1046,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), ViewImageTool(), AttemptCompletionTool()]
+        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]
 }
 
 
@@ -1447,6 +1552,8 @@ class SystemPrompt:
             "Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
             "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
             "but call `view_image` directly when the path is computed or generated.\n",
+            "Use **web_search** for the latest docs, news, or anything that requires the live web "
+            "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var.\n",
             "Always finish with **attempt_completion** to present the final result.\n\n",]
 
     @staticmethod

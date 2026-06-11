@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.25] - 2026-06-11
+
+### Added
+- **`web_search` tool** (`WebSearchTool`) — live web search via the 博查 (Bocha) AI Search API. 
+- **README badges** — CI status, PyPI version, Python version, License, Stars, Release, Downloads, Last commit.
+
+### Changed
+- **ROADMAP §4** rewritten: "Web Fetch (Depends on Third-Party)" → "Web Search (Bocha AI Search)". 
+
+---
+
 ## [0.1.24] - 2026-06-09
 
 ### Fixed
