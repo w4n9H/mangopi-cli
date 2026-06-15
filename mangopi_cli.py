@@ -25,7 +25,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.25"
+__version__ = "0.1.26"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -641,10 +641,10 @@ class WriteTool(ToolBase):
     def run(self, args):
         error = _validate_file_path(args["path"])
         if error:
-            return self.fail(f"write error: {error}")
+            return self.fail(f"write {args['path']} error: {error}")
         with open(args["path"], "w") as f:
             f.write(args["content"])
-        return self.ok(f"write {len(args['content'])}byte to {len(args['path'])} ok")
+        return self.ok(f"write {len(args['content'])}byte to {args['path']} ok")
 
 
 class EditTool(ToolBase):
@@ -729,6 +729,8 @@ class BashTool(ToolBase):
     description = "Execute a shell command and return its stdout/stderr output (timeout after 60s)"
     params = {
         "cmd": {"type": "string", "description": "The shell command to execute, e.g., 'ls -la' or 'git status'"}}
+    preview_lines = 100
+    preview_width = 150
     use_spinner = True
 
     def confirm(self, args):
@@ -736,20 +738,17 @@ class BashTool(ToolBase):
         return not is_dangerous or console.prompt_apply(f"Execute dangerous cmd ({reason})? {args['cmd']}")
 
     def run(self, args):
-        proc = subprocess.Popen(args["cmd"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        output_lines = []
+        proc = subprocess.Popen(args["cmd"], shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
         try:
-            while True:
-                line = proc.stdout.readline()
-                if not line and proc.poll() is not None:
-                    break
-                if line:
-                    output_lines.append(line)
-            output_lines = _process_bash_output(args['cmd'], output_lines)
-            proc.wait(timeout=60)
+            stdout, _ = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=5)  # 回收僵尸进程
             return self.fail(f"exec {args['cmd']} timed out after 60s")
+
+        output_lines = stdout.splitlines(keepends=True)
+        output_lines = _process_bash_output(args['cmd'], output_lines)
         return self.ok("".join(output_lines).strip() or "(empty)")
 
 

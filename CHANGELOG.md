@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.26] - 2026-06-15
+
+### Added
+- **Benchmark suite** (`benchmark/`) — end-to-end evaluation with real LLM calls: 14 tasks (L1–L4), tool-efficiency tracking, baseline save/compare for prompt iteration, JSON CI output.
+
+### Fixed
+- **BashTool 60s timeout** — `proc.stdout.readline()` had no timeout guard; `proc.wait(timeout=60)` ran after the process had already exited and never fired. Replaced with `proc.communicate(timeout=60)`.
+
+---
+
 ## [0.1.25] - 2026-06-11
 
 ### Added
