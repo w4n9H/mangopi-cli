@@ -25,7 +25,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.26"
+__version__ = "0.1.27"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -34,6 +34,7 @@ MANGO_KEY = os.environ.get("MANGO_KEY")
 MANGO_API_URL = os.environ.get("MANGO_API_URL", "https://api.deepseek.com")
 MANGO_MODEL = os.environ.get("MANGO_MODEL", "deepseek-v4-flash")
 MANGO_MAX_CONTEXT = int(os.environ.get("MANGO_MAX_CONTEXT", 1_000_000))
+MANGO_MAX_ITER = int(os.environ.get("MANGO_MAX_ITER", 100))
 LANGUAGE = os.environ.get("MANGO_LANG", "en").lower()
 
 
@@ -619,6 +620,8 @@ class ReadTool(ToolBase):
         "offset": {"type": "number?", "description": "Line number to start reading from (0-indexed, default 0)"},
         "limit": {"type": "number?", "description": "Maximum number of lines to read (default: all lines)"}}
 
+    def preview(self, args): return (args.get("path") or "")[:self.preview_width]
+
     def run(self, args):
         path = args["path"]
         ext = os.path.splitext(path)[1].lower()
@@ -638,6 +641,8 @@ class WriteTool(ToolBase):
         "path": {"type": "string", "description": "Path to the file to write"},
         "content": {"type": "string", "description": "Content to write to the file"}}
 
+    def preview(self, args): return (args.get("path") or "")[:self.preview_width]
+
     def run(self, args):
         error = _validate_file_path(args["path"])
         if error:
@@ -655,6 +660,8 @@ class EditTool(ToolBase):
         "old": {"type": "string", "description": "Exact string to be replaced"},
         "new": {"type": "string", "description": "String to replace it with"},
         "all": {"type": "boolean?", "description": "Replace all occurrences (default: false)"}}
+
+    def preview(self, args): return (args.get("path") or "")[:self.preview_width]
 
     def before(self, args):
         if args.get("old") and args.get("new"):
@@ -791,6 +798,8 @@ class SearchMemoryTool(ToolBase):
             "type": "string",
             "description": "Search query. Supports multiple space-separated keywords in both English and Chinese."}}
     use_spinner = True
+
+    def preview(self, args): return (args.get("query") or "")[:self.preview_width]
 
     def run(self, args):
         result = memory_manager.search(args["query"])
@@ -1343,7 +1352,8 @@ class ContextManager:
         self.micro_compact()
         before = self.total_tokens()
         self.auto_compact_if_needed()
-        if before > (after := self.total_tokens()):
+        after = self.total_tokens()
+        if before > after:  # Compatible with Python 3.6+
             console.compact_status(
                 before_tokens=before, after_tokens=after, max_context=MANGO_MAX_CONTEXT, strategy="auto")
         return self.messages + self.runtime_injections
@@ -1552,7 +1562,8 @@ class SystemPrompt:
             "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
             "but call `view_image` directly when the path is computed or generated.\n",
             "Use **web_search** for the latest docs, news, or anything that requires the live web "
-            "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var.\n",
+            "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var. "
+            "Use sparingly — at most 3 times per user query to avoid excessive API calls.\n",
             "Always finish with **attempt_completion** to present the final result.\n\n",]
 
     @staticmethod
@@ -1647,6 +1658,8 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
             if completed:
                 break
         else:
+            break
+        if iteration == MANGO_MAX_ITER:
             break
     ctx.save(ctx_file_path)
 

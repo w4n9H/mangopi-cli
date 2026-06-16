@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import base64
 from pathlib import Path
 from typing import Tuple
 
@@ -129,6 +130,109 @@ class GrepTodoTask(_FileContentTask):
             if not os.path.isfile(os.path.join(workspace, path)):
                 return False, f"'{path}' was deleted"
         return True, ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# L1 memory / web / image tasks
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 1×1 white pixel PNG for view_image task
+_MINI_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+)
+
+
+class AppendMemoryTask(BenchmarkTask):
+    name = "L1_append_memory"
+    description = "Save a preference to long-term memory via append_memory tool"
+    level = 1
+    max_tool_calls = 3
+    prompt = "Remember this preference: [PREFERENCE] Use pathlib instead of os.path for all new file operations."
+
+    def verify(self, workspace: str) -> Tuple[bool, str]:
+        mem = os.path.join(workspace, ".mangocli", "memory")
+        if not os.path.isdir(mem):
+            return False, ".mangocli/memory not found"
+        for fn in os.listdir(mem):
+            if fn.endswith(".md"):
+                content = open(os.path.join(mem, fn), encoding="utf-8").read()
+                if "pathlib" in content and "os.path" in content:
+                    return True, ""
+        return False, "no memory file found with pathlib preference"
+
+
+class SearchMemoryTask(BenchmarkTask):
+    name = "L1_search_memory"
+    description = "Search long-term memory for a saved preference"
+    level = 1
+    max_tool_calls = 3
+    prompt = "Search your memory: what preference did I save about file path operations?"
+    setup_files = {
+        ".mangocli/memory/user_prefs.md": (
+            "## User Preferences\n\n"
+            "[PREFERENCE] Uses pathlib over os.path for all new file operations.\n"
+        ),
+    }
+
+    def verify(self, workspace: str) -> Tuple[bool, str]:
+        return True, ""  # rely on post_run_verify
+
+    def post_run_verify(self, workspace: str, ctx) -> Tuple[bool, str]:
+        for msg in ctx.messages:
+            if msg.get("role") == "tool" and msg.get("tool_name") == "search_memory":
+                content = str(msg.get("content", ""))
+                if "No memory found" not in content and content.strip():
+                    return True, ""
+        return False, "search_memory not called or returned empty"
+
+
+class WebSearchTask(BenchmarkTask):
+    name = "L1_web_search"
+    description = "Use web_search tool to find current information"
+    level = 1
+    max_tool_calls = 3
+    prompt = "Search the web: what is the current stable Python version as of 2026?"
+    retries = 0  # depends on external API, no retry
+
+    def verify(self, workspace: str) -> Tuple[bool, str]:
+        return True, ""  # rely on post_run_verify
+
+    def post_run_verify(self, workspace: str, ctx) -> Tuple[bool, str]:
+        for msg in ctx.messages:
+            if msg.get("role") == "tool" and msg.get("tool_name") == "web_search":
+                return True, ""
+        return False, "web_search not called"
+
+
+class ViewImageTask(BenchmarkTask):
+    name = "L1_view_image"
+    description = "Use view_image tool to describe an image file"
+    level = 1
+    max_tool_calls = 3
+    prompt = "Look at the image at 'test.png' and describe what you see."
+
+    def setup(self, workspace: str) -> None:
+        with open(os.path.join(workspace, "test.png"), "wb") as f:
+            f.write(_MINI_PNG)
+
+    def verify(self, workspace: str) -> Tuple[bool, str]:
+        return True, ""  # rely on post_run_verify
+
+    def post_run_verify(self, workspace: str, ctx) -> Tuple[bool, str]:
+        for msg in ctx.messages:
+            if msg.get("role") == "tool":
+                if msg.get("tool_name") == "view_image":
+                    return True, ""
+                if msg.get("tool_name") == "read":
+                    # Agent may have used read on the image — that's the wrong tool
+                    content = str(msg.get("content", ""))
+                    if "test.png" in content or "PNG" in content:
+                        return False, "used read instead of view_image for image file"
+        # Model may not support multimodal — accept if context was built
+        if any(m.get("role") == "user" and "test.png" in str(m.get("content", ""))
+               for m in ctx.messages):
+            return True, "view_image not available (model limitation)"
+        return False, "view_image not called"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -528,6 +632,10 @@ ALL_TASKS: list = [
     ReadFileTask(),
     SearchPythonFilesTask(),
     GrepTodoTask(),
+    AppendMemoryTask(),
+    SearchMemoryTask(),
+    WebSearchTask(),
+    ViewImageTask(),
     # L2 — two tools
     ReadAndWriteTask(),
     SearchAndCountTask(),

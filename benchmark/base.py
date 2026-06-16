@@ -96,6 +96,11 @@ class BenchmarkTask:
         """
         return True, ""
 
+    def setup(self, workspace: str) -> None:
+        """Optional hook for custom workspace setup (binary files, etc.).
+        Called after setup_files but before the agent runs."""
+        pass
+
     def post_run_verify(self, workspace: str, ctx: "mangopi_cli.ContextManager") -> Tuple[bool, str]:
         """Extended verification with access to the context messages."""
         return self.verify(workspace)
@@ -132,6 +137,10 @@ class AgentRunner:
         mod.memory_dir = os.path.join(mod.base_persist_dir, "memory")
         mod.goal_file = os.path.join(mod.base_persist_dir, "goal.json")
 
+        # Patch the memory_manager singleton too — it captured memory_dir at import
+        self._saved_memory_manager_dir = mod.memory_manager.memory_dir
+        mod.memory_manager.memory_dir = mod.memory_dir
+
         mod.initialize_system()
 
         # Silence console output
@@ -154,6 +163,8 @@ class AgentRunner:
         mod = mangopi_cli
         for k, v in self._saved_globals.items():
             setattr(mod, k, v)
+
+        mod.memory_manager.memory_dir = self._saved_memory_manager_dir
 
         mod.console.prompt_apply = self._orig_prompt_apply
         self._redirect_out.__exit__(None, None, None)
@@ -206,6 +217,9 @@ class AgentRunner:
             with open(full, "w", encoding="utf-8") as f:
                 f.write(content)
 
+        # Custom setup hook (binary files, etc.)
+        task.setup(self.workspace)
+
         # Build context with system prompt
         ctx = mangopi_cli.ContextManager()
         ctx_file = os.path.join(mangopi_cli.session_dir, "session.json")
@@ -216,16 +230,18 @@ class AgentRunner:
         # Run agent
         user_msg = f"{task.prompt}\n\nCurrent date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         t0 = time.perf_counter()
+        agent_error = None
 
         try:
             mangopi_cli.agent_loop(ctx, ctx_file, user_msg)
         except Exception as exc:
             elapsed = time.perf_counter() - t0
-            return TaskResult(
-                task_name=task.name, level=task.level, passed=False,
-                detail=f"Agent error: {exc}",
-                wall_time_s=round(elapsed, 2),
-                error=f"{type(exc).__name__}: {exc}")
+            agent_error = f"{type(exc).__name__}: {exc}"
+            # Still try to save context and extract metrics for tool-call check
+            try:
+                ctx.save(ctx_file)
+            except Exception:
+                pass
 
         elapsed = time.perf_counter() - t0
 
@@ -257,7 +273,7 @@ class AgentRunner:
             unique_tools=unique, wall_time_s=round(elapsed, 2),
             prompt_tokens=total_prompt, completion_tokens=total_completion,
             total_tokens=total_prompt + total_completion,
-            iterations=iterations)
+            iterations=iterations, error=agent_error)
 
     @staticmethod
     def _extract_metrics(ctx: "mangopi_cli.ContextManager") -> Tuple[List[Dict], int, int, int]:

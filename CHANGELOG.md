@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.27] - 2026-06-16
+
+### Added
+- **`MANGO_MAX_ITER` guard** — new env var (default 100) caps `agent_loop` iterations to prevent runaway loops.
+- **Tool `preview()` methods** for `read`, `write`, `edit`, `search_memory` — improve tool-call display in console.
+- **Benchmark coverage** — 4 new L1 tasks: `L1_append_memory`, `L1_search_memory`, `L1_web_search`, `L1_view_image`.
+
+### Changed
+- **System prompt** — `web_search` guidance now says "use sparingly, at most 3 times per user query".
+
+### Fixed
+- **Python 3.6+ compatibility** — replaced walrus operator in `ContextManager.prepare_for_api()` with explicit `after = self.total_tokens()`.
+
+---
+
 ## [0.1.26] - 2026-06-15
 
 ### Added
