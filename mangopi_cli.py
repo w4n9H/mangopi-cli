@@ -1568,31 +1568,20 @@ class RoutedProvider:  # A provider that scores task complexity and delegates to
     def model(self): return self._current.model
 
     @property
-    def total_providers(self) -> int:
-        return sum(len(v) for v in self._tiers.values())
+    def total_providers(self) -> int: return sum(len(v) for v in self._tiers.values())
 
-    def headers(self) -> dict:
-        return self._current.headers()
+    def headers(self) -> dict: return self._current.headers()
 
-    def build_body(self, messages: List[Dict[str, Any]]) -> dict:
-        return self._current.build_body(messages)
+    def build_body(self, messages: List[Dict[str, Any]]) -> dict: return self._current.build_body(messages)
 
-    def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        return self._current.parse_response(response)
+    def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]: return self._current.parse_response(response)
 
-    # ── routing ──
     _KEYWORD_RULES: List[tuple] = [
-        # score 9 — architectural / system-level design
         (["架构", "设计", "系统", "design", "architect", "distribut", "microservic"], 9),
-        # score 7 — large refactor / migration / concurrency
         (["重构", "refactor", "migrat", "死锁", "deadlock", "并发"], 7),
-        # score 5 — multi-file implementation / integration
         (["实现", "integrat", "优化", "multi", "feature"], 5),
-        # score 3 — targeted fix / debug / modify
         (["修复", "fix", "debug", "test", "修改", "modif", "updat", "chang"], 3),
-        # score 1 — read-only / lookup
-        (["read", "查看", "show", "find", "search", "list", "what", "how", "解释"], 1),
-    ]
+        (["read", "查看", "show", "find", "search", "list", "what", "how", "解释"], 1)]
 
     _SCORING_PROMPT = """\
 Rate this coding task complexity from 1-10 (1=trivial, 10=architectural/system design).
@@ -1637,8 +1626,7 @@ Respond with ONLY a single integer."""
             console.end_spinner()
         return 5
 
-    def route(self, ctx, user_query: str):
-        """Score task complexity and switch to the appropriate tier provider."""
+    def route(self, ctx, user_query: str):  # Score task complexity and switch to the appropriate tier provider.
         kw = self._keyword_score(user_query)
         if kw <= self._thresholds["low_max"]:
             tier = "low"
@@ -1665,8 +1653,7 @@ Respond with ONLY a single integer."""
         print(f"{DIM}→ {tier}: {self._current.model}{RESET}")
 
     @property
-    def _default_tier(self) -> str:
-        return self._default_tier_value
+    def _default_tier(self) -> str: return self._default_tier_value
 
 
 provider = create_provider()
@@ -1869,9 +1856,11 @@ def main():
     if MANGO_ROUTING == "on":
         try:
             provider = RoutedProvider.from_file(providers_file)
-        except Exception as e:
-            console.warning(f"Routing setup failed ({e}), using default provider")
-            provider = create_provider()
+        except Exception:
+            console.warning(f"Failed to load {providers_file}, forcing high-tier fallback")
+            provider = RoutedProvider({
+                "providers": [{"name": MANGO_MODEL, "url": MANGO_API_URL, "model": MANGO_MODEL,
+                               "tier": "high", "api_key": MANGO_KEY or ""}]})
 
     mode = f"smart-routing[{provider.total_providers}]" if MANGO_ROUTING == "on" else provider.model
     print(f"{BOLD}Mango Cli v{__version__}{RESET} | {DIM}{mode} | {project_root}{RESET}\n")

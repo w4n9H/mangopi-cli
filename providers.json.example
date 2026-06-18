@@ -1,0 +1,32 @@
+{
+  "providers": [
+    {
+      "name": "low",
+      "url": "https://api.deepseek.com",
+      "model": "deepseek-v4-flash",
+      "tier": "low",
+      "api_key": "sk-your-key"
+    },
+    {
+      "name": "medium",
+      "url": "https://api.deepseek.com",
+      "model": "deepseek-v4",
+      "tier": "medium",
+      "api_key": "sk-your-key"
+    },
+    {
+      "name": "high",
+      "url": "https://api.deepseek.com",
+      "model": "deepseek-v4-reasoning",
+      "tier": "high",
+      "api_key": "sk-your-key"
+    }
+  ],
+  "routing": {
+    "default_tier": "medium",
+    "score_thresholds": {
+      "low_max": 3,
+      "medium_max": 7
+    }
+  }
+}
