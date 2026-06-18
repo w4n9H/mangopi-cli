@@ -64,37 +64,59 @@ Every new feature follows these rules, in order of priority:
 
 **Approach:**
 
-- Maintain a **Provider Ladder** declared in `~/.mangocli/config.json` or the `MANGO_PROVIDERS` env var:
+- A **scoring-based router** that selects one of three tiers (low / medium / high) per user request, gated behind the `MANGO_ROUTING` env var (default `off` for backward compatibility).
+- Provider list declared in `.mangocli/providers.json`:
 
   ```json
   {
     "providers": [
-      {"name": "fast",   "url": "https://api.deepseek.com",  "model": "deepseek-v4-flash", "tier": "cheap"},
-      {"name": "strong", "url": "https://api.openai.com/v1", "model": "gpt-4o",            "tier": "strong"}
+      {"name": "ds-flash",    "url": "https://api.deepseek.com",  "model": "deepseek-v4-flash",    "tier": "low",    "api_key_env": "DEEPSEEK_KEY"},
+      {"name": "ds-v4",       "url": "https://api.deepseek.com",  "model": "deepseek-v4",          "tier": "medium", "api_key_env": "DEEPSEEK_KEY"},
+      {"name": "ds-reason",   "url": "https://api.deepseek.com",  "model": "deepseek-v4-reasoning", "tier": "high",   "api_key_env": "DEEPSEEK_KEY"},
+      {"name": "gpt4o",       "url": "https://api.openai.com/v1", "model": "gpt-4o",                "tier": "medium", "api_key_env": "OPENAI_KEY"}
     ],
     "routing": {
-      "default": "fast",
-      "upgrade_on": ["goal_mode", "complex_edit", "user_override"]
+      "default_tier": "medium",
+      "score_thresholds": {"low_max": 3, "medium_max": 7}
     }
   }
   ```
 
-- **Routing triggers** (all stdlib heuristics — no extra LLM call):
-  - User enters `/g` Goal mode → auto-upgrade to `strong`
-  - A single `edit` touches > N lines or spans multiple files → upgrade
-  - K consecutive tool failures (`continuous_failures` already exists in `ContextManager`) → upgrade
-  - User can force-switch with `/use strong`
+- **Two-phase scoring** (executed before each `agent_loop` invocation):
 
-- **Downgrade / fallback**: if `strong` fails or times out, fall back to `fast` and surface the fallback to the user.
+  ```
+  Phase 1 — Keyword scoring (0 ms, 0 token):
+    Matches user query against a small, hardcoded keyword set.
+    score ≤ 2 or ≥ 8 → short-circuit to tier directly.
+    3 ≤ score ≤ 7 → proceed to Phase 2.
 
-**Why it fits the philosophy:** Pure stdlib heuristics (string length / counts). Adds < 200 LOC.
+  Phase 2 — LLM scoring (~300–500 ms, minimal token):
+    Sends compressed tool-call fingerprints from recent turns
+    + current query to the tier=high model for a 1–10 rating.
+    Fingerprints are compact, e.g.: [read, edit, read, grep].
+
+  Final score = keyword_score × 0.3 + llm_score × 0.7
+    ≤ 3  → low
+    4–7 → medium
+    ≥ 8  → high
+  ```
+
+- **Key design decisions:**
+  - Once a tier is chosen, `agent_loop` uses that model for the entire turn — no mid-loop switching, upgrading, or downgrading.
+  - Provider failures are surfaced as errors; no automatic fallback (a high-tier task must not be silently degraded).
+  - Keyword set is hardcoded in the source (no extra config file); small and curated.
+  - `MANGO_ROUTING=off` (or unset) → traditional single-model mode via `MANGO_MODEL` (current behavior, fully backward compatible).
+
+**Why it fits the philosophy:** Pure stdlib (JSON parse, regex matching, `urllib` for LLM scoring call). Adds < 200 LOC.
 
 **Acceptance criteria:**
 
-- [ ] `MANGO_PROVIDERS` supports JSON multi-provider declaration
-- [ ] Ladder parsing + routing logic has full unit tests
-- [ ] At least one trigger (Goal mode) works end-to-end
-- [ ] Failure fallback has clear logging
+- [ ] `MANGO_ROUTING` env var gates the feature; unset → traditional mode unchanged
+- [ ] `.mangocli/providers.json` parsed and validated on startup
+- [ ] Keyword scoring returns correct values for defined keywords
+- [ ] LLM scoring prompt is compact and returns a single integer
+- [ ] Final score mapping (low / medium / high) has full unit tests
+- [ ] End-to-end: simple query routes to low, complex design routes to high
 
 ---
 

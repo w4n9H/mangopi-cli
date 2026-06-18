@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.28] - 2026-06-18
+
+### Added
+- **`MANGO_ROUTING` env var** — enables Smart Provider Routing (default `off`, backward compatible).
+- **`.mangocli/providers.json`** — multi-provider configuration with low/medium/high three tiers, each with `model`/`url`/`api_key`/`tier`.
+- **`RoutedProvider` class** — inherits BaseProvider interface via duck-typing; delegates `api_url`/`model`/`headers`/`build_body`/`parse_response` to the current sub-provider.
+- **Two-phase scoring** — keyword rules (hardcoded 2-char Chinese + short English stems) + LLM scoring via high-tier model. Formula: `keyword × 0.3 + llm × 0.7`, thresholds configurable.
+- **`ContextManager.tool_fingerprint()`** — extracts `[[user_query, [tool,...]], ...]` pairs from recent turns for LLM scoring context.
+- **`BaseProvider._sanitize_messages`** — cross-provider message compatibility; folds reasoning content between formats (`reasoning_content` ↔ `reasoning_details`) based on `_reasoning_field`.
+- **Model switch hints** — prints `→ tier: model` on provider switch; startup banner shows `smart-routing[N]`.
+- **34 unit tests** — `test/test_provider_routing.py` covering keyword scoring, config parsing, routing logic, LLM scoring edge cases, and cross-provider delegation.
+
+### Changed
+- **ROADMAP.md** — Smart Provider Routing section updated to final design: three tiers, two-phase scoring, `RoutedProvider` delegation, no mid-loop switching.
+- **`create_provider()`** — refactored to delegate to shared `_new_provider()` factory.
+
 ## [0.1.27] - 2026-06-16
 
 ### Added
