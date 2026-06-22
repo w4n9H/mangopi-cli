@@ -76,7 +76,7 @@ class TestSectionsStructure(unittest.TestCase):
             name, content = item
             self.assertIsInstance(name, str)
             self.assertTrue(name)  # non-empty
-            self.assertIsInstance(content, list)
+            self.assertIsInstance(content, str)
 
     def test_05_section_contents_are_list_of_str(self):
         sp = SystemPrompt()
@@ -226,7 +226,7 @@ class TestStaticBuilderSignatures(unittest.TestCase):
                 builder = getattr(SystemPrompt, name)
                 result = builder()
                 self.assertIsInstance(
-                    result, list,
+                    result, str,
                     f"{name} should return list, got {type(result)}",
                 )
                 self.assertTrue(

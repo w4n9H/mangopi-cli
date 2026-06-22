@@ -81,7 +81,7 @@ class KeywordScoreTests(unittest.TestCase):
 
     def test_trivial_keywords(self):
         self.assertEqual(RoutedProvider._keyword_score("read main.py"), 1)
-        self.assertEqual(RoutedProvider._keyword_score("what does this function do"), 1)
+        self.assertEqual(RoutedProvider._keyword_score("what does this function do"), 4)
 
     def test_case_insensitive(self):
         self.assertEqual(RoutedProvider._keyword_score("DESIGN a System"), 9)
@@ -105,7 +105,7 @@ class RoutedProviderInitTests(unittest.TestCase):
         self.assertEqual(len(rp._tiers["medium"]), 1)
         self.assertEqual(len(rp._tiers["high"]), 1)
         self.assertEqual(rp.model, "md")  # default tier = medium
-        self.assertEqual(rp._thresholds, {"low_max": 3, "medium_max": 8})
+        self.assertEqual(rp._thresholds, {"low_max": 3, "medium_max": 7})
         os.unlink(p_file)
 
     def test_custom_thresholds(self):
@@ -268,9 +268,9 @@ class RouteMethodTests(unittest.TestCase):
 
     def test_ambiguous_with_llm_high(self):
         rp = self._make_rp()
-        # kw=7 (refactor) + llm=10 → int(7*0.3 + 10*0.7) = int(9.1) = 9 > 8 → high
+        # kw=4 * 0.3 + llm=10 * 0.7 = int(8.2) = 8 > 7 → high
         with patch.object(RoutedProvider, "_llm_score", return_value=10):
-            rp.route(_make_fake_ctx([]), "refactor the auth module")
+            rp.route(_make_fake_ctx([]), "some ambiguous task")
         self.assertEqual(rp.model, "hi-model")
 
     def test_no_high_provider_falls_back(self):

@@ -202,8 +202,7 @@ class Printer:
         self._write_line(f"  {_c(_i18n('context.compact.strategy'), GREY)} {_c(strategy, ORANGE)}")
         self._write_line(
             f"  {_c('tokens', GREY)} {_c(f'{before_tokens:,}', RED)} {_c('→', GREY)} "
-            f"{_c(f'{after_tokens:,}', GREEN)} {_c(f'(-{saved:,})', ORANGE)}"
-        )
+            f"{_c(f'{after_tokens:,}', GREEN)} {_c(f'(-{saved:,})', ORANGE)}")
         self._write_line(f"  {_c('context', GREY)} {_c(f'{percent}%', color)}")
 
     @staticmethod
@@ -222,8 +221,7 @@ class Printer:
         old_lines = old.splitlines()
         new_lines = new.splitlines()
         diff_lines = difflib.unified_diff(
-            old_lines, new_lines, fromfile=f"a/{filename}", tofile=f"b/{filename}", lineterm="", n=context,
-        )
+            old_lines, new_lines, fromfile=f"a/{filename}", tofile=f"b/{filename}", lineterm="", n=context)
         for dl in diff_lines:
             if dl.startswith("+") and not dl.startswith("+++"):
                 self._write_line(_c(dl, GREEN))
@@ -290,19 +288,11 @@ def _is_directory_heavy(command: str) -> bool:  # 判断是否是目录遍历类
 
 
 def _filter_directory_output(lines: List[str]) -> List[str]:  # 过滤大型/无意义目录
-    filtered = []
-    for line in lines:
-        skip = False
-        for d in FILTERED_DIRS:
-            if (f"/{d}/" in line or f"/{d}:"
-                    in line or line.startswith(f"{d}/") or line.startswith(f"./{d}/") or line.startswith(f"./{d}:") or
-                    line == d or line == f"./{d}" or line.endswith(f"/{d}")):
-                skip = True
-                break
-        if skip:
-            continue
-        filtered.append(line)
-    return filtered
+    def _matches(line, d):
+        return (f"/{d}/" in line or f"/{d}:" in line or line.startswith(f"{d}/") or
+                line.startswith(f"./{d}/") or line.startswith(f"./{d}:") or
+                line == d or line == f"./{d}" or line.endswith(f"/{d}"))
+    return [line for line in lines if not any(_matches(line, d) for d in FILTERED_DIRS)]
 
 
 def _limit_output_lines(lines: List[str], max_lines: int = 1000) -> List[str]:  # 限制输出行数
@@ -329,12 +319,10 @@ def _check_command_safety(command: str):
         (r'\bsudo\s+.*rm\b', 4), (r'\bsu\s+-\b', 4), (r'\bsu\s+root\b', 4),
         (r'\bkill\s+-9\s+1\b', 5), (r'\bkillall\s+-9\b', 5), (r'\bpkill\s+-9\b', 5), (r'\bkill\s+-9\s+-\d+\b', 5),
         (r'\bexport\s+PATH=', 6), (r'\bunset\s+PATH\b', 6), (r'>>?\s*/etc/', 6), (r'\becho\s+.*>\s*/etc/', 6),
-        (r'\bhistory\s+-c\b', 7), (r'>\s*/dev/null\s+2>&1', 7),
-    ]
+        (r'\bhistory\s+-c\b', 7), (r'>\s*/dev/null\s+2>&1', 7),]
     dangerous_i18n = {
         1: "safety.danger.rm", 2: "safety.danger.mkfs", 3: "safety.danger.chmod", 4: "safety.danger.sudo",
-        5: "safety.danger.kill", 6: "safety.danger.env", 7: "safety.danger.history"
-    }
+        5: "safety.danger.kill", 6: "safety.danger.env", 7: "safety.danger.history"}
     command = command.strip()
     if not command:
         return False, None
@@ -344,8 +332,7 @@ def _check_command_safety(command: str):
     return False, None
 
 
-def _validate_file_path(path: str) -> Optional[str]:
-    """ 验证给定路径是否在项目根目录内, 返回 None 表示合法，否则返回错误描述字符串。"""
+def _validate_file_path(path: str) -> Optional[str]:  # 验证给定路径是否在项目根目录内
     abs_path = os.path.abspath(path)
     real_path = os.path.realpath(abs_path)
     real_root = os.path.realpath(project_root)
@@ -377,40 +364,24 @@ def _request(url: str, body: dict, headers: dict = None, timeout: int = 300, max
 
         if attempt < max_retries:
             delay = 1 * (2 ** attempt)
-            console.warning(
-                f"Request failed (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s: {last_exception}")
+            console.warning(f"Request failed (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.1f}s")
             time.sleep(delay)
         else:
             break
     raise last_exception
 
 
-def _bocha_search_api(
-        query: str = None,
-        freshness: str = "noLimit",  # 搜索指定时间范围内的网页 oneDay oneWeek oneMonth oneYear
-        summary: bool = True,  # 是否显示文本摘要
-        include: str = "",  # 指定搜索的网站范围。多个域名使用|或,分隔，最多不能超过20个
-        exclude: str = "",  # 排除搜索的网站范围。多个域名使用|或,分隔，最多不能超过20个
-        count: int = 10,  # 返回结果的条数（实际返回结果数量可能会小于count指定的数量），可填范围1-50，默认10
-        bocha_key: str = None, bocha_url: str = "https://api.bocha.cn/v1/web-search"):
+def _bocha_search_api(query: str = None, freshness: str = "noLimit",  summary: bool = True,
+                      include: str = "",  exclude: str = "",  count: int = 10,
+                      bocha_key: str = None, bocha_url: str = "https://api.bocha.cn/v1/web-search"):
     headers = {"Content-Type": "application/json", "Accept": "application/json", "Authorization": f"Bearer {bocha_key}"}
     payload = {"query": query, "freshness": freshness, "summary": summary,
                "include": include, "exclude": exclude, "count": count}
-    rlist = []
-    bocha_json = _request(url=bocha_url, body=payload, headers=headers)
-    if isinstance(bocha_json["data"], dict):
-        if isinstance(bocha_json["data"]["webPages"], dict):
-            for m in bocha_json["data"]["webPages"]["value"]:
-                rlist.append(
-                    {
-                        "date": m.get("dateLastCrawled", ""),
-                        "title": m.get("name", ""),
-                        "link": m.get("url", ""),
-                        "summary": m.get("summary", ""),
-                        "content": m.get("content", "")
-                    }
-                )
-    return rlist
+    data = _request(bocha_url, payload, headers).get("data", {})
+    pages = data.get("webPages", {}) if isinstance(data, dict) else {}
+    return [{"date": m.get("dateLastCrawled", ""), "title": m.get("name", ""),
+             "link": m.get("url", ""), "summary": m.get("summary", ""), "content": m.get("content", "")}
+            for m in pages.get("value", [])] if isinstance(pages, dict) else []
 
 
 def _goal_load() -> Optional[Dict[str, Any]]:
@@ -432,20 +403,17 @@ class MemoryManager:
     def __init__(self):
         self.memory_dir = memory_dir
 
-    def today_path(self):
-        return os.path.join(self.memory_dir, datetime.now().strftime("%Y-%m-%d.md"))
+    def today_path(self): return os.path.join(self.memory_dir, datetime.now().strftime("%Y-%m-%d.md"))
 
     def append(self, content: str):
         with open(self.today_path(), "a", encoding="utf-8") as f:
             f.write(content.strip() + "\n\n")
 
     @staticmethod
-    def _tokenize(text: str):
-        return [x.strip().lower() for x in text.split() if x.strip()]
+    def _tokenize(text: str): return [x.strip().lower() for x in text.split() if x.strip()]
 
     @staticmethod
-    def _split_chunks(text: str):
-        return [c.strip() for c in re.split(r"\n\s*\n", text) if c.strip()]
+    def _split_chunks(text: str): return [c.strip() for c in re.split(r"\n\s*\n", text) if c.strip()]
 
     def search(self, query: str, top_k: int = 10):
         keywords = self._tokenize(query)
@@ -540,8 +508,7 @@ class SkillManager:
                 if self.level == "resources":
                     skills[skill_name].update({
                         "scripts": _load_directory(skill_dir, "scripts"),
-                        "references": _load_directory(skill_dir, "references")
-                    })
+                        "references": _load_directory(skill_dir, "references")})
         return skills
 
     def reload(self):
@@ -551,8 +518,7 @@ class SkillManager:
             self.skills = {}
             console.error(f"reload skills err: {err}")
 
-    def all(self) -> Dict[str, dict]:
-        return self.skills
+    def all(self) -> Dict[str, dict]: return self.skills
 
     def descriptions(self) -> str:
         return "\n".join(f"- {name}: {data['meta'].get('description', '')}" for name, data in self.skills.items())
@@ -747,8 +713,7 @@ class BashTool(ToolBase):
         return not is_dangerous or console.prompt_apply(f"Execute dangerous cmd ({reason})? {args['cmd']}")
 
     def run(self, args):
-        proc = subprocess.Popen(args["cmd"], shell=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(args["cmd"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
             stdout, _ = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
@@ -818,8 +783,7 @@ class AppendMemoryTool(ToolBase):
     params = {
         "content": {
             "type": "string",
-            "description": "Concise 5-10 sentence note. Prefix with a tag: "
-                           "[PREFERENCE]/[DECISION]/[BUG-FIX]/[CONVENTION]."}}
+            "description": "Concise 5-10 sentence note. Prefix tag: [PREFERENCE]/[DECISION]/[BUG-FIX]/[CONVENTION]."}}
 
     def run(self, args):
         memory_manager.append(args["content"])
@@ -910,8 +874,6 @@ class GoalTool(ToolBase):
         _goal_clear()
         return self.ok("goal cleared, call `attempt_completion` tool finish task.")
 
-    _HANDLERS = {"plan": _action_plan, "step": _action_step, "show": _action_show, "finish": _action_finish}
-
 
 class WebSearchTool(ToolBase):
     name = "web_search"
@@ -919,15 +881,13 @@ class WebSearchTool(ToolBase):
         "Search the live web via the Bocha (博查) AI Search API and return a list of results with "
         "per-page AI summaries. Use this when the user asks for the latest docs, news, blog posts, "
         "or any information that requires looking up something beyond the local filesystem. "
-        "Requires the MANGO_SEARCH_API_KEY env var to be set; returns a clear error otherwise."
-    )
+        "Requires the MANGO_SEARCH_API_KEY env var to be set; returns a clear error otherwise.")
     params = {
         "query": {"type": "string", "description": "Natural-language search query, e.g. 'FastAPI vs Flask in 2026'."},
         "top_k": {"type": "number?", "description": "How many results to return (1-50, default 10)."},
         "freshness": {"type": "string?",
                       "description": "Time filter for results: 'noLimit' (default), "
-                                     "'oneDay', 'oneWeek', 'oneMonth', 'oneYear'."},
-    }
+                                     "'oneDay', 'oneWeek', 'oneMonth', 'oneYear'."}}
     preview_lines = 0
     preview_width = 200
     use_spinner = True
@@ -1056,8 +1016,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]
-}
+        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
 
 
 def tool_schema():
@@ -1099,8 +1058,7 @@ class ContextManager:
         self.messages.append(content)
 
     def append_tool(self, tool_call_id: str, tool_name: str, content: Any):
-        msg = {
-            "role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name, "ts": int(time.time())}
+        msg = {"role": "tool", "tool_call_id": tool_call_id, "tool_name": tool_name, "ts": int(time.time())}
         if isinstance(content, dict) and content.get("type") == "image":
             msg["content"] = [{"type": "text", "text": content.get("text", "image")},
                               {"type": "image_url", "image_url": {"url": content["image_url"]}}]
@@ -1160,11 +1118,7 @@ class ContextManager:
             turns.append(current)
         return turns
 
-    def tool_fingerprint(self, n_turns: int = 10) -> str:
-        """Return compact (user_query, [tool, ...]) pairs from recent turns.
-
-        e.g. '[["fix login bug", ["read","edit","bash"]], ["add tests", ["read","edit"]]]'
-        """
+    def tool_fingerprint(self, n_turns: int = 10) -> str:  # Return (user_query, [tool, ...]) pairs from recent turns.
         turns = self.split_turns()
         recent = turns[-n_turns:] if len(turns) > n_turns else turns
         fingerprints = []
@@ -1305,59 +1259,50 @@ class ContextManager:
         self.messages = systems + [copy.deepcopy(m) for turn in trimmed_recent_turns for m in turn]  # 最终 fallback
 
     def full_compact(self):    # 手动执行，调用模型进行大规模的摘要生成，后续实现
-        _full_compact_prompt = [
-            "Create a detailed summary of the conversation so far.\n",
-            "Focus on: user's original intent, files modified with key code snippets, "
-            "errors encountered and their fixes, and the current work in progress.\n",
-            "Use this structure:\n",
-            "1. Primary Request and Intent\n",
-            "2. Key Technical Concepts\n",
-            "3. Files and Code Sections (most recent first)\n",
-            "4. Errors and fixes\n",
-            "5. Problem Solving\n",
-            "6. All user messages\n",
-            "7. Pending Tasks\n",
-            "8. Current Work\n\n",
-            "Output in <analysis>...</analysis><summary>...</summary> format.\n",
-            "Here's an example of how your output should be structured:\n\n",
-            "<analysis>\n",
-            "[Your thought process, ensuring all points are covered thoroughly and accurately]\n",
-            "</analysis>\n\n",
-            "<summary>\n",
-            "1. Primary Request and Intent:\n",
-            "  [Detailed description]\n\n",
-            "2. Key Technical Concepts:\n",
-            "  - [Concept 1]\n",
-            "  - [...]\n\n",
-            "3. Files and Code Sections:\n",
-            "  - [File Name 1]\n",
-            "    - [Summary of why this file is important]\n",
-            "    - [Summary of the changes made to this file, if any]\n",
-            "    - [Important Code Snippet]\n",
-            "  - [File Name 2]\n",
-            "    - [Important Code Snippet]\n",
-            "  - [...]\n\n",
-            "4. Errors and fixes:\n",
-            "  - [Detailed description of error 1]:\n",
-            "    - [How you fixed the error]\n",
-            "    - [User feedback on the error if any]\n",
-            "  - [...]\n\n",
-            "5. Problem Solving:\n",
-            "[Description of solved problems and ongoing troubleshooting]\n\n",
-            "6. All user messages:\n",
-            "  - [Detailed non tool use user message]\n",
-            "  - [...]\n\n",
-            "7. Pending Tasks:\n",
-            "  - [Task 1]\n",
-            "  - [...]\n\n",
-            "8. Current Work:\n",
-            " [Precise description of current work]\n\n",
-            "</summary>\n\n"]
+        _full_compact_prompt = """\
+        Create a detailed summary of the conversation so far.
+        Focus on: user's original intent, files modified with key code snippets, errors encountered and their fixes, 
+        and the current work in progress.
+        Use this structure:
+        1. Primary Request and Intent
+        2. Key Technical Concepts
+        3. Files and Code Sections (most recent first)
+        4. Errors and fixes
+        5. Problem Solving
+        6. All user messages
+        7. Pending Tasks
+        8. Current Work
+
+        Output in <analysis>...</analysis><summary>...</summary> format. Example:
+
+        <analysis>
+        [Your thought process, ensuring all points are covered thoroughly and accurately]
+        </analysis>
+
+        <summary>
+        1. Primary Request and Intent:
+          [Detailed description]
+        2. Key Technical Concepts:
+          - [Concept 1] - [...]
+        3. Files and Code Sections:
+          - [File Name 1] - [why important] - [changes made] - [Important Code Snippet]
+          - [File Name 2] - [Important Code Snippet]
+        4. Errors and fixes:
+          - [Error 1]: [How fixed] [User feedback if any]
+        5. Problem Solving:
+          [Description of solved problems and ongoing troubleshooting]
+        6. All user messages:
+          - [Detailed non tool use user message]
+        7. Pending Tasks:
+          - [Task 1]
+        8. Current Work:
+          [Precise description of current work]
+        </summary>
+        """
         try:
-            self.append_user("\n".join(_full_compact_prompt))
+            self.append_user(_full_compact_prompt)
             respon = provider.parse_response(_request(
-                provider.api_url, provider.build_body(self.messages), headers=provider.headers()
-            ))
+                provider.api_url, provider.build_body(self.messages), headers=provider.headers()))
             if respon.get("content"):
                 systems = [m for m in self.messages if m.get("role") == "system"]
                 self.messages = systems
@@ -1433,17 +1378,18 @@ class BaseProvider:
         return val or ""
 
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:  # Strip non-standard fields
+        def _text(_content):
+            if isinstance(_content, list):
+                return next((b.get("text", "") for b in _content if b.get("type") == "text"), "[image content omitted]")
+            return _content
+
         clean = []
         for m in messages:
             role = m.get("role")
             if role == "system":
                 clean.append({"role": "system", "content": m.get("content", "")})
             elif role == "user":
-                content = m.get("content", "")
-                if isinstance(content, list):
-                    content = next(
-                        (b.get("text", "") for b in content if b.get("type") == "text"), "[image content omitted]")
-                clean.append({"role": "user", "content": content})
+                clean.append({"role": "user", "content": _text(m.get("content", ""))})
             elif role == "assistant":
                 msg = {"role": "assistant", "content": m.get("content") or ""}
                 if m.get("tool_calls"):
@@ -1459,11 +1405,8 @@ class BaseProvider:
                             msg["reasoning_content"] = reasoning
                 clean.append(msg)
             elif role == "tool":
-                content = m.get("content", "")
-                if isinstance(content, list):
-                    content = next(
-                        (b.get("text", "") for b in content if b.get("type") == "text"), "[image content omitted]")
-                clean.append({"role": "tool", "tool_call_id": m.get("tool_call_id", ""), "content": content})
+                clean.append({"role": "tool", "tool_call_id": m.get("tool_call_id", ""),
+                              "content": _text(m.get("content", ""))})
         return clean
 
 
@@ -1472,23 +1415,11 @@ class OpenAIProvider(BaseProvider):
         return {"model": self.model, "messages": self._sanitize_messages(messages), "tools": tool_schema(), "stream": False}
 
     def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        choices = response.get("choices", [])
-        if not choices:
-            return {
-                "finish_reason": None,
-                "raw_message": {},
-                "content": "",
-                "reasoning_content": "",
-                "tool_calls": [],
-                "has_tool_calls": False,
-                "model": response.get("model", ""),
-                "usage": response.get("usage", {})
-            }
-        choice = choices[0]
+        choice = (response.get("choices") or [{}])[0]
         message = choice.get("message", {})
         tool_calls = self.normalize_tool_calls(message)
         return {
-            "finish_reason": choice.get("finish_reason", "stop"),
+            "finish_reason": choice.get("finish_reason"),
             "raw_message": message,
             "content": message.get("content") or "",
             "reasoning_content": self.extract_reasoning(message),
@@ -1549,7 +1480,7 @@ class RoutedProvider:  # A provider that scores task complexity and delegates to
             raise ValueError("No providers defined in config")
 
         routing = config.get("routing", {})
-        _defaults_score_thresholds = {"low_max": 3, "medium_max": 8}
+        _defaults_score_thresholds = {"low_max": 3, "medium_max": 7}
         self._thresholds = {**_defaults_score_thresholds, **routing.get("score_thresholds", {})}
         default_tier = routing.get("default_tier", "medium")
         self._default_tier_value = default_tier if self._tiers.get(default_tier) else \
@@ -1577,11 +1508,21 @@ class RoutedProvider:  # A provider that scores task complexity and delegates to
     def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]: return self._current.parse_response(response)
 
     _KEYWORD_RULES: List[tuple] = [
-        (["架构", "设计", "系统", "design", "architect", "distribut", "microservic"], 9),
-        (["重构", "refactor", "migrat", "死锁", "deadlock", "并发"], 7),
-        (["实现", "integrat", "优化", "multi", "feature"], 5),
-        (["修复", "fix", "debug", "test", "修改", "modif", "updat", "chang"], 3),
-        (["read", "查看", "show", "find", "search", "list", "what", "how", "解释"], 1)]
+        (["架构", "设计", "系统", "design", "architect", "distribut", "microservic", "scalab", "infrastructur",
+          "platform", "framework", "整体", "overall", "可扩展", "高可用", "容灾", "分布式"], 9),
+        (["重构", "refactor", "migrat", "死锁", "deadlock", "并发", "concurren", "性能优化", "perform", "tun", "rewrit",
+          "async", "multithread", "异步", "迁移", "升级", "upgrad", "重写"], 7),
+        (["实现", "integrat", "优化", "multi", "feature", "implement", "api", "interfac", "modul", "component",
+          "databas", "config", "开发", "集成", "接口", "模块", "组件", "数据库", "存储", "stor"], 5),
+        (["修复", "fix", "debug", "test", "修改", "modif", "update", "chang", "error", "bug", "issue", "adjust",
+          "patch", "correct", "错误", "问题", "调整", "更正", "改动", "alter"], 3),
+        (["read", "查看", "show", "find", "search", "解释", "explain", "搜索", "查询", "query", "简单",
+          "display", "获取", "了解", "描述", "describe"], 1),
+    ]
+
+    _ANGER_KEYWORDS: List[str] = [
+        "fuck", "fuxx", "f**k", "shit", "damn", "asshole", "bastard", "傻子", "笨蛋", "蠢货", "白痴", "脑残", "sb", "废物",
+        "垃圾", "特么", "卧槽", "我操", "cnm", "tmd", "废物", "傻x"]
 
     _SCORING_PROMPT = """\
 Rate this coding task complexity from 1-10 (1=trivial, 10=architectural/system design).
@@ -1600,6 +1541,9 @@ Respond with ONLY a single integer."""
     @staticmethod
     def _keyword_score(query: str) -> int:
         q = query.lower()
+        for kw in RoutedProvider._ANGER_KEYWORDS:  # 愤怒检测优先：直接返回最高分 10
+            if kw in q:
+                return 10
         for keywords, score in RoutedProvider._KEYWORD_RULES:
             for kw in keywords:
                 if kw in q:
@@ -1637,7 +1581,7 @@ Respond with ONLY a single integer."""
             if high:
                 fp = ctx.tool_fingerprint()
                 llm = self._llm_score(user_query, fp, high[0])
-                final = int(kw * 0.3 + llm * 0.7)
+                final = round(kw * 0.3 + llm * 0.7)
                 if final <= self._thresholds["low_max"]:
                     tier = "low"
                 elif final <= self._thresholds["medium_max"]:
@@ -1726,85 +1670,70 @@ class SystemPrompt:
         self.sections.append(("environment", self._build_environment()))
 
     @staticmethod
-    def _build_base_intro() -> List[str]:  # 基础身份和核心约束
-        return [
-            "You are an interactive agent that helps users with software engineering tasks. Use the instructions "
-            "below and the tools available to you to assist the user.\n",
-            "IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are "
-            "for helping the user with programming. For file paths, always prefer absolute paths when possible. If "
-            "you need to read a directory, use the bash tool (ls) because the read tool cannot read directories.\n",]
+    def _build_base_intro() -> str:
+        return ("You are an interactive agent that helps users with software engineering tasks. "
+                "Use the instructions below and the tools available to you to assist the user.\n"
+                "IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are "
+                "for helping the user with programming. For file paths, always prefer absolute paths when possible. If "
+                "you need to read a directory, use the bash tool (ls) because the read tool cannot read directories.\n")
 
     @staticmethod
-    def _build_tool_guidance() -> List[str]:  # 工具使用指导
-        return [
-            "## Tool Selection\n\n",
-            "Use the dedicated tool when one exists (read/write/edit/search/grep/search_memory/"
-            "append_memory/attempt_completion). Reach for **bash** only when no dedicated tool fits.\n",
-            "Use **edit** (not write) for small in-place changes; ensure `old` is unique or pass `all=true`.\n",
-            "Use **search_memory** for long-term knowledge, **append_memory** only for "
-            "architecture decisions / persistent preferences (not ephemeral context).\n",
-            "Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
-            "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
-            "but call `view_image` directly when the path is computed or generated.\n",
-            "Use **web_search** for the latest docs, news, or anything that requires the live web "
-            "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var. "
-            "Use sparingly — at most 3 times per user query to avoid excessive API calls.\n",
-            "Always finish with **attempt_completion** to present the final result.\n\n",]
+    def _build_tool_guidance() -> str:
+        return ("## Tool Selection\n\n"
+                "Use the dedicated tool when one exists (read/write/edit/search/grep/search_memory/"
+                "append_memory/attempt_completion). Reach for **bash** only when no dedicated tool fits.\n"
+                "Use **edit** (not write) for small in-place changes; ensure `old` is unique or pass `all=true`.\n"
+                "Use **search_memory** for long-term knowledge, **append_memory** only for "
+                "architecture decisions / persistent preferences (not ephemeral context).\n"
+                "Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
+                "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
+                "but call `view_image` directly when the path is computed or generated.\n"
+                "Use **web_search** for the latest docs, news, or anything that requires the live web "
+                "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var. "
+                "Use sparingly — at most 3 times per user query to avoid excessive API calls.\n"
+                "Always finish with **attempt_completion** to present the final result.\n\n")
 
     @staticmethod
-    def _build_skills_guidance() -> List[str]:
+    def _build_skills_guidance() -> str:
         desc = skill_manager.descriptions()
-        if desc:
-            return [
-                "## Skills Selection Guidelines\n\n",
-                f"{desc}\n\n",
-                "- If an installed skill is relevant, call use_skill first before proceeding.\n",
-                "- Skills may contain: workflows, best practices, reusable scripts, references\n\n"]
-        else:
-            return ["## Skills Selection Guidelines\n\n", "No skills available.\n\n"]
+        if not desc:
+            return "## Skills Selection Guidelines\n\nNo skills available.\n\n"
+        return (f"## Skills Selection Guidelines\n\n{desc}\n\n"
+                "- If an installed skill is relevant, call use_skill first before proceeding.\n"
+                "- Skills may contain: workflows, best practices, reusable scripts, references\n\n")
 
     @staticmethod
-    def _build_environment() -> List[str]:  # 动态环境信息注入
+    def _build_environment() -> str:
         os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
-        python_ver = sys.version.split()[0]
-        return [
-            "## Environment\n",
-            f"- Working directory: {project_root}\n",
-            f"- Operating system: {os_info}\n",
-            f"- Python version: {python_ver}\n",
-            f"- Shell: {os.environ.get('SHELL', 'unknown')}\n",]
+        return (f"## Environment\n"
+                f"- Working directory: {project_root}\n"
+                f"- Operating system: {os_info}\n"
+                f"- Python version: {sys.version.split()[0]}\n"
+                f"- Shell: {os.environ.get('SHELL', 'unknown')}\n")
 
     @staticmethod
-    def _build_user_rules() -> List[str]:
-        """ 记忆加载, .mangocli/MEMORY.md 存在，则将其内容作为记忆注入. """
+    def _build_user_rules() -> str:
         memory_path = os.path.join(project_root, ".mangocli", "MANGO.md")
         if not os.path.exists(memory_path) or os.path.getsize(memory_path) == 0:
-            return ["## User Rules\n\n", "No user-defined rules.\n"]
-        content = open(memory_path, "r", encoding="utf-8").readlines()
-        return [f"## User Rules\n\n"] + content
+            return "## User Rules\n\nNo user-defined rules.\n"
+        return "## User Rules\n\n" + open(memory_path, "r", encoding="utf-8").read()
 
     @staticmethod
-    def _build_safety() -> List[str]:
-        return [
-            "## Safety\n\n",
-            "Destructive commands and any access outside the project root require explicit user confirmation.\n\n",]
+    def _build_safety() -> str:
+        return ("## Safety\n\n"
+                "Destructive commands and any access outside the project root require explicit user confirmation.\n\n")
 
     @staticmethod
-    def _build_builtin_rules() -> List[str]:
-        return [
-            "## Built-in Rules\n\n",
-            "**1. Think before coding.** State assumptions. If uncertain, ask rather than guess.\n",
-            "**2. Minimum code.** If 200 lines can be 50, rewrite. No features beyond what was asked.\n",
-            "**3. Surgical changes.** Touch only what you must. Don't 'improve' adjacent code or "
-            "refactor things that aren't broken. Match existing style.\n",
-            "**4. Verify before completion.** Transform tasks into verifiable goals: "
-            "'Write tests for X, then make them pass.' For multi-step work, state a brief plan first.\n\n",]
+    def _build_builtin_rules() -> str:
+        return ("## Built-in Rules\n\n"
+                "**1. Think before coding.** State assumptions. If uncertain, ask rather than guess.\n"
+                "**2. Minimum code.** If 200 lines can be 50, rewrite. No features beyond what was asked.\n"
+                "**3. Surgical changes.** Touch only what you must. Don't 'improve' adjacent code or "
+                "refactor things that aren't broken. Match existing style.\n"
+                "**4. Verify before completion.** Transform tasks into verifiable goals: "
+                "'Write tests for X, then make them pass.' For multi-step work, state a brief plan first.\n\n")
 
-    def assemble(self) -> str:  # 将所有 section 按顺序拼接成完整的 system prompt。
-        _basic = []
-        for _, content in self.sections:
-            _basic.append("".join(content))
-        return "\n\n".join(_basic)
+    def assemble(self) -> str: return "\n\n".join(content for _, content in self.sections)
 
 
 def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
