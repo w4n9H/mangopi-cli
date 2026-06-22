@@ -15,7 +15,9 @@ import urllib.request
 import glob as globlib
 import platform
 import base64
+import logging
 import mimetypes
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -533,6 +535,64 @@ class SkillManager:
 
 
 skill_manager = SkillManager()
+
+
+# --- Flash-ext: Thinking Framework System ---
+class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 tool call 模式选择和注入结构化思考框架。
+    KEYWORDS = {"debug": ["报错", "bug", "error", "失败", "fail", "慢", "slow", "崩溃", "crash", "排查", "debug"],
+                "design": ["设计", "design", "架构", "architect", "方案", "选型", "规划"],
+                "explain": ["什么是", "解释", "explain", "区别", "原理", "怎么理解", "what is"],
+                "optimize": ["优化", "optimize", "性能", "performance", "加速", "提升"],
+                "implement": ["实现", "implement", "写", "create", "build", "开发", "生成"]}
+
+    PHASES = {
+        "exploring": lambda tools: tools and all(t in ("read", "grep", "search", "search_memory") for t in tools),
+        "executing": lambda tools: tools and any(t in ("edit", "write") for t in tools),
+        "verifying": lambda tools: tools and sum(1 for t in tools if t == "bash") >= 2}
+
+    PHASE_MAP = {"exploring": "investigate", "executing": "implement", "verifying": "verify", "stuck": "reevaluate"}
+
+    def __init__(self):
+        self.frameworks = {
+            "debug": [
+                "先复现问题，确认触发条件", "列出所有可能的原因，按概率排序", "对每个原因设计验证方法", "逐一排除，找到根因",
+                "给出修复方案和验证步骤"],
+            "design": [
+                "明确需求和约束条件", "列出 2-3 个可行方案", "对比方案的优缺点", "选择一个方案并说明理由", "给出实现的关键步骤"],
+            "explain": [
+                "先给一句话总结", "再展开关键细节", "最后给一个实际例子"],
+            "optimize": [
+                "先测量当前性能基线", "定位瓶颈(用数据说话,不要猜)", "针对瓶颈提出优化方案", "预估优化效果", "给出验证方法"],
+            "implement": [
+                "理解需求，确认输入输出", "设计数据结构和核心逻辑", "先写主体逻辑，再处理边界", "验证：手跑一遍核心路径",
+                "列出可能的失败场景"],
+            "investigate": [
+                "明确当前已知信息", "列出缺失的关键信息", "规划信息收集顺序", "先收集再决策，不要急于行动"],
+            "verify": [
+                "逐个检查预期结果", "对每个预期结果：通过记录，失败修复", "列出所有遗留项", "确认没有引入新问题"],
+            "reevaluate": [
+                "停下，重新审视当前假设", "之前的结论有没有可能是错的", "有没有完全不同的思路", "列出替代方案，逐个评估可行性"]}
+
+    def match(self, query, tool_pattern=None):  # 匹配思考框架：query 关键词 + tool pattern 阶段感知
+        q = query.lower()
+        if tool_pattern:  # 1. tool pattern 阶段框架（优先，更实时）
+            for phase, test in self.PHASES.items():
+                if test(tool_pattern):
+                    return self.PHASE_MAP[phase]
+        for fw, keywords in self.KEYWORDS.items():  # 2. query 关键词匹配
+            if any(kw in q for kw in keywords):
+                return fw
+        return None
+
+    def inject(self, messages, framework_name):  # 将思考框架注入为 system 消息前缀
+        steps_list = self.frameworks.get(framework_name)
+        if not steps_list:
+            return messages
+        steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps_list))
+        return [{"role": "system", "content": f"[Thinking Framework: {framework_name}]\n{steps}\n"}] + messages
+
+
+flash_thinking = FlashThinking()
 
 
 # --- Tool definitions: (description, schema, function) ---
@@ -1123,13 +1183,107 @@ class ContextManager:
         recent = turns[-n_turns:] if len(turns) > n_turns else turns
         fingerprints = []
         for turn in recent:
-            tools = [m.get("tool_name", "") for m in turn
-                     if m.get("role") == "tool" and m.get("tool_name")]
+            tools = [m.get("tool_name", "") for m in turn if m.get("role") == "tool" and m.get("tool_name")]
             if not tools:
                 continue
             user_msg = next((m.get("content", "") for m in turn if m.get("role") == "user"), "")
             fingerprints.append([user_msg, tools])
         return str(fingerprints) if fingerprints else "[]"
+
+    def tool_pattern(self, n=10) -> Optional[List[str]]:  # 提取最近 n 条消息的 tool call 模式
+        tools = [m.get("tool_name", "") for m in self.messages[-n:] if m.get("role") == "tool" and m.get("tool_name")]
+        return tools if tools else None
+
+    def tool_context(self, n=10, cap=500) -> str:  # 提取最近 tool results 的关键内容，注入为上下文
+        ctx = []
+        for m in self.messages[-n:]:
+            if m.get("role") != "tool":
+                continue
+            content = str(m.get("content", ""))
+            if not content:
+                continue
+            if len(content) <= cap:
+                ctx.append(f"[{m['tool_name']}] {content}")
+            else:
+                ctx.append(f"[{m['tool_name']}: {len(content)} chars] {content[:200]}...\n{content[-200:]}")
+        return "\n\n".join(ctx) if ctx else ""
+
+    def detect_loop(self, threshold=3) -> tuple:  # 检测是否陷入迭代死循环，返回 (is_looping, tool_name)
+        recent = [m for m in self.messages[-20:] if m.get("role") == "tool"]
+        if len(recent) < 10:
+            return False, None
+        # 1. 同工具连续失败
+        last_tool, fail_streak = None, 0
+        for m in recent:
+            tool, content = m.get("tool_name", ""), str(m.get("content", "")).lower()
+            if tool == last_tool and ("fail" in content or "error" in content):
+                fail_streak += 1
+            else:
+                fail_streak = 0 if tool != last_tool else fail_streak
+            last_tool = tool
+            if fail_streak >= threshold:
+                return True, tool
+        # 2. 交替循环：近 12 条 tool 中 ≥2 个不同工具在密集失败
+        fail_set, fail_count = set(), 0
+        for m in recent[-12:]:
+            content = str(m.get("content", "")).lower()
+            if "fail" in content or "error" in content:
+                fail_set.add(m.get("tool_name", ""))
+                fail_count += 1
+        if len(fail_set) >= 2 and fail_count >= threshold * 2:
+            return True, ",".join(sorted(fail_set))
+        return False, None
+
+    def detect_phase(self) -> str:  # 推断当前对话阶段（start/exploring/executing/verifying/stuck）
+        is_looping, _ = self.detect_loop()
+        if is_looping:
+            return "stuck"
+        all_tools = [m.get("tool_name", "") for m in self.messages if m.get("role") == "tool"]
+        if not all_tools:
+            return "start"
+        recent = all_tools[-5:]
+        if any(t in ("edit", "write") for t in recent):
+            return "executing"
+        if all(t in ("read", "grep", "search") for t in recent):
+            return "exploring"
+        if recent.count("bash") >= 2:
+            return "verifying"
+        return "executing"
+
+    def assess_complexity(self) -> str:  # 判断是否需要深思路径（Flash-ext 自己的 LLM 分析）
+        tool_pattern, tool_ctx = self.tool_pattern(), self.tool_context()
+        if len(tool_ctx) > 2000:
+            return "deep"
+        if tool_pattern:
+            if len(set(tool_pattern)) >= 3:
+                return "deep"
+            if len(tool_pattern) >= 5 and len(set(tool_pattern)) == 1:
+                return "deep"
+        query = self.messages[-1].get("content", "") if self.messages else ""
+        if any(k in query.lower() for k in ("设计", "架构", "重构", "design", "architect", "refactor")):
+            return "deep"
+        return "fast"
+
+    def summarize_recent_turns(self, n_turns=3) -> str:  # 压缩最近 n 轮对话为轻量上下文文本，用于 Flash-ext LLM 调用
+        lines = []
+        turn_count = 0
+        for m in self.messages[-50:]:
+            role = m.get("role")
+            if role == "user" and turn_count >= n_turns:
+                break
+            if role == "user":
+                turn_count += 1
+                lines.append(f"[USER] {str(m.get('content', ''))[:300]}")
+            elif role == "tool":
+                lines.append(f"[{m.get('tool_name', '?')}] {str(m.get('content', ''))[:300]}")
+            elif role == "assistant":
+                tc = m.get("tool_calls", [])
+                if tc:
+                    names = ",".join(t.get("name", "?") for t in tc)
+                    lines.append(f"[ASSISTANT → tool_calls: {names}]")
+                else:
+                    lines.append(f"[ASSISTANT] {str(m.get('content', ''))[:300]}")
+        return "\n".join(lines)
 
     @staticmethod
     def estimated_tokens(msg: Dict[str, Any]) -> int: return len(json.dumps(msg, ensure_ascii=False)) // 4 + 4
@@ -1778,8 +1932,228 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
     ctx.save(ctx_file_path)
 
 
+class FlashExtServer:
+    """ OpenAI-compatible model enhancement server with thinking-guidance.
+    Wraps a backend model API, injects structured thinking frameworks before
+    each request, and optionally augments with memory/search.
+    Exposes a standard OpenAI /v1/chat/completions endpoint."""
+
+    def __init__(self, host="0.0.0.0", port=8080, token=None, provider_obj=None, enable_memory=True, enable_search=True):
+        self.host = host
+        self.port = port
+        self.token = token
+        self.provider: BaseProvider = provider_obj or provider
+        self.enable_memory = enable_memory
+        self.enable_search = enable_search and bool(os.environ.get("MANGO_SEARCH_API_KEY"))
+        self.thinker: FlashThinking = flash_thinking
+        self.logger = logging.getLogger("flash-ext")
+        self._key = None
+        self._server = None
+
+    def _augment(self, messages):  # 用临时 ContextManager 包装 messages，复用其分析方法
+        ctx = ContextManager()
+        ctx.messages = list(messages)
+        query = messages[-1].get("content", "") if messages else ""
+        tool_pattern, tool_ctx = ctx.tool_pattern(), ctx.tool_context()
+
+        # 1. 决策路径
+        complexity = ctx.assess_complexity()
+        self.logger.debug("complexity=%s query=%.80s", complexity, query)
+        if complexity == "deep":
+            try:
+                analysis = self._analyze_deep(ctx, query, tool_pattern)
+                if analysis:
+                    fw = analysis.get("framework")
+                    self.logger.debug("deep framework=%s insight=%.60s", fw, str(analysis.get("insight", ""))[:60])
+                    fw = analysis.get("framework")
+                    if fw and fw in self.thinker.frameworks:
+                        messages = self.thinker.inject(messages, fw)
+                    ins = analysis.get("insight")
+                    if ins:
+                        messages = [{"role": "system", "content": f"[INSIGHT] {ins}"}] + messages
+                    al = analysis.get("anti_loop")
+                    if al:
+                        messages = [{"role": "system", "content": al}] + messages
+                    ts = analysis.get("tool_summary")
+                    if ts and len(tool_ctx) > 2000:
+                        messages = [{"role": "system", "content": f"[Tool Context]\n{ts}"}] + messages
+                    elif tool_ctx:
+                        messages = [{"role": "system", "content": f"[Tool Context]\n{tool_ctx}"}] + messages
+            except Exception:
+                pass
+        # 2. 快速路径 fallback（deep 成功时跳过）
+        if complexity != "deep":
+            fw = self.thinker.match(query, tool_pattern)
+            self.logger.debug("fast framework=%s", fw)
+            if fw and fw in self.thinker.frameworks:
+                messages = self.thinker.inject(messages, fw)
+            if tool_ctx and len(tool_ctx) < 2000:
+                messages = [{"role": "system", "content": f"[Tool Context]\n{tool_ctx}"}] + messages
+            elif tool_ctx:
+                messages = [{"role": "system", "content": f"[Tool Context]\n{tool_ctx[:2000]}...(truncated)"}] + messages
+        # 3. 辅助：记忆 + 搜索
+        if self.enable_memory:
+            try:
+                mem = memory_manager.search(query)
+                if mem and "No memory" not in mem:
+                    messages = [{"role": "system", "content": f"[Memory]\n{mem}"}] + messages
+            except Exception:
+                pass
+        if self.enable_search:
+            try:
+                sr = _bocha_search_api(query=query, count=3, bocha_key=os.environ["MANGO_SEARCH_API_KEY"])
+                if sr:
+                    sc = "\n".join(f"- {r['title']}: {r['summary']}" for r in sr[:3])
+                    messages = [{"role": "system", "content": f"[Web Search]\n{sc}"}] + messages
+            except Exception:
+                pass
+        return messages
+
+    def _analyze_deep(self, ctx, query, tool_pattern):  # 深思路径：用 Flash-ext 自己的 LLM 分析对话状态
+        is_looping, loop_tool = ctx.detect_loop()
+        phase = ctx.detect_phase()
+        recent = ctx.summarize_recent_turns(n_turns=3)
+
+        prompt = ("Analyze this coding session and respond ONLY as JSON.\n"
+                  f"Tool pattern: {tool_pattern or 'none'}\nPhase: {phase}\n"
+                  f"Looping: {'yes (' + loop_tool + ')' if is_looping else 'no'}\n\n"
+                  f"{recent}\n\n"
+                  f'{{"framework": "<one of: debug/design/explain/optimize/implement/investigate/verify/reevaluate>", '
+                  f'"insight": "<optional key insight agent is missing>", '
+                  f'"anti_loop": "<optional>", '
+                  f'"tool_summary": "<optional>"}}')
+        body = self.provider.build_body([{"role": "user", "content": prompt}])
+        raw = _request(self.provider.api_url, body, headers=self.provider.headers(), timeout=15)
+        parsed = self.provider.parse_response(raw)
+        try:
+            return json.loads(parsed.get("content", "{}"))
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def _handle(self, body):
+        augmented = self._augment(body.get("messages", []))
+        try:
+            raw = _request(self.provider.api_url, self.provider.build_body(augmented), headers=self.provider.headers())
+            parsed = self.provider.parse_response(raw)
+        except Exception as e:
+            self.logger.warning("upstream error: %s", e)
+            return {"error": {"message": f"Upstream model error: {e}", "type": "flash_ext_error", "code": 502}}
+        # 记忆写入（不阻塞）
+        if self.enable_memory:
+            try:
+                content = parsed.get("content", "")
+                if content and len(content) > 50:
+                    triggers = ["建议", "推荐", "配置", "因为", "原因", "recommend", "because", "config"]
+                    if any(t in content for t in triggers):
+                        q = body["messages"][-1].get("content", "")[:200] if body.get("messages") else ""
+                        memory_manager.append(f"[auto] Q: {q}\nA: {content[:500]}")
+            except Exception:
+                pass
+        return self._fmt_response(parsed, body.get("model", f"{self.provider.model}-ext"))
+
+    @staticmethod
+    def _fmt_response(parsed, model_name):
+        return {
+            "id": f"chatcmpl-flash-ext-{int(time.time())}",
+            "object": "chat.completion", "created": int(time.time()), "model": model_name,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": parsed.get("content", "")},
+                         "finish_reason": parsed.get("finish_reason") or "stop"}],
+            "usage": parsed.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})}
+
+    def _models(self): return {"object": "list", "data": [{"id": f"{self.provider.model}-ext", "object": "model"}]}
+
+    def _make_handler(self):
+        from http.server import BaseHTTPRequestHandler
+        s = self
+
+        class _H(BaseHTTPRequestHandler):
+            def _ok(self, data):
+                b = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b)
+
+            def _err(self, code, msg): self._ok({"error": {"message": msg, "type": "flash_ext_error", "code": code}})
+
+            def _auth(self):
+                if s.token:
+                    auth = self.headers.get("Authorization", "")
+                    if auth != f"Bearer {s.token}":
+                        self.send_response(401)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": {"message": "Invalid token", "code": 401}}).encode())
+                        return False
+                return True
+
+            def do_POST(self):
+                if not self._auth():
+                    return
+                if self.path == "/v1/chat/completions":
+                    t0 = time.time()
+                    try:
+                        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                        self._ok(s._handle(body))
+                        s.logger.info("POST %s 200 %.0fms", self.path, (time.time() - t0) * 1000)
+                    except json.JSONDecodeError:
+                        self._err(400, "Invalid JSON")
+                        s.logger.warning("POST %s 400 invalid json", self.path)
+                    except Exception as e:
+                        self._err(500, str(e))
+                        s.logger.error("POST %s 500 %s", self.path, e)
+                else:
+                    self._err(404, "Not found")
+
+            def do_GET(self):
+                if self.path in ("/v1/models", "/health"):
+                    self._ok(s._models() if self.path == "/v1/models" else {"status": "ok"})
+                else:
+                    self._err(404, "Not found")
+
+            def log_message(self, fmt, *args): pass  # suppress http.server default
+
+        return _H
+
+    def start(self, debug=False):
+        level = logging.DEBUG if debug else logging.INFO
+        logging.basicConfig(format="%(asctime)s [%(name)s] %(levelname)s %(message)s", level=level)
+        from http.server import ThreadingHTTPServer
+        self._server = ThreadingHTTPServer((self.host, self.port), self._make_handler())
+        self.logger.info("serving on %s:%s (frameworks=%d memory=%s search=%s auth=%s)",
+                         self.host, self.port, len(self.thinker.frameworks),
+                         self.enable_memory, self.enable_search, bool(self.token))
+        try:
+            self._server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+            self._server.shutdown()
+
+
+def _parse_serve_args(args=None):
+    parser = argparse.ArgumentParser(description="Mangopi Flash-ext server")
+    parser.add_argument("--flash-ext", action="store_true")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--token", default=None)
+    parser.add_argument("--no-memory", action="store_true")
+    parser.add_argument("--no-web-search", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    return parser.parse_known_args(args)[0] if args else parser.parse_args()
+
+
 def main():
     initialize_system()
+    args = _parse_serve_args()
+    if args.flash_ext:
+        if not MANGO_KEY:
+            console.error("MANGO_KEY env var is required for Flash-ext mode")
+            sys.exit(1)
+        server = FlashExtServer(
+            host=args.host, port=args.port, token=args.token, provider_obj=create_provider(),
+            enable_memory=not args.no_memory, enable_search=not args.no_web_search)
+        server.start(debug=args.debug)
+        return
 
     global provider
     if MANGO_ROUTING == "on":
