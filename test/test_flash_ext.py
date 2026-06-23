@@ -95,29 +95,6 @@ class FlashThinkingMatchTests(unittest.TestCase):
         self.assertIsNone(self.ft.match("hello world"))
 
 
-class FlashThinkingInjectTests(unittest.TestCase):
-    def setUp(self):
-        self.ft = FlashThinking()
-
-    def test_injects_system_message_prefix(self):
-        msgs = [{"role": "user", "content": "debug this"}]
-        result = self.ft.inject(msgs, "debug")
-        self.assertEqual(result[0]["role"], "system")
-        self.assertIn("[Thinking Framework: debug]", result[0]["content"])
-        self.assertEqual(result[1], msgs[0])  # original preserved
-
-    def test_unknown_framework_returns_unchanged(self):
-        msgs = [{"role": "user", "content": "hi"}]
-        result = self.ft.inject(msgs, "nonexistent")
-        self.assertEqual(result, msgs)
-
-    def test_debug_steps_present(self):
-        msgs = [{"role": "user", "content": "fix"}]
-        result = self.ft.inject(msgs, "debug")
-        self.assertIn("复现", result[0]["content"])
-        self.assertIn("根因", result[0]["content"])
-
-
 # ── ContextManager new methods ───────────────────────────────────────────────
 
 class ToolPatternTests(unittest.TestCase):
@@ -245,11 +222,18 @@ class FlashExtServerAugmentTests(unittest.TestCase):
         # Mock _analyze_deep to return None by default (fast path)
         self.srv._analyze_deep = MagicMock(return_value=None)
 
+    def _last_user_content(self, messages):
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                return m.get("content", "")
+        return ""
+
     def test_fast_path_injects_keyword_framework(self):
         msgs = [{"role": "user", "content": "debug this crash"}]
         result = self.srv._augment(msgs)
-        self.assertEqual(result[0]["role"], "system")
-        self.assertIn("[Thinking Framework: debug]", result[0]["content"])
+        user_content = self._last_user_content(result)
+        self.assertIn('<framework name=\"debug\">', user_content)
+        self.assertIn("Reproduce", user_content)
 
     def test_deep_path_injects_analysis_framework(self):
         self.srv._analyze_deep.return_value = {
@@ -264,10 +248,9 @@ class FlashExtServerAugmentTests(unittest.TestCase):
         ])
         with patch.object(ContextManager, "assess_complexity", return_value="deep"):
             result = self.srv._augment(ctx.messages)
-        # framework may not be at index 0 (tool ctx / insight prepended after)
-        contents = " ".join(m.get("content", "") for m in result)
-        self.assertIn("[Thinking Framework: design]", contents)
-        self.assertIn("microservices", contents)
+        user_content = self._last_user_content(result)
+        self.assertIn('<framework name=\"design\">', user_content)
+        self.assertIn("microservices", user_content)
 
     def test_fast_short_tool_context_injected(self):
         msgs = [
@@ -275,14 +258,25 @@ class FlashExtServerAugmentTests(unittest.TestCase):
             _tool_msg("read", "short result"),
         ]
         result = self.srv._augment(msgs)
-        has_tool_ctx = any("[Tool Context]" in m.get("content", "") for m in result)
-        self.assertTrue(has_tool_ctx)
+        user_content = self._last_user_content(result)
+        self.assertIn("<tool_context>", user_content)
 
     def test_no_framework_for_unmatched_query(self):
         msgs = [{"role": "user", "content": "blah blah blah"}]
         result = self.srv._augment(msgs)
-        has_fw = any("[Thinking Framework:" in m.get("content", "") for m in result)
-        self.assertFalse(has_fw)
+        user_content = self._last_user_content(result)
+        self.assertNotIn("<framework", user_content)
+
+    def test_query_takes_last_user_message_not_tail(self):
+        # last message is assistant tool_calls, query should come from prior user turn
+        msgs = [
+            {"role": "user", "content": "排查 crash 原因"},
+            {"role": "assistant", "tool_calls": [{"name": "read"}], "content": ""},
+        ]
+        result = self.srv._augment(msgs)
+        # Only the LAST user message should be augmented
+        user_content = self._last_user_content(result)
+        self.assertIn('<framework name=\"debug\">', user_content)
 
 
 # ── FlashExtServer _analyze_deep ─────────────────────────────────────────────

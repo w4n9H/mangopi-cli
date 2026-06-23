@@ -68,8 +68,8 @@ class KeywordScoreTests(unittest.TestCase):
         self.assertEqual(RoutedProvider._keyword_score("系统设计 for microservice"), 9)
 
     def test_medium_high_keywords(self):
-        self.assertEqual(RoutedProvider._keyword_score("refactor the auth module"), 7)
-        self.assertEqual(RoutedProvider._keyword_score("migrate to new API"), 7)
+        self.assertEqual(RoutedProvider._keyword_score("refactor the auth module"), 9)
+        self.assertEqual(RoutedProvider._keyword_score("migrate to new API"), 9)
 
     def test_medium_low_keywords(self):
         self.assertEqual(RoutedProvider._keyword_score("implement a new feature"), 5)
@@ -81,7 +81,8 @@ class KeywordScoreTests(unittest.TestCase):
 
     def test_trivial_keywords(self):
         self.assertEqual(RoutedProvider._keyword_score("read main.py"), 1)
-        self.assertEqual(RoutedProvider._keyword_score("what does this function do"), 4)
+        self.assertEqual(RoutedProvider._keyword_score("explain decorator"), 1)
+        self.assertEqual(RoutedProvider._keyword_score("update config"), 3)
 
     def test_case_insensitive(self):
         self.assertEqual(RoutedProvider._keyword_score("DESIGN a System"), 9)

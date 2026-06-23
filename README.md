@@ -79,6 +79,10 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Instant startup speed
 * Local-first workflow design
 * Autonomous goal execution
+* Smart provider routing with tiered models (high/medium/low)
+* Flash-ext thinking framework server (OpenAI-compatible proxy)
+* Multimodal support (image reading via `view_image`)
+* Web search via Bocha AI Search (`web_search` tool)
 * Context-aware conversation management
 * Automatic context compacting
 * Markdown memory system
@@ -139,6 +143,36 @@ Optional:
 export MANGO_MAX_CONTEXT=1000000   # default 1,000,000 tokens
 export MANGO_LANG=en               # en (default) | zh — controls UI text and CLI help language
 ```
+
+---
+
+
+
+# Smart Provider Routing
+
+Enable multi-model routing with the `MANGO_ROUTING` env var:
+
+```bash
+export MANGO_ROUTING=on
+```
+
+Define providers in `.mangocli/providers.json` (tiers: low/medium/high):
+
+```json
+{
+  "providers": [
+    {"name": "low",    "url": "https://api.deepseek.com", "model": "deepseek-v4-flash",    "tier": "low",    "api_key": "sk-xxx"},
+    {"name": "medium", "url": "https://api.deepseek.com", "model": "deepseek-v4",          "tier": "medium", "api_key": "sk-xxx"},
+    {"name": "high",   "url": "https://api.deepseek.com", "model": "deepseek-v4-reasoning", "tier": "high",   "api_key": "sk-xxx"}
+  ],
+  "routing": {
+    "default_tier": "medium",
+    "score_thresholds": {"low_max": 3, "medium_max": 7}
+  }
+}
+```
+
+Mangopi CLI auto-selects the appropriate tier based on task complexity — keyword matching + LLM scoring. Each turn uses one model; no mid-loop switching. A sample config is at `providers.json.example`.
 
 ---
 
@@ -211,21 +245,45 @@ The agent will continue working until it determines the task is complete.
 
 ---
 
+---
+
+# Flash-ext Server
+
+Flash-ext is a standalone OpenAI-compatible HTTP proxy that injects phase-aware structured thinking frameworks before each model call. Designed for IDEs and clients that cannot run the full Mangopi agent loop.
+
+Start the server:
+
+```bash
+python mangopi_cli.py --flash-ext --debug
+# Optional flags: --memory --web-search --port 8080 --token my-token
+```
+
+Flash-ext:
+- Matches keywords + tool-call patterns to select thinking frameworks (debug/design/explain/optimize/implement/investigate/verify/reevaluate).
+- On complex tasks, calls its own LLM to analyze session state and provide tailored guidance.
+- Injects all context into the user message via XML tags — zero new system messages.
+- Supports optional memory and web search augmentation.
+- Is **cognitive-only**: never touches file I/O or bash; only enhances reasoning before the request reaches upstream.
+
+---
+
 # Built-in Tools
 
 | Tool                 | Description                                                       |
 |----------------------|-------------------------------------------------------------------|
-| `read`               | Read a file (supports `offset` / `limit`)                         |
-| `write`              | Write or overwrite a file                                         |
-| `edit`               | Replace an exact string in a file, with unified-diff preview      |
-| `search`             | Search files using glob patterns, sorted by mtime                 |
-| `grep`               | Recursive regex content search                                    |
-| `bash`               | Execute a shell command (60s timeout, output filtered)            |
-| `use_skill`          | Load an installed `SKILL.md` with its scripts/references          |
-| `search_memory`      | Search long-term markdown memory (multi-keyword, scored)          |
-| `append_memory`      | Append a note to today's long-term memory file                    |
+| `read`               | Read a file or image (png/jpg/gif/webp auto-routed to vision)  |
+| `write`              | Write or overwrite a file                                       |
+| `edit`               | Replace an exact string in a file, with unified-diff preview    |
+| `search`             | Search files using glob patterns, sorted by mtime               |
+| `grep`               | Recursive regex content search                                  |
+| `bash`               | Execute a shell command (60s timeout, output filtered)          |
+| `view_image`         | Load a local image into the model's vision context              |
+| `web_search`         | Search the live web via Bocha AI Search API                     |
+| `use_skill`          | Load an installed `SKILL.md` with its scripts/references        |
+| `search_memory`      | Search long-term markdown memory (multi-keyword, scored)        |
+| `append_memory`      | Append a note to today's long-term memory file                  |
 | `goal`               | Manage the active goal plan (`plan` / `step` / `show` / `finish`) |
-| `attempt_completion` | Final step — present the result to the user                       |
+| `attempt_completion` | Final step — present the result to the user                     |
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
 
