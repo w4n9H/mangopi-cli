@@ -3,1960 +3,1248 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mangopi CLI // Deep Terminal AI</title>
+    <title>MANGOPI CLI // v0.1.29</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
         :root {
-            --bg: #0a0a0f;
-            --bg-card: #0e0e12;
-            --border: #1a1a20;
-            --text: #ffffff;
-            --text-dim: #888890;
-            --accent: #7dd3fc;
-            --accent-dark: #0ea5e9;
-            --green: #4ade80;
-            --orange: #fb923c;
-            --purple: #a78bfa;
-            --red: #f87171;
+            --bg: #0a0a0c;
+            --surface: #111114;
+            --rule: #1f1f24;
+            --text: #e8e8ec;
+            --muted: #707078;
+            --accent: #4dd0e1;
+            --accent-soft: rgba(77, 208, 225, 0.12);
+            --highlight: #f7e26b;
+            --warn: #ff7a59;
+            --ok: #6ee7b7;
         }
 
         @media (prefers-color-scheme: light) {
             :root {
-                --bg: #f5f5f7;
-                --bg-card: #ffffff;
-                --border: #e5e5e7;
-                --text: #111111;
-                --text-dim: #6b6b70;
+                --bg: #fafafa;
+                --surface: #ffffff;
+                --rule: #e6e6e8;
+                --text: #111113;
+                --muted: #6b6b70;
                 --accent: #0284c7;
-                --accent-dark: #0369a1;
-                --green: #16a34a;
-                --orange: #ea580c;
-                --purple: #7c3aed;
-                --red: #dc2626;
+                --accent-soft: rgba(2, 132, 199, 0.08);
+                --highlight: #ca8a04;
+                --warn: #dc2626;
+                --ok: #059669;
             }
         }
 
-        html {
-            scroll-behavior: smooth;
-        }
+        html { scroll-behavior: smooth; }
 
         body {
-            font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Monaco', monospace;
+            font-family: 'Fraunces', 'Georgia', serif;
             background: var(--bg);
             color: var(--text);
-            line-height: 1.6;
-            font-size: 14px;
+            font-size: 17px;
+            line-height: 1.55;
+            font-feature-settings: "ss01", "ss02", "kern";
         }
 
-        a {
-            color: inherit;
-            text-decoration: none;
+        a { color: inherit; text-decoration: none; }
+        a:hover { color: var(--accent); }
+
+        code, .mono {
+            font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.88em;
+            letter-spacing: -0.01em;
         }
 
         /* Container */
-        .container {
-            max-width: 980px;
+        .wrap {
+            max-width: 1040px;
             margin: 0 auto;
-            padding: 0 20px;
+            padding: 0 28px;
         }
 
-        /* Header */
+        /* ═══════════════════════ HEADER ═══════════════════════ */
         header {
+            border-bottom: 1px solid var(--rule);
+            padding: 18px 0;
             position: sticky;
             top: 0;
             background: var(--bg);
-            border-bottom: 1px solid var(--border);
             z-index: 100;
+            backdrop-filter: blur(8px);
         }
 
-        .header-inner {
+        .header-row {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            height: 60px;
+            align-items: baseline;
         }
 
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            letter-spacing: -0.5px;
+        .brand {
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            font-size: 18px;
         }
 
-        .logo-mark {
-            color: var(--accent);
+        .brand-version {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--muted);
+            margin-left: 8px;
+            font-weight: 400;
         }
 
         nav {
             display: flex;
-            align-items: center;
-            gap: 24px;
+            gap: 28px;
+            font-size: 13px;
+            color: var(--muted);
+            text-transform: lowercase;
+            font-family: 'JetBrains Mono', monospace;
         }
 
-        nav a {
+        nav a { letter-spacing: 0.04em; }
+        nav a:hover { color: var(--accent); }
+
+        .header-tools {
+            display: flex;
+            gap: 16px;
+            align-items: baseline;
+            font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
-            color: var(--text-dim);
+            color: var(--muted);
+        }
+
+        .lang-toggle, .gh-link {
+            cursor: pointer;
             transition: color 0.2s;
         }
+        .lang-toggle:hover, .gh-link:hover { color: var(--accent); }
 
-        nav a:hover {
-            color: var(--text);
-        }
+        @media (max-width: 800px) { nav { display: none; } }
 
-        .header-right {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .lang-switch {
-            font-size: 12px;
-            color: var(--text-dim);
-            cursor: pointer;
-        }
-
-        .lang-switch:hover {
-            color: var(--accent);
-        }
-
-        .github-link {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .github-link:hover {
-            color: var(--text);
-        }
-
-        /* Hero */
+        /* ═══════════════════════ HERO ═══════════════════════ */
         .hero {
-            padding: 80px 0 60px;
-            text-align: center;
+            padding: 72px 0 56px;
+            border-bottom: 1px solid var(--rule);
         }
 
-        .hero-badges {
+        .hero-meta {
             display: flex;
-            justify-content: center;
-            gap: 12px;
-            margin-bottom: 32px;
-            flex-wrap: wrap;
-        }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
+            justify-content: space-between;
+            font-family: 'JetBrains Mono', monospace;
             font-size: 11px;
-            border: 1px solid var(--border);
-            border-radius: 100px;
-            color: var(--text-dim);
-        }
-
-        .badge-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--green);
-            animation: pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+            color: var(--muted);
+            margin-bottom: 24px;
+            letter-spacing: 0.08em;
         }
 
         .hero h1 {
-            font-size: clamp(36px, 8vw, 56px);
+            font-size: clamp(40px, 9vw, 96px);
+            line-height: 0.95;
+            letter-spacing: -0.04em;
             font-weight: 500;
-            letter-spacing: -2px;
-            margin-bottom: 16px;
-            line-height: 1.1;
+            margin-bottom: 24px;
         }
 
-        .hero h1 .accent {
+        .hero h1 em {
+            font-style: italic;
+            font-weight: 400;
             color: var(--accent);
         }
 
-        .hero-desc {
-            font-size: 15px;
-            color: var(--text-dim);
-            max-width: 520px;
-            margin: 0 auto 40px;
+        .hero-tagline {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 48px;
+            flex-wrap: wrap;
         }
+
+        .hero-desc {
+            font-size: 18px;
+            line-height: 1.5;
+            max-width: 560px;
+            color: var(--text);
+            font-weight: 400;
+        }
+
+        .hero-desc .lang-zh { font-family: 'Fraunces', serif; }
 
         .hero-actions {
             display: flex;
-            justify-content: center;
-            gap: 12px;
-            flex-wrap: wrap;
+            gap: 24px;
+            align-items: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
         }
 
         .btn {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 12px 20px;
-            font-size: 13px;
-            border-radius: 8px;
-            transition: all 0.2s;
+            padding: 10px 16px;
+            border: 1px solid var(--text);
+            color: var(--text);
+            transition: all 0.15s;
             cursor: pointer;
-            border: none;
-            font-family: inherit;
+            background: transparent;
         }
 
         .btn-primary {
-            background: var(--accent);
+            background: var(--text);
             color: var(--bg);
+            border-color: var(--text);
         }
 
-        .btn-primary:hover {
-            background: var(--accent-dark);
-        }
+        .btn-primary:hover { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 
-        .btn-secondary {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            color: var(--text);
-        }
-
-        .btn-secondary:hover {
-            border-color: var(--text-dim);
-        }
+        .btn-ghost:hover { color: var(--accent); border-color: var(--accent); }
 
         /* Terminal Demo */
-        .terminal-section {
+        .demo {
             margin-top: 48px;
+            background: var(--surface);
+            border: 1px solid var(--rule);
+            padding: 0;
         }
 
-        .terminal {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            overflow: hidden;
-            text-align: left;
-        }
-
-        .terminal-header {
+        .demo-head {
             display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border);
+            justify-content: space-between;
+            padding: 10px 18px;
+            border-bottom: 1px solid var(--rule);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            color: var(--muted);
         }
 
-        .terminal-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            border: 1px solid var(--border);
-        }
-
-        .terminal-dot:nth-child(1) { background: #ff5f57; }
-        .terminal-dot:nth-child(2) { background: #febc2e; }
-        .terminal-dot:nth-child(3) { background: #28c840; }
-
-        .terminal-title {
-            margin-left: 8px;
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .terminal-body {
+        .demo-body {
             padding: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12.5px;
+            line-height: 1.7;
+        }
+
+        .demo-body .accent { color: var(--accent); }
+        .demo-body .muted { color: var(--muted); }
+        .demo-body .ok { color: var(--ok); }
+        .demo-body .warn { color: var(--warn); }
+        .demo-body .hl { color: var(--highlight); }
+        .demo-body .row { display: flex; gap: 14px; }
+        .demo-body .row .indent { padding-left: 28px; }
+        .demo-body .row .indent2 { padding-left: 56px; }
+
+        /* ═══════════════════════ SECTIONS ═══════════════════════ */
+        section { padding: 64px 0; border-bottom: 1px solid var(--rule); }
+        section:last-of-type { border-bottom: none; }
+
+        .sec-head {
+            display: grid;
+            grid-template-columns: 80px 1fr;
+            gap: 24px;
+            margin-bottom: 36px;
+            align-items: baseline;
+        }
+
+        .sec-num {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 13px;
-            line-height: 1.8;
+            color: var(--muted);
+            letter-spacing: 0.1em;
         }
 
-        .terminal-line {
-            display: flex;
-            gap: 12px;
+        .sec-title {
+            font-size: clamp(24px, 4.5vw, 36px);
+            letter-spacing: -0.02em;
+            font-weight: 500;
+            line-height: 1.15;
         }
 
-        .prompt {
-            color: var(--purple);
-        }
+        .sec-title em { font-style: italic; color: var(--accent); font-weight: 400; }
 
-        .output {
-            color: var(--text-dim);
-            padding-left: 24px;
-        }
-
-        .output .success {
-            color: var(--green);
-        }
-
-        .output .warn {
-            color: var(--orange);
-        }
-
-        .output .info {
-            color: var(--accent);
-        }
-
-        .cursor {
-            display: inline-block;
-            width: 8px;
-            height: 14px;
-            background: var(--accent);
-            animation: blink 1s step-end infinite;
-        }
-
-        @keyframes blink {
-            50% { opacity: 0; }
-        }
-
-        /* Section */
-        section {
-            padding: 60px 0;
-        }
-
-        .section-header {
-            margin-bottom: 32px;
-        }
-
-        .section-title {
-            font-size: 12px;
-            letter-spacing: 2px;
-            color: var(--text-dim);
-            text-transform: uppercase;
-        }
-
-        /* Stats */
-        .stats-grid {
+        /* STATS */
+        .stats {
             display: grid;
             grid-template-columns: repeat(5, 1fr);
-            gap: 12px;
-            margin-bottom: 60px;
+            border-top: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
         }
 
-        @media (max-width: 700px) {
-            .stats-grid {
-                grid-template-columns: repeat(3, 1fr);
-            }
+        @media (max-width: 800px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+
+        .stat {
+            padding: 24px 20px;
+            border-right: 1px solid var(--rule);
+        }
+        .stat:last-child { border-right: none; }
+
+        @media (max-width: 800px) {
+            .stat { border-right: none; border-bottom: 1px solid var(--rule); }
+            .stat:nth-last-child(2) { border-bottom: none; }
         }
 
-        @media (max-width: 400px) {
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-
-        .stat-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px 16px;
-            text-align: center;
-        }
-
-        .stat-value {
-            font-size: 24px;
+        .stat-num {
+            font-size: 36px;
             font-weight: 500;
-            margin-bottom: 4px;
-        }
-
-        .stat-value.accent { color: var(--accent); }
-        .stat-value.green { color: var(--green); }
-        .stat-value.purple { color: var(--purple); }
-        .stat-value.orange { color: var(--orange); }
-        .stat-value.red { color: var(--red); }
-
-        .stat-label {
-            font-size: 11px;
-            color: var(--text-dim);
-        }
-
-        /* Features */
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-        }
-
-        @media (max-width: 700px) {
-            .features-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .feature-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-            transition: all 0.2s;
-        }
-
-        .feature-card:hover {
-            border-color: var(--accent);
-        }
-
-        .feature-icon {
-            font-size: 20px;
-            margin-bottom: 12px;
-        }
-
-        .feature-card h3 {
-            font-size: 14px;
-            font-weight: 500;
+            letter-spacing: -0.03em;
+            line-height: 1;
             margin-bottom: 6px;
         }
 
-        .feature-card p {
-            font-size: 12px;
-            color: var(--text-dim);
+        .stat-num .accent { color: var(--accent); }
+
+        .stat-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: lowercase;
+            letter-spacing: 0.04em;
+        }
+
+        /* FEATURE LIST (Editorial List) */
+        .feat-list {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0;
+            border-top: 1px solid var(--rule);
+        }
+
+        @media (max-width: 700px) { .feat-list { grid-template-columns: 1fr; } }
+
+        .feat {
+            padding: 24px 24px 24px 0;
+            border-bottom: 1px solid var(--rule);
+            display: grid;
+            grid-template-columns: 56px 1fr;
+            gap: 12px;
+        }
+
+        .feat:nth-child(odd) { padding-right: 24px; border-right: 1px solid var(--rule); }
+        .feat:nth-child(even) { padding-left: 24px; padding-right: 0; }
+
+        @media (max-width: 700px) {
+            .feat { padding: 24px 0 !important; border-right: none !important; }
+        }
+
+        .feat-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--accent);
+            letter-spacing: 0.08em;
+            padding-top: 6px;
+        }
+
+        .feat h3 {
+            font-size: 19px;
+            font-weight: 500;
+            letter-spacing: -0.01em;
+            margin-bottom: 6px;
+            line-height: 1.25;
+        }
+
+        .feat p {
+            color: var(--muted);
+            font-size: 14px;
             line-height: 1.5;
         }
 
-        /* Providers */
-        .providers-grid {
+        /* ROUTING CALLOUT */
+        .callout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            border: 1px solid var(--rule);
+            margin-top: 32px;
+        }
+
+        @media (max-width: 800px) { .callout { grid-template-columns: 1fr; } }
+
+        .callout-text {
+            padding: 28px;
+            border-right: 1px solid var(--rule);
+        }
+
+        @media (max-width: 800px) { .callout-text { border-right: none; border-bottom: 1px solid var(--rule); } }
+
+        .callout-text h3 {
+            font-size: 22px;
+            font-weight: 500;
+            letter-spacing: -0.02em;
+            margin-bottom: 10px;
+        }
+
+        .callout-text p {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.55;
+            margin-bottom: 12px;
+        }
+
+        .callout-code {
+            background: var(--surface);
+            padding: 28px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            line-height: 1.65;
+            color: var(--muted);
+            overflow-x: auto;
+        }
+
+        .callout-code .key { color: var(--accent); }
+        .callout-code .str { color: var(--ok); }
+
+        /* TIER STRIP */
+        .tiers {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            border-top: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
+            margin-top: 32px;
+        }
+
+        @media (max-width: 700px) { .tiers { grid-template-columns: 1fr; } }
+
+        .tier {
+            padding: 20px;
+            border-right: 1px solid var(--rule);
+        }
+
+        .tier:last-child { border-right: none; }
+
+        @media (max-width: 700px) {
+            .tier { border-right: none; border-bottom: 1px solid var(--rule); }
+            .tier:last-child { border-bottom: none; }
+        }
+
+        .tier-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--muted);
+            margin-bottom: 12px;
+            letter-spacing: 0.08em;
+        }
+
+        .tier-value {
+            font-size: 20px;
+            font-weight: 500;
+            letter-spacing: -0.01em;
+            margin-bottom: 4px;
+        }
+
+        .tier-desc {
+            font-size: 13.5px;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        /* PROVIDERS */
+        .providers {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 12px;
+            border-top: 1px solid var(--rule);
+            border-left: 1px solid var(--rule);
         }
 
-        @media (max-width: 900px) {
-            .providers-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
+        @media (max-width: 800px) { .providers { grid-template-columns: repeat(2, 1fr); } }
+
+        .provider {
+            padding: 22px 20px;
+            border-right: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
         }
 
-        @media (max-width: 600px) {
-            .providers-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .provider-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-        }
-
-        .provider-card h3 {
-            font-size: 14px;
+        .provider-name {
+            font-size: 19px;
             font-weight: 500;
-            margin-bottom: 6px;
-            color: var(--accent);
+            margin-bottom: 4px;
+            letter-spacing: -0.01em;
         }
 
-        .provider-card p {
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .provider-card .provider-tag {
-            display: inline-block;
-            margin-top: 8px;
-            padding: 2px 8px;
+        .provider-tag {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 10px;
-            background: var(--green);
-            color: var(--bg);
-            border-radius: 100px;
+            color: var(--accent);
+            letter-spacing: 0.08em;
+            margin-bottom: 8px;
+            display: inline-block;
         }
 
-        /* Install */
-        .install-grid {
+        .provider p {
+            color: var(--muted);
+            font-size: 13.5px;
+            line-height: 1.45;
+        }
+
+        /* TOOLS */
+        .tools {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
+            grid-template-columns: repeat(4, 1fr);
+            border-top: 1px solid var(--rule);
+            border-left: 1px solid var(--rule);
         }
 
-        @media (max-width: 600px) {
-            .install-grid {
-                grid-template-columns: 1fr;
-            }
+        @media (max-width: 800px) { .tools { grid-template-columns: repeat(2, 1fr); } }
+
+        .tool {
+            padding: 14px 16px;
+            border-right: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
+
+        .tool code {
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .tool p {
+            font-size: 12.5px;
+            color: var(--muted);
+            line-height: 1.4;
+        }
+
+        /* COMMANDS */
+        .commands {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            border-top: 1px solid var(--rule);
+            border-left: 1px solid var(--rule);
+            margin-top: 32px;
+        }
+
+        @media (max-width: 700px) { .commands { grid-template-columns: repeat(2, 1fr); } }
+
+        .cmd {
+            padding: 14px 16px;
+            border-right: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
+        }
+
+        .cmd code {
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--accent);
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .cmd p {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        /* INSTALL */
+        .install-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0;
+            border: 1px solid var(--rule);
+        }
+
+        @media (max-width: 700px) { .install-row { grid-template-columns: 1fr; } }
 
         .install-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
+            padding: 24px;
+            border-right: 1px solid var(--rule);
         }
 
-        .install-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        .install-card:last-child { border-right: none; }
+
+        @media (max-width: 700px) {
+            .install-card { border-right: none; border-bottom: 1px solid var(--rule); }
+            .install-card:last-child { border-bottom: none; }
+        }
+
+        .install-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--muted);
+            letter-spacing: 0.08em;
             margin-bottom: 12px;
         }
 
         .install-card h3 {
-            font-size: 14px;
+            font-size: 21px;
             font-weight: 500;
-        }
-
-        .install-badge {
-            padding: 2px 8px;
-            font-size: 10px;
-            background: var(--green);
-            color: var(--bg);
-            border-radius: 100px;
+            margin-bottom: 12px;
+            letter-spacing: -0.01em;
         }
 
         .install-card p {
-            font-size: 12px;
-            color: var(--text-dim);
-            margin-bottom: 12px;
+            color: var(--muted);
+            font-size: 13.5px;
+            margin-bottom: 16px;
+            line-height: 1.5;
         }
 
-        .code-block {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
+        .code {
+            background: var(--surface);
             padding: 14px;
-            overflow-x: auto;
-        }
-
-        .code-block code {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
-            color: var(--text-dim);
+            line-height: 1.65;
+            color: var(--muted);
         }
 
-        .code-block .cmd {
-            color: var(--accent);
+        .code .cmd-c { color: var(--accent); }
+        .code .str-c { color: var(--ok); }
+
+        /* ENV LIST */
+        .envs {
+            border-top: 1px solid var(--rule);
         }
 
-        /* Config */
-        .config-grid {
+        .env-row {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 220px 1fr auto;
             gap: 24px;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--rule);
+            align-items: baseline;
         }
 
         @media (max-width: 700px) {
-            .config-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .env-list {
-            list-style: none;
-        }
-
-        .env-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 14px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            margin-bottom: 6px;
-        }
-
-        .env-item.required {
-            border-color: var(--accent);
+            .env-row { grid-template-columns: 1fr; gap: 4px; padding: 12px 0; }
         }
 
         .env-name {
-            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
             font-weight: 500;
+        }
+
+        .env-name.req::after {
+            content: '·required';
+            margin-left: 8px;
+            font-size: 10px;
+            color: var(--accent);
+            letter-spacing: 0.06em;
         }
 
         .env-desc {
-            font-size: 11px;
-            color: var(--text-dim);
-        }
-
-        .config-code {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-        }
-
-        .config-code code {
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .config-code .cmd {
-            color: var(--accent);
-        }
-
-        /* Tools */
-        .tools-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-        }
-
-        @media (max-width: 600px) {
-            .tools-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-
-        .tool-item {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 16px 12px;
-            text-align: center;
-        }
-
-        .tool-item code {
+            color: var(--muted);
             font-size: 14px;
-            color: var(--accent);
         }
 
-        .tool-item p {
-            margin-top: 6px;
-            font-size: 11px;
-            color: var(--text-dim);
-        }
-
-        /* Commands */
-        .commands-grid {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 10px;
-        }
-
-        @media (max-width: 700px) {
-            .commands-grid {
-                grid-template-columns: repeat(3, 1fr);
-            }
-        }
-
-        @media (max-width: 500px) {
-            .commands-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-
-        .cmd-item {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 14px;
-            text-align: center;
-        }
-
-        .cmd-item code {
-            font-size: 14px;
-            color: var(--purple);
-        }
-
-        .cmd-item p {
-            margin-top: 6px;
-            font-size: 11px;
-            color: var(--text-dim);
-        }
-
-        /* Safety */
-        .safety-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-        }
-
-        @media (max-width: 600px) {
-            .safety-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .safety-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-            display: flex;
-            gap: 14px;
-            align-items: flex-start;
-        }
-
-        .safety-card .safety-icon {
-            font-size: 20px;
-            flex-shrink: 0;
-        }
-
-        .safety-card h4 {
-            font-size: 13px;
-            font-weight: 500;
-            margin-bottom: 4px;
-        }
-
-        .safety-card p {
+        .env-default {
+            font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
-            color: var(--text-dim);
-            line-height: 1.5;
+            color: var(--muted);
         }
 
-        /* Architecture */
-        .arch-flow {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            padding: 32px 0;
-        }
-
-        .arch-node {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 16px 20px;
-            text-align: center;
-            min-width: 110px;
-        }
-
-        .arch-node h4 {
-            font-size: 13px;
-            font-weight: 500;
-            margin-bottom: 4px;
-        }
-
-        .arch-node p {
-            font-size: 11px;
-            color: var(--text-dim);
-        }
-
-        .arch-arrow {
-            color: var(--accent);
-            font-size: 18px;
-        }
-
-        /* Philosophy */
-        .philo-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px;
-        }
-
-        @media (max-width: 700px) {
-            .philo-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .philo-items {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .philo-item {
-            display: flex;
-            gap: 14px;
-            padding: 16px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-        }
-
-        .philo-icon {
-            font-size: 18px;
-        }
-
-        .philo-item h4 {
-            font-size: 13px;
-            font-weight: 500;
-            margin-bottom: 3px;
-        }
-
-        .philo-item p {
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .no-list {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .no-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            opacity: 0.5;
-        }
-
-        .no-cross {
-            color: var(--red);
-        }
-
-        .no-item span {
-            font-size: 13px;
-            color: var(--text-dim);
-        }
-
-        .license-box {
-            margin-top: 16px;
-            padding: 16px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-        }
-
-        .license-box p {
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .license-box strong {
-            color: var(--text);
-        }
-
-        /* Footer */
-        footer {
-            padding: 32px 0;
-            border-top: 1px solid var(--border);
-            text-align: center;
-        }
-
-        footer p {
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        /* Lang toggles */
-        [data-lang="zh"] .lang-en { display: none; }
-        [data-lang="en"] .lang-zh { display: none; }
-
-        /* Mobile nav */
-        @media (max-width: 700px) {
-            nav { display: none; }
-        }
-
-        /* ============== Design Philosophy ============== */
-        .philo-hero {
-            position: relative;
-            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(125, 211, 252, 0.05) 100%);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 40px 36px;
-            margin-bottom: 28px;
-            overflow: hidden;
-        }
-
-        .philo-hero::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 3px;
-            height: 100%;
-            background: linear-gradient(180deg, var(--accent), var(--purple));
-        }
-
-        .philo-quote-mark {
-            font-size: 64px;
-            line-height: 0.5;
-            color: var(--accent);
-            opacity: 0.4;
-            font-family: Georgia, serif;
-            margin-bottom: 8px;
-        }
-
-        .philo-quote-text {
-            font-size: 20px;
-            line-height: 1.5;
-            color: var(--text);
-            font-weight: 400;
-            letter-spacing: -0.3px;
-            max-width: 720px;
-        }
-
-        .philo-quote-tag {
-            display: inline-block;
-            margin-top: 20px;
-            font-size: 11px;
-            color: var(--accent);
-            letter-spacing: 1.5px;
-            text-transform: uppercase;
-        }
-
-        .principle-grid {
-            display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 10px;
-        }
-
-        @media (max-width: 900px) {
-            .principle-grid {
-                grid-template-columns: repeat(3, 1fr);
-            }
-        }
-
-        @media (max-width: 500px) {
-            .principle-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-
-        .principle-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 18px 14px;
-            text-align: center;
-            transition: all 0.2s;
-        }
-
-        .principle-card:hover {
-            border-color: var(--accent);
-            transform: translateY(-2px);
-        }
-
-        .principle-icon {
-            font-size: 22px;
-            margin-bottom: 8px;
-        }
-
-        .principle-card h4 {
-            font-size: 13px;
-            font-weight: 500;
-            margin-bottom: 4px;
-            color: var(--text);
-        }
-
-        .principle-card p {
-            font-size: 11px;
-            color: var(--text-dim);
-            line-height: 1.4;
-        }
-
-        /* ============== Why Mangopi CLI? (Compare Table) ============== */
-        .compare-table {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            overflow: hidden;
-        }
-
-        .compare-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .compare-row:last-child {
-            border-bottom: none;
-        }
-
-        .compare-row.header {
-            background: rgba(125, 211, 252, 0.04);
-        }
-
-        .compare-cell {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 14px 20px;
-            font-size: 13px;
-        }
-
-        .compare-cell.ours {
-            color: var(--text);
-            border-right: 1px solid var(--border);
-        }
-
-        .compare-cell.theirs {
-            color: var(--text-dim);
-        }
-
-        .compare-row.header .compare-cell {
-            font-size: 12px;
-            letter-spacing: 1.5px;
-            text-transform: uppercase;
-            font-weight: 500;
-            color: var(--text);
-        }
-
-        .compare-mark {
-            flex-shrink: 0;
-            width: 20px;
-            height: 20px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 6px;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .compare-mark.check {
-            background: rgba(74, 222, 128, 0.15);
-            color: var(--green);
-        }
-
-        .compare-mark.cross {
-            background: rgba(248, 113, 113, 0.12);
-            color: var(--red);
-        }
-
-        @media (max-width: 600px) {
-            .compare-cell {
-                font-size: 12px;
-                padding: 12px 14px;
-            }
-            .compare-row.header .compare-cell {
-                font-size: 10px;
-            }
-        }
-
-        /* ============== Ideal For (Persona Grid) ============== */
+        /* IDEAL GRID */
         .ideal-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
+            border-top: 1px solid var(--rule);
+            border-left: 1px solid var(--rule);
         }
 
-        @media (max-width: 800px) {
-            .ideal-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
+        @media (max-width: 800px) { .ideal-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 500px) { .ideal-grid { grid-template-columns: 1fr; } }
+
+        .ideal {
+            padding: 18px 20px;
+            border-right: 1px solid var(--rule);
+            border-bottom: 1px solid var(--rule);
         }
 
-        @media (max-width: 500px) {
-            .ideal-grid {
-                grid-template-columns: 1fr;
-            }
+        .ideal-num {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--muted);
+            margin-bottom: 8px;
+            letter-spacing: 0.08em;
         }
 
-        .ideal-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 20px;
-            display: flex;
-            gap: 14px;
-            align-items: flex-start;
-            transition: all 0.2s;
-        }
-
-        .ideal-card:hover {
-            border-color: var(--accent);
-            transform: translateY(-2px);
-        }
-
-        .ideal-avatar {
-            flex-shrink: 0;
-            width: 42px;
-            height: 42px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(125, 211, 252, 0.08);
-            border: 1px solid rgba(125, 211, 252, 0.2);
-            border-radius: 10px;
-            font-size: 20px;
-        }
-
-        .ideal-card h4 {
-            font-size: 13px;
+        .ideal h4 {
+            font-size: 16px;
             font-weight: 500;
             margin-bottom: 4px;
-            color: var(--text);
+            letter-spacing: -0.01em;
         }
 
-        .ideal-card p {
-            font-size: 12px;
-            color: var(--text-dim);
-            line-height: 1.5;
+        .ideal p {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.45;
         }
+
+        /* PHILOSOPHY */
+        .philo-hero {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 64px;
+            border-top: 1px solid var(--rule);
+            padding-top: 48px;
+            align-items: start;
+        }
+
+        @media (max-width: 800px) { .philo-hero { grid-template-columns: 1fr; gap: 32px; } }
+
+        .philo-quote {
+            font-size: clamp(28px, 4vw, 40px);
+            line-height: 1.25;
+            letter-spacing: -0.02em;
+            font-weight: 400;
+        }
+
+        .philo-quote em {
+            font-style: italic;
+            color: var(--accent);
+        }
+
+        .philo-list {
+            border-left: 1px solid var(--rule);
+            padding-left: 32px;
+        }
+
+        .philo-list li {
+            list-style: none;
+            padding: 8px 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .philo-list li::before {
+            content: '→ ';
+            color: var(--accent);
+        }
+
+        /* FOOTER */
+        footer {
+            padding: 24px 0 36px;
+            border-top: 1px solid var(--rule);
+        }
+
+        .footer-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 0.06em;
+        }
+
+        /* LANG */
+        [data-lang="zh"] .lang-en { display: none; }
+        [data-lang="en"] .lang-zh { display: none; }
     </style>
 </head>
 <body data-lang="en">
-    <!-- Header -->
-    <header>
-        <div class="container header-inner">
-            <div class="logo">
-                <span class="logo-mark">//</span>
-                <span>MANGOPI CLI</span>
-            </div>
-            <nav>
-                <a href="#design-philosophy">
-                    <span class="lang-en">Philosophy</span>
-                    <span class="lang-zh">哲学</span>
-                </a>
-                <a href="#ideal-for">
-                    <span class="lang-en">Ideal For</span>
-                    <span class="lang-zh">适用</span>
-                </a>
-                <a href="#features">
-                    <span class="lang-en">Features</span>
-                    <span class="lang-zh">特性</span>
-                </a>
-                <a href="#install">
-                    <span class="lang-en">Install</span>
-                    <span class="lang-zh">安装</span>
-                </a>
-            </nav>
-            <div class="header-right">
-                <span class="lang-switch" onclick="toggleLang()">
-                    <span class="lang-en">中文</span>
-                    <span class="lang-zh">EN</span>
-                </span>
-                <a href="https://github.com/w4n9H/mangopi-cli" class="github-link" target="_blank">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.84 1.23 1.215 1.965 3.18 1.395 3.96 1.065.12-.81.42-1.395.765-1.71-2.745-.315-5.625-1.365-5.625-6.075 0-1.35.48-2.46 1.275-3.33-.135-.315-.555-1.59.12-3.285 0 0 1.035-.33 3.405 1.26.96-.27 1.98-.405 3 .405 1.02 0 2.04.135 3 .405 2.37-1.59 3.405-1.26 3.405-1.26.675 1.695.255 2.97.12 3.285.795.87 1.275 1.98 1.275 3.33 0 4.725-2.895 5.76-5.64 6.06.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.285 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-                    </svg>
-                </a>
-            </div>
-        </div>
-    </header>
 
-    <!-- Hero -->
-    <section class="hero">
-        <div class="container">
-            <div class="hero-badges">
-                <div class="badge">
-                    <span class="badge-dot"></span>
-                    <span class="lang-en">Fast</span>
-                    <span class="lang-zh">极速</span>
-                </div>
-                <div class="badge">
-                    <span class="lang-en">Zero Dependencies</span>
-                    <span class="lang-zh">零依赖</span>
-                </div>
-                <div class="badge">
-                    <span class="lang-en">Easy Change</span>
-                    <span class="lang-zh">易魔改</span>
-                </div>
-                <div class="badge">
-                    <span class="lang-en">Local Files</span>
-                    <span class="lang-zh">本地优先</span>
-                </div>
-                <div class="badge">
-                    <span class="lang-en">Claude Code Style</span>
-                    <span class="lang-zh">Claude Code 风格</span>
-                </div>
-            </div>
-            <h1>
-                MANGOPI <span class="accent">CLI</span>
-            </h1>
+<!-- ═══════════════════════ HEADER ═══════════════════════ -->
+<header>
+    <div class="wrap header-row">
+        <div>
+            <span class="brand">MANGOPI CLI<span class="brand-version">v0.1.29</span></span>
+        </div>
+        <nav>
+            <a href="#routing"><span class="lang-en">routing</span><span class="lang-zh">路由</span></a>
+            <a href="#flash"><span class="lang-en">flash-ext</span><span class="lang-zh">flash-ext</span></a>
+            <a href="#features"><span class="lang-en">features</span><span class="lang-zh">特性</span></a>
+            <a href="#install"><span class="lang-en">install</span><span class="lang-zh">安装</span></a>
+            <a href="#config"><span class="lang-en">config</span><span class="lang-zh">配置</span></a>
+        </nav>
+        <div class="header-tools">
+            <span class="lang-toggle" onclick="toggleLang()">
+                <span class="lang-en">中文</span><span class="lang-zh">EN</span>
+            </span>
+            <a class="gh-link" href="https://github.com/w4n9H/mangopi-cli" target="_blank">github ↗</a>
+        </div>
+    </div>
+</header>
+
+<!-- ═══════════════════════ HERO ═══════════════════════ -->
+<section class="hero">
+    <div class="wrap">
+        <div class="hero-meta">
+            <span>— <span class="lang-en">ai coding agent</span><span class="lang-zh">AI 编码智能体</span></span>
+            <span><span class="lang-en">single file</span><span class="lang-zh">单文件</span> · <span class="lang-en">zero deps</span><span class="lang-zh">零依赖</span></span>
+        </div>
+        <h1>
+            Terminal AI,<br>
+            <em>just code.</em>
+        </h1>
+        <div class="hero-tagline">
             <p class="hero-desc">
-                <span class="lang-en">A lightweight, zero-dependency AI coding assistant for your terminal. Agentic tool-calling loop, smart context management, local session persistence. Just code.</span>
-                <span class="lang-zh">轻量级零依赖终端 AI 编码助手。Agentic 工具调用循环、智能上下文管理、本地会话持久化。只管写代码。</span>
+                <span class="lang-en">A single-file Python agent for the terminal. Three-tier model routing, a thinking-framework proxy, multimodal + web search. All in stdlib. <em>Just code.</em></span>
+                <span class="lang-zh">单文件 Python 终端智能体。三档模型路由、思考框架代理、多模态 + Web Search。纯标准库实现。<em>只管写代码。</em></span>
             </p>
             <div class="hero-actions">
-                <a href="https://github.com/w4n9H/mangopi-cli" class="btn btn-primary" target="_blank">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.84 1.23 1.215 1.965 3.18 1.395 3.96 1.065.12-.81.42-1.395.765-1.71-2.745-.315-5.625-1.365-5.625-6.075 0-1.35.48-2.46 1.275-3.33-.135-.315-.555-1.59.12-3.285 0 0 1.035-.33 3.405 1.26.96-.27 1.98-.405 3 .405 1.02 0 2.04.135 3 .405 2.37-1.59 3.405-1.26 3.405-1.26.675 1.695.255 2.97.12 3.285.795.87 1.275 1.98 1.275 3.33 0 4.725-2.895 5.76-5.64 6.06.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.285 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-                    </svg>
-                    <span class="lang-en">Get Started</span>
-                    <span class="lang-zh">开始使用</span>
+                <a class="btn btn-primary" href="https://github.com/w4n9H/mangopi-cli" target="_blank">
+                    <span class="lang-en">Get Started</span><span class="lang-zh">开始使用</span> →
                 </a>
-                <a href="#install" class="btn btn-secondary">
-                    <span class="lang-en">Install</span>
-                    <span class="lang-zh">安装</span>
+                <a class="btn btn-ghost" href="#install">
+                    <span class="lang-en">Install</span><span class="lang-zh">安装</span>
                 </a>
             </div>
+        </div>
 
-            <!-- Terminal -->
-            <div class="terminal-section">
-                <div class="terminal">
-                    <div class="terminal-header">
-                        <span class="terminal-dot"></span>
-                        <span class="terminal-dot"></span>
-                        <span class="terminal-dot"></span>
-                        <span class="terminal-title">mangopi-cli</span>
-                    </div>
-                    <div class="terminal-body">
-                        <div class="terminal-line">
-                            <span class="prompt">$</span>
-                            <span>mangopi-cli</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="info">Mango Cli v0.1.19 | deepseek-v4-flash | /home/user/project</span>
-                        </div>
-                        <div class="terminal-line">
-                            <span class="prompt">❯</span>
-                            <span class="lang-en">help me refactor utils.py to use dataclasses</span>
-                            <span class="lang-zh">帮我把 utils.py 重构为 dataclass</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="warn">• Tool call</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="info">› read</span> <span>src/utils.py</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="success">✓ Applied successfully</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="warn">• Tool call</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="info">› edit</span> <span>src/utils.py  -3 +8</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span>  -class User:</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="success">  +@dataclass</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="success">  +class User:</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span class="success">✓ Applied successfully</span>
-                        </div>
-                        <div class="terminal-line output">
-                            <span>round: 1 | tokens: 1.2k in / 0.8k out | ctx: <span class="success">5%</span></span>
-                        </div>
-                        <div class="terminal-line">
-                            <span class="cursor"></span>
-                        </div>
-                    </div>
-                </div>
+        <!-- DEMO -->
+        <div class="demo">
+            <div class="demo-head">
+                <span>~/projects/api-server/</span>
+                <span>mangopi-cli · terminal</span>
+            </div>
+            <div class="demo-body">
+                <div class="row"><span class="accent">$</span><span>mangopi-cli</span></div>
+                <div class="row"><span class="muted indent">Mango Cli v0.1.29 | smart-routing[3] | ~/projects/api-server</span></div>
+                <div class="row"><span class="muted indent">→ high: deepseek-v4-reasoning</span></div>
+                <div class="row"><span>&nbsp;</span></div>
+                <div class="row"><span class="accent">❯</span><span><span class="lang-en">help me refactor utils.py to use dataclasses</span><span class="lang-zh">帮我把 utils.py 重构为 dataclass</span></span></div>
+                <div class="row"><span class="warn indent">· Tool call</span></div>
+                <div class="row"><span class="muted indent2">› read  src/utils.py</span></div>
+                <div class="row"><span class="muted indent2">› grep pool_size  src/</span></div>
+                <div class="row"><span class="ok indent2">✓ Identified 3 class definitions</span></div>
+                <div class="row"><span class="warn indent">· Tool call</span></div>
+                <div class="row"><span class="muted indent2">› edit  src/utils.py  -3 +8</span></div>
+                <div class="row"><span class="muted indent2">  -class User:</span></div>
+                <div class="row"><span class="hl indent2">  +@dataclass</span></div>
+                <div class="row"><span class="hl indent2">  +class User:</span></div>
+                <div class="row"><span class="ok indent2">✓ Applied successfully</span></div>
+                <div class="row"><span>&nbsp;</span></div>
+                <div class="row"><span class="muted indent">round: 2 | tokens: 1.2k in / 0.8k out | ctx: 5% | task done</span></div>
+                <div class="row"><span class="accent">▌</span></div>
             </div>
         </div>
-    </section>
+    </div>
+</section>
 
-    <!-- Stats -->
-    <section>
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// STATS</span>
-                    <span class="lang-zh">// 统计</span>
-                </h2>
+<!-- ═══════════════════════ STATS ═══════════════════════ -->
+<section>
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 01</div>
+            <h2 class="sec-title"><span class="lang-en">At a glance</span><span class="lang-zh">概览</span></h2>
+        </div>
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-num"><span class="accent">0</span></div>
+                <div class="stat-label"><span class="lang-en">dependencies</span><span class="lang-zh">依赖</span></div>
             </div>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value accent">100%</div>
-                    <div class="stat-label">
-                        <span class="lang-en">Zero Deps</span>
-                        <span class="lang-zh">零依赖</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value green">11</div>
-                    <div class="stat-label">
-                        <span class="lang-en">Built-in Tools</span>
-                        <span class="lang-zh">内置工具</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value purple">3</div>
-                    <div class="stat-label">
-                        <span class="lang-en">Providers</span>
-                        <span class="lang-zh">模型接入</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value orange">2</div>
-                    <div class="stat-label">
-                        <span class="lang-en">Languages</span>
-                        <span class="lang-zh">语言</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value red">0</div>
-                    <div class="stat-label">
-                        <span class="lang-en">npm install</span>
-                        <span class="lang-zh">npm install</span>
-                    </div>
-                </div>
+            <div class="stat">
+                <div class="stat-num">13</div>
+                <div class="stat-label"><span class="lang-en">built-in tools</span><span class="lang-zh">内置工具</span></div>
+            </div>
+            <div class="stat">
+                <div class="stat-num">3</div>
+                <div class="stat-label"><span class="lang-en">routing tiers</span><span class="lang-zh">路由档位</span></div>
+            </div>
+            <div class="stat">
+                <div class="stat-num">8</div>
+                <div class="stat-label"><span class="lang-en">thinking frameworks</span><span class="lang-zh">思考框架</span></div>
+            </div>
+            <div class="stat">
+                <div class="stat-num">∞</div>
+                <div class="stat-label"><span class="lang-en">providers (openai-compat)</span><span class="lang-zh">模型接入</span></div>
             </div>
         </div>
-    </section>
+    </div>
+</section>
 
-    <!-- Design Philosophy -->
-    <section id="design-philosophy">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// DESIGN PHILOSOPHY</span>
-                    <span class="lang-zh">// 设计哲学</span>
-                </h2>
+<!-- ═══════════════════════ ROUTING ═══════════════════════ -->
+<section id="routing">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 02</div>
+            <h2 class="sec-title"><span class="lang-en">Smart Provider <em>Routing.</em></span><span class="lang-zh">智能模型<em>路由</em></span></h2>
+        </div>
+        <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
+            <span class="lang-en">Three tiers, auto-selected per turn. Cheap models handle reads; the heavyweight only shows up when the task is genuinely complex. No mid-loop switching.</span>
+            <span class="lang-zh">三档模型，按回合自动选择。轻量模型负责读取；只有真正复杂的任务才调用重模型。中间不切换。</span>
+        </p>
+
+        <div class="tiers">
+            <div class="tier">
+                <div class="tier-name">tier / low</div>
+                <div class="tier-value">flash</div>
+                <p class="tier-desc"><span class="lang-en">Read / search / list. The default for trivial tasks.</span><span class="lang-zh">读取 / 搜索 / 列表。轻量任务的默认档。</span></p>
             </div>
-            <div class="philo-hero">
-                <div class="philo-quote-mark">"</div>
-                <p class="philo-quote-text">
-                    <span class="lang-en">Seeking a perfect balance between code size, complexity, and the functionality &amp; effectiveness of the agent.</span>
-                    <span class="lang-zh">在代码体积、复杂度和智能体功能与效能之间,追求完美的平衡。</span>
+            <div class="tier">
+                <div class="tier-name">tier / medium</div>
+                <div class="tier-value">standard</div>
+                <p class="tier-desc"><span class="lang-en">Edit / fix / multi-file. Most turns land here.</span><span class="lang-zh">编辑 / 修复 / 多文件。多数回合在此档。</span></p>
+            </div>
+            <div class="tier">
+                <div class="tier-name">tier / high</div>
+                <div class="tier-value">reasoning</div>
+                <p class="tier-desc"><span class="lang-en">Design / refactor / complex debug. Triggered by LLM scoring.</span><span class="lang-zh">设计 / 重构 / 复杂调试。由 LLM 打分触发。</span></p>
+            </div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-text">
+                <h3><span class="lang-en">Configure in <code>.mangocli/providers.json</code></span><span class="lang-zh">在 <code>.mangocli/providers.json</code> 配置</span></h3>
+                <p>
+                    <span class="lang-en">Each provider declares a tier (low / medium / high) and routing. Thresholds are tunable. Startup shows the model count; each turn prints the model that was picked.</span>
+                    <span class="lang-zh">每个 provider 声明档位（low / medium /high）和阈值。启动时显示模型数量，每回合打印所选模型。</span>
                 </p>
-                <div class="philo-quote-tag">
-                    <span class="lang-en">// The Mangopi Mantra</span>
-                    <span class="lang-zh">// Mangopi 的信条</span>
+            </div>
+            <pre class="callout-code"><span class="key">"providers"</span>: [
+  {<span class="key">"name"</span>: <span class="str">"low"</span>,    <span class="key">"model"</span>: <span class="str">"deepseek-v4-flash"</span>,    <span class="key">"tier"</span>: <span class="str">"low"</span>},
+  {<span class="key">"name"</span>: <span class="str">"medium"</span>, <span class="key">"model"</span>: <span class="str">"deepseek-v4"</span>,          <span class="key">"tier"</span>: <span class="str">"medium"</span>},
+  {<span class="key">"name"</span>: <span class="str">"high"</span>,   <span class="key">"model"</span>: <span class="str">"deepseek-v4-reasoning"</span>, <span class="key">"tier"</span>: <span class="str">"high"</span>}
+]</pre>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════════════ FLASH-EXT ═══════════════════════ -->
+<section id="flash">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 03</div>
+            <h2 class="sec-title"><span class="lang-en">Flash-ext <em>Proxy.</em></span><span class="lang-zh">Flash-ext <em>代理</em></span></h2>
+        </div>
+        <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
+            <span class="lang-en">An <em>intelligent model enhancement layer</em> — wraps itself as an OpenAI-compatible API exposing a "model endpoint," then enhances the upstream model through <em>thinking guidance + information augmentation.</em></span>
+            <span class="lang-zh"><em>智能模型增强层</em>——将自己包装成 OpenAI 兼容的 API 服务，对外暴露"模型接口"，再通过<em>思考引导 + 信息辅助</em>增强底层模型。</span>
+        </p>
+
+        <div class="feat-list" style="margin-top: 48px;">
+            <div class="feat">
+                <div class="feat-tag">— 01</div>
+                <div>
+                    <h3><span class="lang-en">Two-path routing</span><span class="lang-zh">双路径路由</span></h3>
+                    <p><span class="lang-en">Fast path (0ms, keyword match) or deep path (~300ms, Flash-ext's own LLM analyzes session state).</span><span class="lang-zh">快速路径（0ms，关键词匹配）或深思路径（~300ms，Flash-ext 自己的 LLM 分析会话状态）。</span></p>
                 </div>
             </div>
-            <div class="principle-grid">
-                <div class="principle-card">
-                    <div class="principle-icon">🔍</div>
-                    <h4>
-                        <span class="lang-en">Audit</span>
-                        <span class="lang-zh">可审计</span>
-                    </h4>
-                    <p>
-                        <span class="lang-en">Easier to audit</span>
-                        <span class="lang-zh">易于审计</span>
-                    </p>
+            <div class="feat">
+                <div class="feat-tag">— 02</div>
+                <div>
+                    <h3><span class="lang-en">Eight frameworks</span><span class="lang-zh">八个框架</span></h3>
+                    <p><span class="lang-en">debug / design / explain / optimize / implement / investigate / verify / reevaluate. Auto-selected by phase + tool pattern.</span><span class="lang-zh">debug / design / explain / optimize / implement / investigate / verify / reevaluate。由阶段和工具模式自动选择。</span></p>
                 </div>
-                <div class="principle-card">
-                    <div class="principle-icon">🛠️</div>
-                    <h4>
-                        <span class="lang-en">Hack</span>
-                        <span class="lang-zh">可魔改</span>
-                    </h4>
-                    <p>
-                        <span class="lang-en">Easier to hack</span>
-                        <span class="lang-zh">易于修改</span>
-                    </p>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 03</div>
+                <div>
+                    <h3><span class="lang-en">Loop detection</span><span class="lang-zh">循环检测</span></h3>
+                    <p><span class="lang-en">Catches same-tool and alternating failure loops. Triggers the reevaluate framework before the agent burns through context.</span><span class="lang-zh">检测同工具连续失败与交替失败模式。在 agent 烧光上下文前触发 reevaluate 框架。</span></p>
                 </div>
-                <div class="principle-card">
-                    <div class="principle-icon">⑂</div>
-                    <h4>
-                        <span class="lang-en">Fork</span>
-                        <span class="lang-zh">可分叉</span>
-                    </h4>
-                    <p>
-                        <span class="lang-en">Easier to fork</span>
-                        <span class="lang-zh">易于分支</span>
-                    </p>
-                </div>
-                <div class="principle-card">
-                    <div class="principle-icon">📖</div>
-                    <h4>
-                        <span class="lang-en">Understand</span>
-                        <span class="lang-zh">可读懂</span>
-                    </h4>
-                    <p>
-                        <span class="lang-en">Easier to understand</span>
-                        <span class="lang-zh">易于理解</span>
-                    </p>
-                </div>
-                <div class="principle-card">
-                    <div class="principle-icon">🏠</div>
-                    <h4>
-                        <span class="lang-en">Local</span>
-                        <span class="lang-zh">可本地</span>
-                    </h4>
-                    <p>
-                        <span class="lang-en">Easier to run locally</span>
-                        <span class="lang-zh">易于本地运行</span>
-                    </p>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 04</div>
+                <div>
+                    <h3><span class="lang-en">Cognitive only</span><span class="lang-zh">仅增强认知</span></h3>
+                    <p><span class="lang-en">Never touches file I/O or bash. Only enhances the model's reasoning before the request reaches upstream.</span><span class="lang-zh">不触碰文件 I/O 或 shell。仅在请求到达上游前增强模型推理。</span></p>
                 </div>
             </div>
         </div>
-    </section>
 
-    <!-- Ideal For -->
-    <section id="ideal-for">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// IDEAL FOR</span>
-                    <span class="lang-zh">// 适用人群</span>
-                </h2>
+        <div class="callout">
+            <div class="callout-text">
+                <h3><span class="lang-en">Run the server</span><span class="lang-zh">启动服务</span></h3>
+                <p>
+                    <span class="lang-en">Point any OpenAI-compatible client at <code>http://127.0.0.1:8080/v1/chat/completions</code>. Optionally enable memory and web search.</span>
+                    <span class="lang-zh">将任意 OpenAI 兼容客户端指向 <code>http://127.0.0.1:8080/v1/chat/completions</code>。可选择性启用记忆和搜索。</span>
+                </p>
             </div>
-            <div class="ideal-grid">
-                <div class="ideal-card">
-                    <div class="ideal-avatar">💻</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Terminal-First Developers</span>
-                            <span class="lang-zh">终端流开发者</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">Developers who prefer terminal workflows over GUI tools.</span>
-                            <span class="lang-zh">偏好终端工作流,胜过 GUI 工具的开发者。</span>
-                        </p>
-                    </div>
+            <pre class="callout-code"><span class="cmd-c">$</span> python mangopi_cli.py <span class="key">--flash-ext</span> <span class="key">--debug</span>
+<span class="muted"># Optional</span>
+<span class="cmd-c">$</span> python mangopi_cli.py <span class="key">--flash-ext</span> <span class="key">--memory</span> <span class="key">--web-search</span></pre>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════════════ FEATURES ═══════════════════════ -->
+<section id="features">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 04</div>
+            <h2 class="sec-title"><span class="lang-en">All <em>features.</em></span><span class="lang-zh">全部<em>特性</em></span></h2>
+        </div>
+        <div class="feat-list">
+            <div class="feat">
+                <div class="feat-tag">— 01</div>
+                <div>
+                    <h3><span class="lang-en">Zero Dependencies</span><span class="lang-zh">零依赖</span></h3>
+                    <p><span class="lang-en">Pure Python stdlib — urllib, json, subprocess. No pip install. Single .py file.</span><span class="lang-zh">纯 Python 标准库 — urllib, json, subprocess。无需 pip 安装，单个 .py 文件。</span></p>
                 </div>
-                <div class="ideal-card">
-                    <div class="ideal-avatar">🚫</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Framework Skeptics</span>
-                            <span class="lang-zh">重型框架厌恶者</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">Users who dislike heavyweight AI frameworks and dependencies.</span>
-                            <span class="lang-zh">不喜欢臃肿的 AI 框架和依赖的用户。</span>
-                        </p>
-                    </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 02</div>
+                <div>
+                    <h3><span class="lang-en">Agentic Loop</span><span class="lang-zh">Agentic 循环</span></h3>
+                    <p><span class="lang-en">Autonomous tool-calling loop: read → think → edit → verify. Multi-step reasoning, no manual intervention.</span><span class="lang-zh">自主工具调用循环：读取→思考→编辑→验证。多步推理无需人工干预。</span></p>
                 </div>
-                <div class="ideal-card">
-                    <div class="ideal-avatar">🧪</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Hackers &amp; Tinkerers</span>
-                            <span class="lang-zh">黑客与折腾者</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">People who love to peek under the hood and customize everything.</span>
-                            <span class="lang-zh">喜欢掀开引擎盖、一切都自己改的极客。</span>
-                        </p>
-                    </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 03</div>
+                <div>
+                    <h3><span class="lang-en">Smart Context</span><span class="lang-zh">智能上下文</span></h3>
+                    <p><span class="lang-en">Three-tier compact: micro (expire stale tool results), session-memory, fallback (strip + trim). Auto at 80%.</span><span class="lang-zh">三级压缩：micro（过期工具结果）、session-memory、fallback（剥离+裁剪）。80% 自动触发。</span></p>
                 </div>
-                <div class="ideal-card">
-                    <div class="ideal-avatar">🏠</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Local-First Enthusiasts</span>
-                            <span class="lang-zh">本地优先主义者</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">Privacy-minded users who want code &amp; data to stay on their machine.</span>
-                            <span class="lang-zh">注重隐私,希望代码和数据留在本机的用户。</span>
-                        </p>
-                    </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 04</div>
+                <div>
+                    <h3><span class="lang-en">Multimodal</span><span class="lang-zh">多模态</span></h3>
+                    <p><span class="lang-en">Drop a screenshot into the conversation. <code>read</code> auto-routes png/jpg/gif/webp to the model's vision.</span><span class="lang-zh">将截图拖入对话。<code>read</code> 自动将 png/jpg/gif/webp 路由至模型视觉。</span></p>
                 </div>
-                <div class="ideal-card">
-                    <div class="ideal-avatar">🎛️</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Full Runtime Control</span>
-                            <span class="lang-zh">完全掌控运行时</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">People who want full control over the agent runtime and behavior.</span>
-                            <span class="lang-zh">希望完全掌控智能体运行时与行为的用户。</span>
-                        </p>
-                    </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 05</div>
+                <div>
+                    <h3><span class="lang-en">Web Search</span><span class="lang-zh">Web 搜索</span></h3>
+                    <p><span class="lang-en"><code>web_search</code> tool queries the live web via Bocha AI Search when the model needs fresh docs.</span><span class="lang-zh"><code>web_search</code> 工具通过 Bocha AI Search 查询实时网络。</span></p>
                 </div>
-                <div class="ideal-card">
-                    <div class="ideal-avatar">🏗️</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Custom Agent Builders</span>
-                            <span class="lang-zh">自定义智能体构建者</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">Engineers building bespoke coding agents on top of a clean base.</span>
-                            <span class="lang-zh">在干净基座上构建定制编码智能体的工程师。</span>
-                        </p>
-                    </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 06</div>
+                <div>
+                    <h3><span class="lang-en">Session Persist</span><span class="lang-zh">会话持久化</span></h3>
+                    <p><span class="lang-en">JSON in .mangocli/session/. Auto-backup on corruption. Resume anywhere.</span><span class="lang-zh">会话保存在 .mangocli/session/。损坏自动备份。断点续聊。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 07</div>
+                <div>
+                    <h3><span class="lang-en">Safety Checks</span><span class="lang-zh">安全检查</span></h3>
+                    <p><span class="lang-en">rm -rf / sudo / chmod 777 detection. User confirmation before destructive commands. Path sandbox.</span><span class="lang-zh">检测 rm -rf / sudo / chmod 777。危险命令执行前需用户确认。路径沙盒。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 08</div>
+                <div>
+                    <h3><span class="lang-en">Skill System</span><span class="lang-zh">技能系统</span></h3>
+                    <p><span class="lang-en">Reusable workflow bundles via <code>SKILL.md</code>. Install in ~/.mangocli/skills/, invoke via <code>use_skill</code>.</span><span class="lang-zh">通过 <code>SKILL.md</code> 复用工作流。安装至 ~/.mangocli/skills/，通过 <code>use_skill</code> 调用。</span></p>
                 </div>
             </div>
         </div>
-    </section>
+    </div>
+</section>
 
-    <!-- Features -->
-    <section id="features">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// FEATURES</span>
-                    <span class="lang-zh">// 特性</span>
-                </h2>
+<!-- ═══════════════════════ IDEAL FOR ═══════════════════════ -->
+<section id="ideal">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 05</div>
+            <h2 class="sec-title"><span class="lang-en">Ideal <em>for.</em></span><span class="lang-zh">适用<em>人群</em></span></h2>
+        </div>
+        <div class="ideal-grid">
+            <div class="ideal">
+                <div class="ideal-num">— 01</div>
+                <h4><span class="lang-en">Terminal-first devs</span><span class="lang-zh">终端流开发者</span></h4>
+                <p><span class="lang-en">Prefer the shell over GUI tools.</span><span class="lang-zh">比起 GUI 工具更爱 shell。</span></p>
             </div>
-            <div class="features-grid">
-                <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
-                    <h3>
-                        <span class="lang-en">Zero Dependencies</span>
-                        <span class="lang-zh">零依赖</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Pure Python stdlib — urllib, json, subprocess. No pip install required. Single .py file.</span>
-                        <span class="lang-zh">纯 Python 标准库 — urllib, json, subprocess。无需 pip 安装，单个 .py 文件。</span>
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔄</div>
-                    <h3>
-                        <span class="lang-en">Agentic Loop</span>
-                        <span class="lang-zh">Agentic 循环</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Autonomous tool-calling loop: read → think → edit → verify. Multi-step reasoning without manual intervention.</span>
-                        <span class="lang-zh">自主工具调用循环：读取→思考→编辑→验证。多步推理无需人工干预。</span>
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📦</div>
-                    <h3>
-                        <span class="lang-en">Smart Context</span>
-                        <span class="lang-zh">智能上下文</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Three-tier compact: micro (expire stale tool results), session-memory (retain recent), fallback (strip + trim). Auto triggers at 80%.</span>
-                        <span class="lang-zh">三级压缩：micro（过期工具结果）、session-memory（保留近期）、fallback（剥离+裁剪）。80% 阈值自动触发。</span>
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🛡️</div>
-                    <h3>
-                        <span class="lang-en">Safety Checks</span>
-                        <span class="lang-zh">安全检查</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Dangerous command detection (rm -rf, sudo, chmod 777, mkfs...). User confirmation before execution. Path sandboxing.</span>
-                        <span class="lang-zh">危险命令检测（rm -rf, sudo, chmod 777, mkfs…）。执行前需用户确认。路径沙盒。</span>
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">💾</div>
-                    <h3>
-                        <span class="lang-en">Session Persist</span>
-                        <span class="lang-zh">会话持久化</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Sessions saved as JSON in .mangocli/session/. Corrupt files auto-backup. Resume where you left off.</span>
-                        <span class="lang-zh">会话以 JSON 保存在 .mangocli/session/。损坏文件自动备份。断点续聊。</span>
-                    </p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🌐</div>
-                    <h3>
-                        <span class="lang-en">i18n Ready</span>
-                        <span class="lang-zh">国际化</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Built-in Chinese & English. Set MANGO_LANG=zh for Chinese UI output. System prompt adapts automatically.</span>
-                        <span class="lang-zh">内置中英文。设置 MANGO_LANG=zh 切换中文 UI 输出。System Prompt 自动适配。</span>
-                    </p>
-                </div>
+            <div class="ideal">
+                <div class="ideal-num">— 02</div>
+                <h4><span class="lang-en">Framework skeptics</span><span class="lang-zh">重型框架厌恶者</span></h4>
+                <p><span class="lang-en">Dislike heavy AI frameworks and dependency trees.</span><span class="lang-zh">不喜欢臃肿的 AI 框架与依赖树。</span></p>
+            </div>
+            <div class="ideal">
+                <div class="ideal-num">— 03</div>
+                <h4><span class="lang-en">Hackers & tinkerers</span><span class="lang-zh">黑客与折腾者</span></h4>
+                <p><span class="lang-en">Want to peek under the hood and customize everything.</span><span class="lang-zh">想掀开引擎盖、一切都自己改。</span></p>
+            </div>
+            <div class="ideal">
+                <div class="ideal-num">— 04</div>
+                <h4><span class="lang-en">Local-first enthusiasts</span><span class="lang-zh">本地优先主义者</span></h4>
+                <p><span class="lang-en">Want code & data to stay on their machine.</span><span class="lang-zh">希望代码与数据留在本机。</span></p>
+            </div>
+            <div class="ideal">
+                <div class="ideal-num">— 05</div>
+                <h4><span class="lang-en">Custom agent builders</span><span class="lang-zh">智能体构建者</span></h4>
+                <p><span class="lang-en">Build bespoke agents on a clean, auditable base.</span><span class="lang-zh">在干净基座上构建定制智能体。</span></p>
+            </div>
+            <div class="ideal">
+                <div class="ideal-num">— 06</div>
+                <h4><span class="lang-en">Multi-model teams</span><span class="lang-zh">多模型团队</span></h4>
+                <p><span class="lang-en">Mix cheap + strong models per task to control API cost.</span><span class="lang-zh">按任务混用轻量与重型模型，控制 API 成本。</span></p>
             </div>
         </div>
-    </section>
+    </div>
+</section>
 
-    <!-- Safety -->
-    <section id="safety">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// SAFETY</span>
-                    <span class="lang-zh">// 安全</span>
-                </h2>
+<!-- ═══════════════════════ PHILOSOPHY ═══════════════════════ -->
+<section id="philosophy">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 06</div>
+            <h2 class="sec-title"><span class="lang-en">Design <em>philosophy.</em></span><span class="lang-zh">设计<em>哲学</em></span></h2>
+        </div>
+        <div class="philo-hero">
+            <div class="philo-quote">
+                <span class="lang-en">Seeking a perfect balance between code size, complexity, and the functionality &amp; effectiveness of the agent.</span>
+                <span class="lang-zh">在代码体积、复杂度和智能体功能与效能之间，追求完美的<em>平衡</em>。</span>
             </div>
-            <div class="safety-grid">
-                <div class="safety-card">
-                    <div class="safety-icon">🛡️</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Dangerous Command Detection</span>
-                            <span class="lang-zh">危险命令检测</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">Automatically detects rm -rf, sudo, chmod 777, mkfs, and other destructive operations. User confirmation required before execution.</span>
-                            <span class="lang-zh">自动检测 rm -rf, sudo, chmod 777, mkfs 等危险操作。执行前需用户确认。</span>
-                        </p>
-                    </div>
-                </div>
-                <div class="safety-card">
-                    <div class="safety-icon">🔒</div>
-                    <div>
-                        <h4>
-                            <span class="lang-en">Path Sandbox</span>
-                            <span class="lang-zh">路径沙盒</span>
-                        </h4>
-                        <p>
-                            <span class="lang-en">File operations are restricted to the project root directory. Cannot access files outside workspace without explicit approval.</span>
-                            <span class="lang-zh">文件操作限制在项目根目录内。未经明确批准，无法访问工作区外的文件。</span>
-                        </p>
-                    </div>
-                </div>
+            <ul class="philo-list">
+                <li><span class="lang-en">Easier to audit</span><span class="lang-zh">易于审计</span></li>
+                <li><span class="lang-en">Easier to hack</span><span class="lang-zh">易于魔改</span></li>
+                <li><span class="lang-en">Easier to fork</span><span class="lang-zh">易于分叉</span></li>
+                <li><span class="lang-en">Easier to understand</span><span class="lang-zh">易于理解</span></li>
+                <li><span class="lang-en">Easier to run locally</span><span class="lang-zh">易于本地运行</span></li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════════════ PROVIDERS ═══════════════════════ -->
+<section id="providers">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 07</div>
+            <h2 class="sec-title"><span class="lang-en"><em>Any</em> provider.</span><span class="lang-zh">任意<em>模型</em>接入</span></h2>
+        </div>
+        <div class="providers">
+            <div class="provider">
+                <div class="provider-name">DeepSeek</div>
+                <span class="provider-tag">— DEFAULT</span>
+                <p><span class="lang-en">Auto-detected. Enables thinking/reasoning via extra_body.</span><span class="lang-zh">自动检测，通过 extra_body 启用 reasoning。</span></p>
+            </div>
+            <div class="provider">
+                <div class="provider-name">OpenAI</div>
+                <p><span class="lang-en">Full OpenAI-compatible. Any /v1/chat/completions endpoint.</span><span class="lang-zh">完整兼容 OpenAI，任意 /v1/chat/completions 端点。</span></p>
+            </div>
+            <div class="provider">
+                <div class="provider-name">MiniMax</div>
+                <p><span class="lang-en">Detected by model name. Exposes reasoning_split.</span><span class="lang-zh">通过模型名检测，暴露 reasoning_split。</span></p>
+            </div>
+            <div class="provider">
+                <div class="provider-name"><span class="lang-en">+ Any Compat</span><span class="lang-zh">+ 任意兼容</span></div>
+                <p><span class="lang-en">Qwen, Moonshot, kimi, glm — anything that speaks OpenAI protocol.</span><span class="lang-zh">Qwen、Moonshot、kimi、glm — 任何兼容 OpenAI 协议的接口。</span></p>
             </div>
         </div>
-    </section>
+    </div>
+</section>
 
-    <!-- Providers -->
-    <section id="providers">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// PROVIDERS</span>
-                    <span class="lang-zh">// 模型接入</span>
-                </h2>
+<!-- ═══════════════════════ TOOLS ═══════════════════════ -->
+<section id="tools">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 08</div>
+            <h2 class="sec-title"><span class="lang-en"><em>13</em> tools.</span><span class="lang-zh"><em>13</em> 个工具</span></h2>
+        </div>
+        <div class="tools">
+            <div class="tool"><code>read</code><p><span class="lang-en">File or image (png/jpg/gif/webp auto-routes to vision)</span><span class="lang-zh">文件或图片（png/jpg/gif/webp 自动路由至视觉）</span></p></div>
+            <div class="tool"><code>write</code><p><span class="lang-en">Write or overwrite</span><span class="lang-zh">写入或覆写</span></p></div>
+            <div class="tool"><code>edit</code><p><span class="lang-en">Exact string replace + diff</span><span class="lang-zh">精确字符串替换 + diff</span></p></div>
+            <div class="tool"><code>search</code><p><span class="lang-en">Glob patterns, sorted by mtime</span><span class="lang-zh">Glob 模式，按修改时间排序</span></p></div>
+            <div class="tool"><code>grep</code><p><span class="lang-en">Recursive regex content search</span><span class="lang-zh">递归正则内容搜索</span></p></div>
+            <div class="tool"><code>bash</code><p><span class="lang-en">Shell exec (60s timeout)</span><span class="lang-zh">Shell 执行（60s 超时）</span></p></div>
+            <div class="tool"><code>view_image</code><p><span class="lang-en">Load local image into vision context</span><span class="lang-zh">加载本地图片至视觉上下文</span></p></div>
+            <div class="tool"><code>web_search</code><p><span class="lang-en">Bocha AI Search live web</span><span class="lang-zh">Bocha AI 实时搜索</span></p></div>
+            <div class="tool"><code>use_skill</code><p><span class="lang-en">Load installed SKILL.md</span><span class="lang-zh">加载已安装技能</span></p></div>
+            <div class="tool"><code>search_memory</code><p><span class="lang-en">Multi-keyword markdown search</span><span class="lang-zh">多关键词 markdown 搜索</span></p></div>
+            <div class="tool"><code>append_memory</code><p><span class="lang-en">Append long-term memory</span><span class="lang-zh">追加长期记忆</span></p></div>
+            <div class="tool"><code>goal</code><p><span class="lang-en">Plan / step / show / finish</span><span class="lang-zh">计划 / 步骤 / 显示 / 完成</span></p></div>
+            <div class="tool"><code>attempt_completion</code><p><span class="lang-en">Task completion signal</span><span class="lang-zh">任务完成信号</span></p></div>
+        </div>
+
+        <div class="commands">
+            <div class="cmd"><code>/q</code><p><span class="lang-en">Quit</span><span class="lang-zh">退出</span></p></div>
+            <div class="cmd"><code>/n</code><p><span class="lang-en">New session</span><span class="lang-zh">新会话</span></p></div>
+            <div class="cmd"><code>/c</code><p><span class="lang-en">Compact</span><span class="lang-zh">手动压缩</span></p></div>
+            <div class="cmd"><code>/g &lt;goal&gt;</code><p><span class="lang-en">Autonomous goal mode</span><span class="lang-zh">目标模式</span></p></div>
+            <div class="cmd"><code>/h</code><p><span class="lang-en">Help</span><span class="lang-zh">帮助</span></p></div>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════════════ INSTALL ═══════════════════════ -->
+<section id="install">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 09</div>
+            <h2 class="sec-title"><span class="lang-en"><em>Install.</em></span><span class="lang-zh"><em>安装</em></span></h2>
+        </div>
+        <div class="install-row">
+            <div class="install-card">
+                <div class="install-tag">— PyPI</div>
+                <h3>pip install</h3>
+                <p><span class="lang-en">Recommended. Requires Python 3.10+.</span><span class="lang-zh">推荐方式。需 Python 3.10+。</span></p>
+                <div class="code"><span class="cmd-c">$</span> pip install mangopi-cli<br><span class="cmd-c">$</span> mangopi-cli</div>
             </div>
-            <div class="providers-grid">
-                <div class="provider-card">
-                    <h3>DeepSeek</h3>
-                    <p>
-                        <span class="lang-en">Auto-detect deepseek models. Enables thinking/reasoning mode via extra_body.</span>
-                        <span class="lang-zh">自动检测 deepseek 模型，通过 extra_body 启用 thinking 推理模式。</span>
-                    </p>
-                    <span class="provider-tag">
-                        <span class="lang-en">DEFAULT</span>
-                        <span class="lang-zh">默认</span>
-                    </span>
-                </div>
-                <div class="provider-card">
-                    <h3>OpenAI</h3>
-                    <p>
-                        <span class="lang-en">Full OpenAI-compatible API. Supports any /v1/chat/completions endpoint.</span>
-                        <span class="lang-zh">完整 OpenAI 兼容 API。支持任何 /v1/chat/completions 端点。</span>
-                    </p>
-                </div>
-                <div class="provider-card">
-                    <h3>
-                        <span class="lang-en">Any Compat</span>
-                        <span class="lang-zh">任意兼容</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Qwen, Moonshot, etc. — as long as it speaks OpenAI protocol.</span>
-                        <span class="lang-zh">Qwen、Moonshot 等 — 只要支持 OpenAI 协议即可接入。</span>
-                    </p>
-                </div>
-                <div class="provider-card">
-                    <h3>MiniMax</h3>
-                    <p>
-                        <span class="lang-en">Auto-detected when the model name contains "minimax". Enables reasoning_split for transparent reasoning traces.</span>
-                        <span class="lang-zh">模型名包含 "minimax" 时自动启用。通过 reasoning_split 暴露推理链。</span>
-                    </p>
-                </div>
+            <div class="install-card">
+                <div class="install-tag">— SOURCE</div>
+                <h3>git clone</h3>
+                <p><span class="lang-en">Clone and run. Zero setup.</span><span class="lang-zh">克隆即运行，零配置。</span></p>
+                <div class="code"><span class="cmd-c">$</span> git clone git@github.com:w4n9H/mangopi-cli.git<br><span class="cmd-c">$</span> cd mangopi-cli<br><span class="cmd-c">$</span> python mangopi_cli.py</div>
             </div>
         </div>
-    </section>
+    </div>
+</section>
 
-    <!-- Install -->
-    <section id="install">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// INSTALL</span>
-                    <span class="lang-zh">// 安装</span>
-                </h2>
-            </div>
-            <div class="install-grid">
-                <div class="install-card">
-                    <div class="install-header">
-                        <h3>PyPI</h3>
-                        <span class="install-badge">
-                            <span class="lang-en">RECOMMENDED</span>
-                            <span class="lang-zh">推荐</span>
-                        </span>
-                    </div>
-                    <p>
-                        <span class="lang-en">Simple pip install. Python 3.10+ required.</span>
-                        <span class="lang-zh">简单的 pip 安装。需要 Python 3.10+。</span>
-                    </p>
-                    <div class="code-block">
-                        <code><span class="cmd">pip</span> install mangopi-cli<br><span class="cmd">mangopi-cli</span></code>
-                    </div>
-                </div>
-                <div class="install-card">
-                    <div class="install-header">
-                        <h3>Source</h3>
-                    </div>
-                    <p>
-                        <span class="lang-en">Clone and run. Zero setup.</span>
-                        <span class="lang-zh">克隆即运行，零配置。</span>
-                    </p>
-                    <div class="code-block">
-                        <code><span class="cmd">git</span> clone git@github.com:w4n9H/mangopi-cli.git<br><span class="cmd">cd</span> mangopi-cli<br><span class="cmd">python</span> mangopi_cli.py</code>
-                    </div>
-                </div>
-            </div>
+<!-- ═══════════════════════ CONFIG ═══════════════════════ -->
+<section id="config">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 10</div>
+            <h2 class="sec-title"><span class="lang-en"><em>Config.</em></span><span class="lang-zh"><em>配置</em></span></h2>
         </div>
-    </section>
-
-    <!-- Config -->
-    <section id="config">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// CONFIG</span>
-                    <span class="lang-zh">// 配置</span>
-                </h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px;">
+            <div class="envs">
+                <div class="env-row">
+                    <span class="env-name req">MANGO_KEY</span>
+                    <span class="env-desc"><span class="lang-en">API key</span><span class="lang-zh">API 密钥</span></span>
+                    <span class="env-default">—</span>
+                </div>
+                <div class="env-row">
+                    <span class="env-name">MANGO_API_URL</span>
+                    <span class="env-desc"><span class="lang-en">Endpoint</span><span class="lang-zh">端点</span></span>
+                    <span class="env-default">deepseek</span>
+                </div>
+                <div class="env-row">
+                    <span class="env-name">MANGO_MODEL</span>
+                    <span class="env-desc"><span class="lang-en">Model name</span><span class="lang-zh">模型名</span></span>
+                    <span class="env-default">v4-flash</span>
+                </div>
+                <div class="env-row">
+                    <span class="env-name">MANGO_ROUTING</span>
+                    <span class="env-desc"><span class="lang-en">Enable smart routing</span><span class="lang-zh">启用智能路由</span></span>
+                    <span class="env-default">off</span>
+                </div>
+                <div class="env-row">
+                    <span class="env-name">MANGO_MAX_CONTEXT</span>
+                    <span class="env-desc"><span class="lang-en">Max tokens</span><span class="lang-zh">最大 token</span></span>
+                    <span class="env-default">1M</span>
+                </div>
+                <div class="env-row">
+                    <span class="env-name">MANGO_LANG</span>
+                    <span class="env-desc"><span class="lang-en">UI language</span><span class="lang-zh">界面语言</span></span>
+                    <span class="env-default">en</span>
+                </div>
             </div>
-            <div class="config-grid">
-                <ul class="env-list">
-                    <li class="env-item required">
-                        <span class="env-name">MANGO_KEY</span>
-                        <span class="env-desc">
-                            <span class="lang-en">API key (required)</span>
-                            <span class="lang-zh">API 密钥（必填）</span>
-                        </span>
-                    </li>
-                    <li class="env-item">
-                        <span class="env-name">MANGO_API_URL</span>
-                        <span class="env-desc">
-                            <span class="lang-en">Endpoint (default: deepseek)</span>
-                            <span class="lang-zh">端点（默认：deepseek）</span>
-                        </span>
-                    </li>
-                    <li class="env-item">
-                        <span class="env-name">MANGO_MODEL</span>
-                        <span class="env-desc">
-                            <span class="lang-en">Model (default: deepseek-v4-flash)</span>
-                            <span class="lang-zh">模型（默认：deepseek-v4-flash）</span>
-                        </span>
-                    </li>
-                    <li class="env-item">
-                        <span class="env-name">MANGO_MAX_CONTEXT</span>
-                        <span class="env-desc">
-                            <span class="lang-en">Max tokens (default: 1M)</span>
-                            <span class="lang-zh">最大 token 数（默认：1M）</span>
-                        </span>
-                    </li>
-                    <li class="env-item">
-                        <span class="env-name">MANGO_LANG</span>
-                        <span class="env-desc">
-                            <span class="lang-en">Language: en / zh (default: en)</span>
-                            <span class="lang-zh">语言：en / zh（默认：en）</span>
-                        </span>
-                    </li>
-                </ul>
-                <div class="config-code">
-                    <div class="code-block">
-                        <code>
-<span class="cmd">export</span> MANGO_KEY=<span style="color:var(--green)">"your-key"</span><br>
-<span class="cmd">export</span> MANGO_API_URL=<span style="color:var(--green)">"https://api.deepseek.com"</span><br>
-<span class="cmd">export</span> MANGO_MODEL=<span style="color:var(--green)">"deepseek-v4-flash"</span><br>
+            <div>
+                <div class="code">
+<span class="cmd-c">$</span> export MANGO_KEY=<span class="str-c">"your-key"</span><br>
+<span class="cmd-c">$</span> export MANGO_API_URL=<span class="str-c">"https://api.deepseek.com"</span><br>
+<span class="cmd-c">$</span> export MANGO_MODEL=<span class="str-c">"deepseek-v4-flash"</span><br>
 <br>
-<span class="lang-en"># optional</span><span class="lang-zh"># 可选</span><br>
-<span class="cmd">export</span> MANGO_MAX_CONTEXT=<span style="color:var(--green)">"1000000"</span><br>
-<span class="cmd">export</span> MANGO_LANG=<span style="color:var(--green)">"zh"</span>
-                        </code>
-                    </div>
+<span style="color: var(--muted);"># smart routing</span><br>
+<span class="cmd-c">$</span> export MANGO_ROUTING=<span class="str-c">"on"</span>
                 </div>
             </div>
         </div>
-    </section>
+    </div>
+</section>
 
-    <!-- Tools -->
-    <section id="tools">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// TOOLS</span>
-                    <span class="lang-zh">// 工具</span>
-                </h2>
-            </div>
-            <div class="tools-grid">
-                <div class="tool-item">
-                    <code>read</code>
-                    <p>
-                        <span class="lang-en">Read files with offset & limit</span>
-                        <span class="lang-zh">读取文件（支持偏移和限制）</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>write</code>
-                    <p>
-                        <span class="lang-en">Write / overwrite files</span>
-                        <span class="lang-zh">写入/覆写文件</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>edit</code>
-                    <p>
-                        <span class="lang-en">Exact string replace + diff</span>
-                        <span class="lang-zh">精确字符串替换 + diff 预览</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>search</code>
-                    <p>
-                        <span class="lang-en">Glob pattern file search</span>
-                        <span class="lang-zh">Glob 模式文件搜索</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>grep</code>
-                    <p>
-                        <span class="lang-en">Regex content search</span>
-                        <span class="lang-zh">正则表达式内容搜索</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>use_skill</code>
-                    <p>
-                        <span class="lang-en">Load installed skills</span>
-                        <span class="lang-zh">加载已安装技能</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>search_memory</code>
-                    <p>
-                        <span class="lang-en">Multi-keyword memory search</span>
-                        <span class="lang-zh">多关键词记忆检索</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>append_memory</code>
-                    <p>
-                        <span class="lang-en">Append long-term memory</span>
-                        <span class="lang-zh">追加长期记忆</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>goal</code>
-                    <p>
-                        <span class="lang-en">Plan / step / show / finish</span>
-                        <span class="lang-zh">目标计划管理</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>bash</code>
-                    <p>
-                        <span class="lang-en">Shell exec with 60s timeout</span>
-                        <span class="lang-zh">Shell 执行（60s 超时）</span>
-                    </p>
-                </div>
-                <div class="tool-item">
-                    <code>attempt_completion</code>
-                    <p>
-                        <span class="lang-en">Task completion signal</span>
-                        <span class="lang-zh">任务完成信号</span>
-                    </p>
-                </div>
-            </div>
-        </div>
-    </section>
+<!-- ═══════════════════════ FOOTER ═══════════════════════ -->
+<footer>
+    <div class="wrap footer-row">
+        <span>© 2026 MANGOPI CLI · Apache 2.0</span>
+        <span>v0.1.29 · single file · zero deps</span>
+    </div>
+</footer>
 
-    <!-- Architecture -->
-    <section id="architecture">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// ARCHITECTURE</span>
-                    <span class="lang-zh">// 架构</span>
-                </h2>
-            </div>
-            <div class="arch-flow">
-                <div class="arch-node">
-                    <h4>User</h4>
-                    <p>Terminal input</p>
-                </div>
-                <span class="arch-arrow">→</span>
-                <div class="arch-node">
-                    <h4>SystemPrompt</h4>
-                    <p>
-                        <span class="lang-en">Dynamic assembly</span>
-                        <span class="lang-zh">动态装配</span>
-                    </p>
-                </div>
-                <span class="arch-arrow">→</span>
-                <div class="arch-node">
-                    <h4>Provider</h4>
-                    <p>
-                        <span class="lang-en">API call + retry</span>
-                        <span class="lang-zh">API 调用 + 重试</span>
-                    </p>
-                </div>
-                <span class="arch-arrow">→</span>
-                <div class="arch-node">
-                    <h4>Agentic Loop</h4>
-                    <p>
-                        <span class="lang-en">Tool exec + verify</span>
-                        <span class="lang-zh">工具执行 + 验证</span>
-                    </p>
-                </div>
-                <span class="arch-arrow">→</span>
-                <div class="arch-node">
-                    <h4>Context</h4>
-                    <p>
-                        <span class="lang-en">Compact + persist</span>
-                        <span class="lang-zh">压缩 + 持久化</span>
-                    </p>
-                </div>
-            </div>
-            <!-- Commands -->
-            <div style="margin-top: 24px;">
-                <div class="section-header">
-                    <h2 class="section-title">
-                        <span class="lang-en">// COMMANDS</span>
-                        <span class="lang-zh">// 命令</span>
-                    </h2>
-                </div>
-                <div class="commands-grid">
-                    <div class="cmd-item">
-                        <code>/q</code>
-                        <p>
-                            <span class="lang-en">Quit</span>
-                            <span class="lang-zh">退出</span>
-                        </p>
-                    </div>
-                    <div class="cmd-item">
-                        <code>/n</code>
-                        <p>
-                            <span class="lang-en">New session</span>
-                            <span class="lang-zh">新建会话</span>
-                        </p>
-                    </div>
-                    <div class="cmd-item">
-                        <code>/c</code>
-                        <p>
-                            <span class="lang-en">Compact</span>
-                            <span class="lang-zh">手动压缩</span>
-                        </p>
-                    </div>
-                    <div class="cmd-item">
-                        <code>/g &lt;goal&gt;</code>
-                        <p>
-                            <span class="lang-en">Autonomous goal execution</span>
-                            <span class="lang-zh">自主目标执行模式</span>
-                        </p>
-                    </div>
-                    <div class="cmd-item">
-                        <code>/h</code>
-                        <p>
-                            <span class="lang-en">Help</span>
-                            <span class="lang-zh">帮助</span>
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Goal Mode -->
-    <section id="goal">
-        <div class="container">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <span class="lang-en">// GOAL MODE</span>
-                    <span class="lang-zh">// 目标模式</span>
-                </h2>
-            </div>
-            <div class="install-grid">
-                <div class="install-card">
-                    <h3>
-                        <span class="lang-en">Autonomous Execution</span>
-                        <span class="lang-zh">自主执行</span>
-                    </h3>
-                    <p>
-                        <span class="lang-en">Use <code>/g &lt;goal&gt;</code> to let Mangopi CLI autonomously plan → execute → verify → iterate until the objective is fully completed. No manual intervention needed.</span>
-                        <span class="lang-zh">使用 <code>/g &lt;目标&gt;</code> 让 Mangopi CLI 自主 规划→执行→验证→迭代，直到目标完全达成。无需人工干预。</span>
-                    </p>
-                    <div class="code-block">
-                        <code><span class="cmd">/g</span> build a fastapi todo app with tests</code>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Footer -->
-    <footer>
-        <div class="container">
-            <p>
-                <span class="lang-en">© 2024 MANGOPI CLI v0.1.19 · Apache License 2.0</span>
-                <span class="lang-zh">© 2024 MANGOPI CLI v0.1.19 · Apache 许可证 2.0</span>
-            </p>
-        </div>
-    </footer>
-
-    <script>
-        let currentLang = localStorage.getItem('lang') || 'en';
+<script>
+    let currentLang = localStorage.getItem('lang') || 'en';
+    document.body.setAttribute('data-lang', currentLang);
+    function toggleLang() {
+        currentLang = currentLang === 'en' ? 'zh' : 'en';
         document.body.setAttribute('data-lang', currentLang);
-
-        function toggleLang() {
-            currentLang = currentLang === 'en' ? 'zh' : 'en';
-            document.body.setAttribute('data-lang', currentLang);
-            localStorage.setItem('lang', currentLang);
-        }
-    </script>
+        localStorage.setItem('lang', currentLang);
+    }
+</script>
 
 </body>
 </html>

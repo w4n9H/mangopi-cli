@@ -177,8 +177,14 @@ class AssessComplexityTests(unittest.TestCase):
         self.assertEqual(ctx.assess_complexity(), "deep")
 
     def test_returns_deep_for_diverse_tools(self):
-        ctx = _make_ctx([_tool_msg("read"), _tool_msg("edit"), _tool_msg("bash")])
+        # read 是探查性工具不计,需 4 种非 read 工具才 deep
+        ctx = _make_ctx([_tool_msg("read"), _tool_msg("edit"), _tool_msg("bash"), _tool_msg("grep"), _tool_msg("write")])
         self.assertEqual(ctx.assess_complexity(), "deep")
+
+    def test_returns_fast_for_3_non_read_tools(self):
+        # 3 种非 read 工具仍 fast(read 不计)
+        ctx = _make_ctx([_tool_msg("read"), _tool_msg("edit"), _tool_msg("bash")])
+        self.assertEqual(ctx.assess_complexity(), "fast")
 
     def test_returns_deep_for_repetitive_tool(self):
         ctx = _make_ctx([_tool_msg("edit")] * 6)
@@ -277,6 +283,59 @@ class FlashExtServerAugmentTests(unittest.TestCase):
         # Only the LAST user message should be augmented
         user_content = self._last_user_content(result)
         self.assertIn('<framework name=\"debug\">', user_content)
+
+
+# ── FlashExtServer _handle body passthrough ─────────────────────────────────
+
+class FlashExtServerHandleTests(unittest.TestCase):
+    def setUp(self):
+        self.provider = MagicMock()
+        self.provider.api_url = "https://test/api"
+        self.provider.headers.return_value = {}
+        self.provider.build_body.return_value = {"model": "default-model", "stream": False}
+        self.srv = FlashExtServer(host="127.0.0.1", port=9999, provider_obj=self.provider,
+                                  enable_memory=False, enable_search=False)
+        self.srv.logger = MagicMock()
+
+    def test_preserves_client_temperature(self):
+        with patch("mangopi_cli._request", return_value={"choices": [], "model": "x", "usage": {}}) as mock_req:
+            self.srv._handle({"model": "client-model", "messages": [{"role": "user", "content": "hi"}],
+                              "temperature": 0.3, "max_tokens": 1024, "stream": True})
+        sent_payload = mock_req.call_args[0][1]
+        self.assertEqual(sent_payload["temperature"], 0.3)
+        self.assertEqual(sent_payload["max_tokens"], 1024)
+        # stream is force-disabled by FlashExtServer
+        self.assertEqual(sent_payload["stream"], False)
+
+    def test_stream_always_forced_false(self):
+        for client_stream in (True, False, None):
+            with patch("mangopi_cli._request", return_value={"choices": [], "model": "x", "usage": {}}) as mock_req:
+                body = {"messages": [{"role": "user", "content": "hi"}]}
+                if client_stream is not None:
+                    body["stream"] = client_stream
+                self.srv._handle(body)
+            self.assertEqual(mock_req.call_args[0][1]["stream"], False)
+
+    def test_client_tools_override_default(self):
+        custom_tools = [{"type": "function", "function": {"name": "my_tool"}}]
+        with patch("mangopi_cli._request", return_value={"choices": [], "model": "x", "usage": {}}) as mock_req:
+            self.srv._handle({"messages": [{"role": "user", "content": "hi"}], "tools": custom_tools})
+        sent_payload = mock_req.call_args[0][1]
+        self.assertEqual(sent_payload["tools"], custom_tools)
+
+    def test_augmented_messages_overlay(self):
+        with patch("mangopi_cli._request", return_value={"choices": [], "model": "x", "usage": {}}) as mock_req:
+            self.srv._handle({"messages": [{"role": "user", "content": "debug this crash"}]})
+        sent_payload = mock_req.call_args[0][1]
+        # The augmented messages should be sent, not the raw client messages
+        self.assertNotEqual(sent_payload["messages"], [{"role": "user", "content": "debug this crash"}])
+        self.assertIn("debug this crash", sent_payload["messages"][-1]["content"])
+
+    def test_client_model_overrides_default(self):
+        with patch("mangopi_cli._request", return_value={"choices": [], "model": "x", "usage": {}}) as mock_req:
+            self.srv._handle({"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]})
+        sent_payload = mock_req.call_args[0][1]
+        self.assertEqual(sent_payload["model"], "gpt-4o")
 
 
 # ── FlashExtServer _analyze_deep ─────────────────────────────────────────────

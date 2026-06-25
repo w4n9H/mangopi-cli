@@ -271,6 +271,36 @@ def initialize_system():
     os.makedirs(memory_dir, exist_ok=True)
 
 
+def doctor():
+    results = [(bool(MANGO_KEY), "MANGO_KEY is set" if MANGO_KEY else "MANGO_KEY: not set (required)")]
+    if MANGO_ROUTING == "on" and not os.path.isfile(providers_file):
+        results.append((False, "providers.json not found (required when MANGO_ROUTING=on)"))
+    if not os.path.isdir(session_dir):
+        results.append((False, "session directory not found"))
+    else:
+        files = [f for f in os.listdir(session_dir) if f.endswith(".json") and not f.endswith(".backup")]
+        results.append((True, f"session: {len(files)} file(s)"))
+        for name in files:
+            try:
+                with open(os.path.join(session_dir, name), "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, list):
+                    results.append((False, f"  {name}: invalid schema (expected list)"))
+                    continue
+                bad = [i for i, m in enumerate(data) if not isinstance(m, dict) or "role" not in m]
+                results.append((not bad,
+                                f"  {name}: {len(bad)} malformed at idx {bad[:5]}" if bad
+                                else f"  {name}: {len(data)} message(s), valid"))
+            except (json.JSONDecodeError, OSError) as e:
+                results.append((False, f"  {name}: corrupted — {e}"))
+    for ok, msg in results:
+        if ok:
+            console.success(msg)
+        else:
+            console.error(msg)
+    return sum(1 for ok, _ in results if not ok)
+
+
 def helper():
     console.text(_i18n("cli.welcome"))
     console.text(_i18n("cli.help_intro"))
@@ -542,11 +572,11 @@ class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 
     KEYWORDS = {"debug": ["报错", "bug", "error", "失败", "fail", "慢", "slow", "崩溃", "crash", "排查", "debug",
                           "修复", "fix", "test", "修改", "modif", "update", "chang", "issue", "adjust",
                           "patch", "correct", "错误", "问题", "调整", "更正", "改动", "alter"],
-                "design": ["设计", "design", "架构", "architect", "方案", "选型", "规划",
-                           "distribut", "microservic", "scalab", "infrastructur", "整体",
+                "design": ["设计", "design", "架构", "architect", "选型", "规划",
+                           "distribut", "microservic", "scalab", "infrastructur",
                            "overall", "可扩展", "高可用", "容灾", "分布式", "framework", "platform",
                            "重构", "refactor", "migrat", "死锁", "deadlock", "并发", "concurren",
-                           "async", "multithread", "异步", "迁移", "升级", "upgrad"],
+                           "async", "multithread", "异步", "迁移"],
                 "explain": ["什么是", "解释", "explain", "区别", "原理", "怎么理解", "what is",
                             "read", "查看", "show", "find", "search", "搜索", "查询", "query",
                             "display", "获取", "了解", "描述", "describe"],
@@ -1138,6 +1168,20 @@ class ContextManager:
 
     def clear(self): self.messages = []
 
+    @staticmethod
+    def backfill_tool_names(messages):  # 为 OpenAI 标准格式的 tool message 补上 tool_name 字段
+        idx = {}
+        for m in messages:
+            if m.get("role") == "assistant":
+                for tc in m.get("tool_calls") or []:
+                    fn = tc.get("function", {})
+                    if tc.get("id") and fn.get("name"):
+                        idx[tc["id"]] = fn["name"]
+            elif m.get("role") == "tool" and not m.get("tool_name"):
+                tcid = m.get("tool_call_id", "")
+                if tcid and tcid in idx:
+                    m["tool_name"] = idx[tcid]
+
     def append_system(self, content: str): self.messages.append({"role": "system", "content": content})
 
     def append_user(self, content: str):
@@ -1289,11 +1333,11 @@ class ContextManager:
         if len(tool_ctx) > 2000:
             return "deep"
         if tool_pattern:
-            if len(set(tool_pattern)) >= 3:
+            if len(set([t for t in tool_pattern if t != "read"])) >= 4:  # 至少 4 种非 read 工具才走 deep
                 return "deep"
-            if len(tool_pattern) >= 5 and len(set(tool_pattern)) == 1:
+            if len(tool_pattern) >= 5 and len(set(tool_pattern)) == 1:  # 同工具 5 次认死循环(read 死循环也算)
                 return "deep"
-        query = self.messages[-1].get("content", "") if self.messages else ""
+        query = next((m.get("content", "") for m in reversed(self.messages) if m.get("role") == "user"), "")
         fw = flash_thinking.match(query)
         if fw in ("design", "optimize", "reevaluate"):
             return "deep"
@@ -1572,6 +1616,10 @@ class BaseProvider:
                 return next((b.get("text", "") for b in _content if b.get("type") == "text"), "[image content omitted]")
             return _content
 
+        def _wrap_reasoning_detail(text):  # minimax
+            return [{"type": "reasoning.text", "id": "reasoning-text-1", "format": "MiniMax-response-v1",
+                     "index": 0, "text": text}]
+
         clean = []
         for m in messages:
             role = m.get("role")
@@ -1589,7 +1637,7 @@ class BaseProvider:
                     reasoning = self._extract_reasoning_text(m)
                     if reasoning:
                         if self._reasoning_field == "reasoning_details":
-                            msg["reasoning_details"] = [{"text": reasoning}]
+                            msg["reasoning_details"] = _wrap_reasoning_detail(reasoning)
                         else:
                             msg["reasoning_content"] = reasoning
                 clean.append(msg)
@@ -1969,18 +2017,26 @@ class FlashExtServer:
         self.logger = logging.getLogger("flash-ext")
         self._key = None
         self._server = None
+        self._last_deep_ts = 0.0  # deep 冷却: 避免短时间连续 deep 额外 LLM 调用
 
     def _augment(self, messages):  # 用临时 ContextManager 包装 messages，复用其分析方法
-        ctx = ContextManager()
-        ctx.messages = list(messages)
+        flash_ext_ctx = ContextManager()
+        flash_ext_ctx.messages = list(messages)
+        ContextManager.backfill_tool_names(flash_ext_ctx.messages)  # 兼容 OpenAI 标准 client(无 tool_name)
         query = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
-        tool_pattern, tool_ctx = ctx.tool_pattern(), ctx.tool_context()
+        tool_pattern, tool_ctx = flash_ext_ctx.tool_pattern(), flash_ext_ctx.tool_context()
         elems = []   # 收集增强内容为 XML 元素
-        complexity = ctx.assess_complexity()  # 1. 决策路径
-        self.logger.debug(f"complexity={complexity}, query={query}")
+        complexity = flash_ext_ctx.assess_complexity()  # 1. 决策路径
+        # deep cooldown: 30s 内已 deep 过则强制 fast,避免短时间连续额外 LLM 调用
+        if complexity == "deep" and time.time() - self._last_deep_ts < 30:
+            self.logger.debug("deep cooldown active, fallback to fast")
+            complexity = "fast"
+        elif complexity == "deep":
+            self._last_deep_ts = time.time()
+        self.logger.debug(f"complexity={complexity}, query={query[:10]}")
         if complexity == "deep":
             try:
-                analysis = self._analyze_deep(ctx, query, tool_pattern)
+                analysis = self._analyze_deep(flash_ext_ctx, query, tool_pattern)
                 if analysis:
                     fw = analysis.get("framework")
                     self.logger.debug(f"deep framework={fw}")
@@ -2034,7 +2090,10 @@ class FlashExtServer:
             prefix = "<flash_ext>\n" + "\n".join(elems) + "\n</flash_ext>"
             for i in range(len(messages) - 1, -1, -1):
                 if messages[i].get("role") == "user":
-                    messages[i] = dict(messages[i], content=f"{prefix}\n\n{messages[i].get('content', '')}")
+                    # 剥掉上次的注入(避免 client 多轮发回时累计)
+                    clean = re.sub(r'\n*<flash_ext>.*?</flash_ext>\n*', '',
+                                   messages[i].get("content", ""), flags=re.DOTALL).strip()
+                    messages[i] = dict(messages[i], content=f"{prefix}\n\n{clean}")
                     break
         return messages
 
@@ -2043,7 +2102,10 @@ class FlashExtServer:
         phase = ctx.detect_phase()
         recent = ctx.summarize_recent_turns(n_turns=3)
 
-        prompt = ("Analyze this coding session and respond ONLY as JSON.\n"
+        prompt = ("Analyze this coding session and respond ONLY as JSON.\n\n"
+                  f"## User question (the goal agent is working toward)\n"
+                  f"{query or '(none)'}\n\n"
+                  f"## Session state\n"
                   f"Tool pattern: {tool_pattern or 'none'}\nPhase: {phase}\n"
                   f"Looping: {'yes (' + loop_tool + ')' if is_looping else 'no'}\n\n"
                   f"{recent}\n\n"
@@ -2060,9 +2122,10 @@ class FlashExtServer:
             return None
 
     def _handle(self, body):
-        augmented = self._augment(body.get("messages", []))
+        body["messages"] = self._augment(body.get("messages", []))
+        body["stream"] = False  # FlashExtServer 不支持流式
         try:
-            raw = _request(self.provider.api_url, self.provider.build_body(augmented), headers=self.provider.headers())
+            raw = _request(self.provider.api_url, body, headers=self.provider.headers())
         except Exception as e:
             self.logger.warning(f"upstream error: {e}")
             return {"error": {"message": f"Upstream model error: {e}", "type": "flash_ext_error", "code": 502}}
@@ -2148,22 +2211,27 @@ class FlashExtServer:
             self._server.shutdown()
 
 
-def _parse_serve_args(args=None):
-    parser = argparse.ArgumentParser(description="Mangopi Flash-ext server")
-    parser.add_argument("--flash-ext", action="store_true")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--token", default=None)
-    parser.add_argument("--memory", action="store_true")
-    parser.add_argument("--web-search", action="store_true")
-    parser.add_argument("--debug", action="store_true")
-    return parser.parse_known_args(args)[0] if args else parser.parse_args()
+def _parse_args(args=None):
+    parser = argparse.ArgumentParser(prog="mangopi-cli", description="Mangopi CLI — single-file AI coding agent")
+    parser.add_argument("--version", action="version", version=f"mangopi-cli v{__version__}")
+    parser.add_argument("--doctor", action="store_true", help="Run environment diagnostics and exit")
+    sub = parser.add_subparsers(dest="command")
+    flash = sub.add_parser("flash-ext", help="Run as OpenAI-compatible proxy server")
+    flash.add_argument("--host", default="127.0.0.1", help="Server bind host (default: 127.0.0.1)")
+    flash.add_argument("--port", type=int, default=8080, help="Server port (default: 8080)")
+    flash.add_argument("--token", default=None, help="Bearer token for client auth")
+    flash.add_argument("--memory", action="store_true", help="Enable auto memory write (default: off)")
+    flash.add_argument("--web-search", action="store_true", help="Enable web search augmentation (default: off)")
+    flash.add_argument("--debug", action="store_true", help="Enable DEBUG-level logging")
+    return parser.parse_args(args)
 
 
 def main():
     initialize_system()
-    args = _parse_serve_args()
-    if args.flash_ext:
+    args = _parse_args()
+    if args.doctor:
+        sys.exit(doctor())
+    if args.command == "flash-ext":
         if not MANGO_KEY:
             console.error("MANGO_KEY env var is required for Flash-ext mode")
             sys.exit(1)

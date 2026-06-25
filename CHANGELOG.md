@@ -15,6 +15,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.29] - 2026-06-23
+
+### Added
+- **Flash-ext Thinking Framework Server** — OpenAI-compatible HTTP proxy (`--flash-ext`) with two-path routing (fast keyword + deep LLM analysis). Eight thinking frameworks. XML-based augmentation injected into user content.
+- **`ContextManager` enhancements** — `tool_pattern`, `tool_context`, `detect_loop` (same-tool + alternating), `detect_phase`, `assess_complexity`.
+- **38 unit tests** in `test/test_flash_ext.py`.
+
+### Changed
+- **Unified keyword rules** — all keyword matching centralized in `FlashThinking.KEYWORDS`; removed `RoutedProvider._KEYWORD_RULES`.
+- **English frameworks** — all `FlashThinking.frameworks` steps translated.
+- **`--memory`/`--web-search`** — flipped from default-on to default-off.
+- **ROADMAP.md / README.md** — updated with Smart Provider Routing and Flash-ext sections.
+
+### Fixed
+- `_analyze_deep` JSON parse protection.
+- `detect_loop` alternating tool failure patterns.
+- `_augment` query extraction uses last user message, not list tail.
+
+---
+
 ## [0.1.28] - 2026-06-18
 
 ### Added
