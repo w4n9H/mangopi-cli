@@ -15,6 +15,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.30] - 2026-06-26
+
+### Added
+- **`doctor()` diagnostics** + `mangopi-cli --doctor` flag (env + session JSON integrity; exit code = error count).
+- **Flash-ext OpenAI client support** — works with any OpenAI-compatible SDK / LangChain / LlamaIndex, not only the internal Mangopi format.
+- **HumanEval benchmark harness** at `benchmark/humaneval_eval.py`, exercising the full Mangopi toolset + system prompt.
+- **Flash-ext deep cooldown** (60s) to prevent duplicate `_analyze_deep` LLM calls.
+
+### Changed
+- **I18N refactor** — flat `{key: {zh, en}}` layout (was nested per-language).
+- **Flash-ext perf** — `assess_complexity` thresholds tightened (`>=4` non-read tools, was `>=3`); `design` keyword set cleaned.
+- **`ContextManager` helper extraction** — `_role_msgs` / `_tool_names` / `_last_user_content` / `_under_threshold` deduplicate role-filter patterns (-40 LOC, no behavior change).
+- **`_analyze_deep` prompt** — adds "User question" section so the analyzer has task context for `insight`.
+
+### Fixed
+- **Flash-ext `<flash_ext>` injection** no longer accumulates across multi-turn agent loops.
+- **`assess_complexity` query bug** — used `messages[-1]` (could be assistant/tool), now uses last user message.
+- **`tool_context` `KeyError`** on OpenAI-standard tool messages without `tool_name`.
+
+### Tests
+- Threshold coverage in `test_flash_ext.py`.
+
+---
+
 ## [0.1.29] - 2026-06-23
 
 ### Added

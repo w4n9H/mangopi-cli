@@ -27,7 +27,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.29"
+__version__ = "0.1.30"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -56,65 +56,42 @@ BLUE, CYAN, GREEN, YELLOW, RED, GREY, ORANGE = (
 
 # --- i18n dict (zh, en)---
 I18N = {
-    "zh": {
-        "tool.call": "工具调用",
-        "tool.result.ok": "成功应用",
-        "tool.result.fail": "执行失败",
-        "llm.thinking": "思考中",
-        "llm.output": "输出",
-        "context.compact": "上下文压缩",
-        "context.compact.strategy": "策略",
-        "context.round": "轮次",
-        "context.tokens_in_out": "tokens 输入/输出",
-        "cli.welcome": "Mangopi CLI — 基于大模型的命令行编程助手",
-        "cli.help_intro": "内置命令:",
-        "cli.help_commands": {
-            "/q or /quit": "退出程序",
-            "/c or /compact": "手动压缩当前会话（释放上下文空间）",
-            "/n or /new": "结束当前会话并创建一个全新的会话",
-            "/g or /goal <query>": "进入 Goal 模式，自主规划、执行并验证直到完成目标",
-            "/h or /help": "显示本帮助信息"},
-        "safety.warn.dangerous_command": "检测到危险命令",
-        "safety.danger.rm": "文件删除",
-        "safety.danger.mkfs": "磁盘格式化或分区",
-        "safety.danger.chmod": "危险权限修改",
-        "safety.danger.sudo": "提权操作",
-        "safety.danger.kill": "危险进程操作",
-        "safety.danger.env": "环境变量或系统配置修改",
-        "safety.danger.history": "清理历史/日志"},
-    "en": {
-        "tool.call": "Tool call",
-        "tool.result.ok": "Applied successfully",
-        "tool.result.fail": "Execution failed",
-        "llm.thinking": "Thinking",
-        "llm.output": "Output",
-        "context.compact": "Context compact",
-        "context.compact.strategy": "Strategy",
-        "context.round": "round",
-        "context.tokens_in_out": "tokens in/out",
-        "cli.welcome": "Mangopi CLI — Large Model CLI Assistant",
-        "cli.help_intro": "Built-in commands:",
-        "cli.help_commands": {
-            "/q or /quit": "Quit",
-            "/c or /compact": "Manually compact current session",
-            "/n or /new": "End current session and start a new one",
-            "/g or /goal <query>": "Enter Goal mode — autonomously plan, execute and verify until the goal is achieved",
-            "/h or /help": "Show this help info"},
-        "safety.warn.dangerous_command": "Dangerous command detected",
-        "safety.danger.rm": "File deletion",
-        "safety.danger.mkfs": "Disk formatting or partition",
-        "safety.danger.chmod": "Dangerous permission change",
-        "safety.danger.sudo": "Privilege escalation",
-        "safety.danger.kill": "Dangerous process operation",
-        "safety.danger.env": "Environment or system config change",
-        "safety.danger.history": "History/log clearing"}
+    "tool.call":                     {"zh": "工具调用",         "en": "Tool call"},
+    "tool.result.ok":                {"zh": "成功应用",         "en": "Applied successfully"},
+    "tool.result.fail":              {"zh": "执行失败",         "en": "Execution failed"},
+    "llm.thinking":                  {"zh": "思考中",           "en": "Thinking"},
+    "llm.output":                    {"zh": "输出",             "en": "Output"},
+    "context.compact":               {"zh": "上下文压缩",       "en": "Context compact"},
+    "context.compact.strategy":      {"zh": "策略",             "en": "Strategy"},
+    "context.round":                 {"zh": "轮次",             "en": "round"},
+    "context.tokens_in_out":         {"zh": "tokens 输入/输出", "en": "tokens in/out"},
+    "cli.welcome":                   {"zh": "Mangopi CLI — 基于大模型的命令行编程助手",
+                                      "en": "Mangopi CLI — Large Model CLI Assistant"},
+    "cli.help_intro":                {"zh": "内置命令:",        "en": "Built-in commands:"},
+    "safety.warn.dangerous_command": {"zh": "检测到危险命令",   "en": "Dangerous command detected"},
+    "safety.danger.rm":              {"zh": "文件删除",         "en": "File deletion"},
+    "safety.danger.mkfs":            {"zh": "磁盘格式化或分区", "en": "Disk formatting or partition"},
+    "safety.danger.chmod":           {"zh": "危险权限修改",     "en": "Dangerous permission change"},
+    "safety.danger.sudo":            {"zh": "提权操作",         "en": "Privilege escalation"},
+    "safety.danger.kill":            {"zh": "危险进程操作",     "en": "Dangerous process operation"},
+    "safety.danger.env":             {"zh": "环境变量或系统配置修改", "en": "Environment or system config change"},
+    "safety.danger.history":         {"zh": "清理历史/日志",    "en": "History/log clearing"},
+}
+
+HELP_COMMANDS = {
+    "/q or /quit":          {"zh": "退出程序", "en": "Quit"},
+    "/c or /compact":       {"zh": "手动压缩当前会话（释放上下文空间）", "en": "Manually compact current session"},
+    "/n or /new":           {"zh": "结束当前会话并创建一个全新的会话", "en": "End current session and start a new one"},
+    "/g or /goal <query>":  {"zh": "Goal 模式，自主规划、执行并验证直到完成目标",
+                             "en": "Goal mode — autonomously plan, execute and verify until the goal is achieved"},
+    "/h or /help":          {"zh": "显示本帮助信息", "en": "Show this help info"},
 }
 
 
 def _c(text, color): return f"{color}{text}{RESET}"
 
 
-def _i18n(key: str): return I18N[LANGUAGE].get(key, "")
+def _i18n(key: str): return I18N[key].get(LANGUAGE, "")
 
 
 # --- UI ---
@@ -304,8 +281,8 @@ def doctor():
 def helper():
     console.text(_i18n("cli.welcome"))
     console.text(_i18n("cli.help_intro"))
-    for cmd, desc in I18N.get(LANGUAGE, {}).get("cli.help_commands", {}).items():
-        console.text(f"  {cmd:<6} {desc}")
+    for cmd, desc in HELP_COMMANDS.items():
+        console.text(f"  {cmd:<6} -- {desc.get(LANGUAGE, '')}")
 
 
 # --- Utils function ---
@@ -1201,7 +1178,7 @@ class ContextManager:
             msg["content"] = [{"type": "text", "text": content.get("text", "image")},
                               {"type": "image_url", "image_url": {"url": content["image_url"]}}]
         else:
-            msg["content"] = content if content is not None else ""
+            msg["content"] = content or ""
         self.messages.append(msg)
 
     def load(self, persist_file: str):
@@ -1246,48 +1223,42 @@ class ContextManager:
             role = m.get("role")
             if role == "system":
                 continue
-            if role == "user":
-                if current:
-                    turns.append(current)
-                current = [m]
-                continue
-            current.append(m)
+            if role == "user" and current:
+                turns.append(current)
+            current = [m] if role == "user" else current + [m]
         if current:
             turns.append(current)
         return turns
 
+    def _role_msgs(self, role, n=None) -> List[Dict]:  # 提取特定 role 的消息,可选最近 n 条
+        return [m for m in (self.messages if n is None else self.messages[-n:]) if m.get("role") == role]
+
+    def _tool_names(self, msgs: Optional[List[Dict]] = None) -> List[str]:  # 从消息列表提取 tool_name(去空)
+        return [m.get("tool_name", "") for m in (msgs or self.messages) if m.get("role") == "tool" and m.get("tool_name")]
+
+    def _last_user_content(self, msgs: Optional[List[Dict]] = None) -> str:  # 最近 user message 的 content
+        return next((m.get("content", "") for m in reversed(msgs or self.messages) if m.get("role") == "user"), "")
+
+    def _under_threshold(self) -> bool: return self.total_tokens() < self.auto_compact_threshold
+
     def tool_fingerprint(self, n_turns: int = 10) -> str:  # Return (user_query, [tool, ...]) pairs from recent turns.
-        turns = self.split_turns()
-        recent = turns[-n_turns:] if len(turns) > n_turns else turns
-        fingerprints = []
-        for turn in recent:
-            tools = [m.get("tool_name", "") for m in turn if m.get("role") == "tool" and m.get("tool_name")]
-            if not tools:
-                continue
-            user_msg = next((m.get("content", "") for m in turn if m.get("role") == "user"), "")
-            fingerprints.append([user_msg, tools])
-        return str(fingerprints) if fingerprints else "[]"
+        fp = [[self._last_user_content(t), self._tool_names(t)] for t in self.split_turns()[-n_turns:]]
+        fp = [f for f in fp if f[1]]  # 只保留有 tool 调用的 turn
+        return str(fp) if fp else "[]"
 
     def tool_pattern(self, n=10) -> Optional[List[str]]:  # 提取最近 n 条消息的 tool call 模式
-        tools = [m.get("tool_name", "") for m in self.messages[-n:] if m.get("role") == "tool" and m.get("tool_name")]
+        tools = self._tool_names(self.messages[-n:])
         return tools if tools else None
 
-    def tool_context(self, n=10, cap=500) -> str:  # 提取最近 tool results 的关键内容，注入为上下文
-        ctx = []
-        for m in self.messages[-n:]:
-            if m.get("role") != "tool":
-                continue
+    def tool_context(self, n=10, cap=800) -> str:  # 提取最近 tool results 的关键内容，注入为上下文
+        tc = []
+        for m in self._role_msgs("tool", n):
             content = str(m.get("content", ""))
-            if not content:
-                continue
-            if len(content) <= cap:
-                ctx.append(f"[{m['tool_name']}] {content}")
-            else:
-                ctx.append(f"[{m['tool_name']}: {len(content)} chars] {content[:200]}...\n{content[-200:]}")
-        return "\n\n".join(ctx) if ctx else ""
+            tc.append(f"[{m['tool_name']} tool] {self.compact_text(content, 200, 200) if len(content) > cap else content}")
+        return "\n\n".join(tc) if tc else ""
 
     def detect_loop(self, threshold=3) -> tuple:  # 检测是否陷入迭代死循环，返回 (is_looping, tool_name)
-        recent = [m for m in self.messages[-20:] if m.get("role") == "tool"]
+        recent = self._role_msgs("tool", 20)
         if len(recent) < 10:
             return False, None
         # 1. 同工具连续失败
@@ -1316,7 +1287,7 @@ class ContextManager:
         is_looping, _ = self.detect_loop()
         if is_looping:
             return "stuck"
-        all_tools = [m.get("tool_name", "") for m in self.messages if m.get("role") == "tool"]
+        all_tools = self._tool_names()
         if not all_tools:
             return "start"
         recent = all_tools[-5:]
@@ -1337,8 +1308,7 @@ class ContextManager:
                 return "deep"
             if len(tool_pattern) >= 5 and len(set(tool_pattern)) == 1:  # 同工具 5 次认死循环(read 死循环也算)
                 return "deep"
-        query = next((m.get("content", "") for m in reversed(self.messages) if m.get("role") == "user"), "")
-        fw = flash_thinking.match(query)
+        fw = flash_thinking.match(self._last_user_content())
         if fw in ("design", "optimize", "reevaluate"):
             return "deep"
         return "fast"
@@ -1370,24 +1340,17 @@ class ContextManager:
     def total_tokens(self) -> int: return sum(self.estimated_tokens(m) for m in self.messages)
 
     def auto_compact_if_needed(self):
-        if self.auto_compact_disabled:
+        if self.auto_compact_disabled or self._under_threshold():
             return
-        if self.total_tokens() < self.auto_compact_threshold:
-            return
-
         try:
             self.session_memory_compact()
-            current_tokens = self.total_tokens()
-            if current_tokens < self.auto_compact_threshold:
+            if self._under_threshold():
                 return
-
             self.compact_conversation()
-            current_tokens = self.total_tokens()
-            if current_tokens < self.auto_compact_threshold:
+            if self._under_threshold():
                 return
         except Exception:
             pass
-
         if self.continuous_failures >= self.max_failures:
             return
         try:
@@ -1397,20 +1360,18 @@ class ContextManager:
             self.continuous_failures += 1
 
     def micro_compact(self):
-        now = int(time.time())
-        for idx, m in enumerate(self.messages):
-            _age = now - m.get("ts", now)
-            if m.get("role") == "tool":  # not tool pass
-                if m.get("tool_name") in self.white_tool_list:  # white tool pass
-                    continue
-                content = m.get("content", "")
-                if isinstance(content, list):  # base64 编码的二进制数据, head/tail 文本截断对它毫无意义
-                    continue
-                if content and not content.endswith("<compacted>"):  # compacted pass
-                    rule = COMPACT_RULES["tool"]
-                    if _age >= rule.get("max_age", 0):  # new tool pass
-                        if self.estimated_tokens({"content": content}) > rule["max_tokens"]:  # too small pass
-                            m["content"] = self.compact_text(content, rule["keep_head"], rule["keep_tail"])
+        now, rule = int(time.time()), COMPACT_RULES["tool"]
+        for m in self.messages:
+            if m.get("role") != "tool" or m.get("tool_name") in self.white_tool_list:  # not tool/white tool pass
+                continue
+            content = m.get("content", "")
+            if not isinstance(content, str) or content.endswith("<compacted>"):  # compacted/base64 编码 pass
+                continue
+            if now - m.get("ts", now) < rule.get("max_age", 0):  # new tool pass
+                continue
+            if self.estimated_tokens({"content": content}) <= rule["max_tokens"]:  # too small pass
+                continue
+            m["content"] = self.compact_text(content, rule["keep_head"], rule["keep_tail"])
 
     def session_memory_compact(self, retain_turns: int = 10, min_tokens: int = 200) -> bool:
         systems = [copy.deepcopy(m) for m in self.messages if m.get("role") == "system"]
@@ -2019,7 +1980,7 @@ class FlashExtServer:
         self._server = None
         self._last_deep_ts = 0.0  # deep 冷却: 避免短时间连续 deep 额外 LLM 调用
 
-    def _augment(self, messages):  # 用临时 ContextManager 包装 messages，复用其分析方法
+    def _augment(self, messages):
         flash_ext_ctx = ContextManager()
         flash_ext_ctx.messages = list(messages)
         ContextManager.backfill_tool_names(flash_ext_ctx.messages)  # 兼容 OpenAI 标准 client(无 tool_name)
@@ -2027,8 +1988,7 @@ class FlashExtServer:
         tool_pattern, tool_ctx = flash_ext_ctx.tool_pattern(), flash_ext_ctx.tool_context()
         elems = []   # 收集增强内容为 XML 元素
         complexity = flash_ext_ctx.assess_complexity()  # 1. 决策路径
-        # deep cooldown: 30s 内已 deep 过则强制 fast,避免短时间连续额外 LLM 调用
-        if complexity == "deep" and time.time() - self._last_deep_ts < 30:
+        if complexity == "deep" and time.time() - self._last_deep_ts < 60:  # deep cooldown: 60s
             self.logger.debug("deep cooldown active, fallback to fast")
             complexity = "fast"
         elif complexity == "deep":
