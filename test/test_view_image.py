@@ -400,7 +400,7 @@ class TestToolSchemaIncludesViewImage(unittest.TestCase):
 
     def test_schema_count(self):
         # 13 tools total (web_search added)
-        self.assertEqual(len(m.tool_schema()), 13)
+        self.assertEqual(len(m.tool_schema()), 12)
 
 
 if __name__ == "__main__":

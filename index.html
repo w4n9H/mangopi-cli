@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MANGOPI CLI // v0.1.29</title>
+    <title>MANGOPI CLI // v0.1.31</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -744,9 +744,10 @@
 <header>
     <div class="wrap header-row">
         <div>
-            <span class="brand">MANGOPI CLI<span class="brand-version">v0.1.29</span></span>
+            <span class="brand">MANGOPI CLI<span class="brand-version">v0.1.31</span></span>
         </div>
         <nav>
+            <a href="#loop"><span class="lang-en">loop</span><span class="lang-zh">循环工程</span></a>
             <a href="#routing"><span class="lang-en">routing</span><span class="lang-zh">路由</span></a>
             <a href="#flash"><span class="lang-en">flash-ext</span><span class="lang-zh">flash-ext</span></a>
             <a href="#features"><span class="lang-en">features</span><span class="lang-zh">特性</span></a>
@@ -831,7 +832,7 @@
                 <div class="stat-label"><span class="lang-en">dependencies</span><span class="lang-zh">依赖</span></div>
             </div>
             <div class="stat">
-                <div class="stat-num">13</div>
+                <div class="stat-num">12</div>
                 <div class="stat-label"><span class="lang-en">built-in tools</span><span class="lang-zh">内置工具</span></div>
             </div>
             <div class="stat">
@@ -850,11 +851,68 @@
     </div>
 </section>
 
+<!-- ═══════════════════════ LOOP ENGINEERING ═══════════════════════ -->
+<section id="loop">
+    <div class="wrap">
+        <div class="sec-head">
+            <div class="sec-num">— 02</div>
+            <h2 class="sec-title"><span class="lang-en">Loop <em>Engineering.</em></span><span class="lang-zh">循环<em>工程</em></span></h2>
+        </div>
+        <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
+            <span class="lang-en">A <em>3-agent collaborative pipeline</em> that implements, verifies, and self-corrects — replacing the legacy flat goal-state machine with a CI/CD-like loop.</span>
+            <span class="lang-zh"><em>三代理协作流水线</em>，集实施、验证与自我纠偏于一体——用类 CI/CD 循环取代了旧版扁平目标状态机。</span>
+        </p>
+
+        <div class="feat-list" style="margin-top: 48px;">
+            <div class="feat">
+                <div class="feat-tag">— 01</div>
+                <div>
+                    <h3><span class="lang-en">Implementer</span><span class="lang-zh">实施者</span></h3>
+                    <p><span class="lang-en">Designs & writes code. Explicitly forbidden from running tests — "that's the Verifier's job."</span><span class="lang-zh">设计并编写代码，明确禁止自我测试——"那是 Verifier 的事"。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 02</div>
+                <div>
+                    <h3><span class="lang-en">Verifier</span><span class="lang-zh">验证者</span></h3>
+                    <p><span class="lang-en">Inspects changed files, runs actual test commands, judges PASS/FAIL at the architecture level.</span><span class="lang-zh">检查改动文件，执行实际测试命令，在架构层面判定 PASS/FAIL。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 03</div>
+                <div>
+                    <h3><span class="lang-en">Updater</span><span class="lang-zh">修正者</span></h3>
+                    <p><span class="lang-en">On failure, analyzes the Verifier's report and produces a refined prompt (50–200 words) for the next iteration.</span><span class="lang-zh">失败时分析 Verifier 报告，生成 refined prompt（50–200 词）注入下一轮。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 04</div>
+                <div>
+                    <h3><span class="lang-en">Auto-cleanup</span><span class="lang-zh">自动清理</span></h3>
+                    <p><span class="lang-en">Session files under <code>.mangocli/loops/</code> are discarded after the loop — no state leaks.</span><span class="lang-zh"><code>.mangocli/loops/</code> 下的会话文件在循环退出后自动清理，无状态泄露。</span></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="callout">
+            <div class="callout-text">
+                <h3><span class="lang-en">One command to iterate</span><span class="lang-zh">一条命令启动迭代</span></h3>
+                <p>
+                    <span class="lang-en">Start with <code>/loop</code> followed by your goal. The pipeline runs up to 5 iterations, short-circuiting on the first <code>VERIFY: PASS</code>.</span>
+                    <span class="lang-zh">输入 <code>/loop</code> 加目标描述即可启动。流水线最多运行 5 轮迭代，首次 <code>VERIFY: PASS</code> 即提前结束。</span>
+                </p>
+            </div>
+            <pre class="callout-code"><span class="cmd-c">❯</span> /loop <span class="str">"refactor utils.py to use dataclasses"</span>
+<span class="muted"># Implementer → Verifier → (Updater → Implementer)* → PASS</span></pre>
+        </div>
+    </div>
+</section>
+
 <!-- ═══════════════════════ ROUTING ═══════════════════════ -->
 <section id="routing">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 02</div>
+            <div class="sec-num">— 03</div>
             <h2 class="sec-title"><span class="lang-en">Smart Provider <em>Routing.</em></span><span class="lang-zh">智能模型<em>路由</em></span></h2>
         </div>
         <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
@@ -901,7 +959,7 @@
 <section id="flash">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 03</div>
+            <div class="sec-num">— 04</div>
             <h2 class="sec-title"><span class="lang-en">Flash-ext <em>Proxy.</em></span><span class="lang-zh">Flash-ext <em>代理</em></span></h2>
         </div>
         <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
@@ -959,7 +1017,7 @@
 <section id="features">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 04</div>
+            <div class="sec-num">— 05</div>
             <h2 class="sec-title"><span class="lang-en">All <em>features.</em></span><span class="lang-zh">全部<em>特性</em></span></h2>
         </div>
         <div class="feat-list">
@@ -1027,7 +1085,7 @@
 <section id="ideal">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 05</div>
+            <div class="sec-num">— 06</div>
             <h2 class="sec-title"><span class="lang-en">Ideal <em>for.</em></span><span class="lang-zh">适用<em>人群</em></span></h2>
         </div>
         <div class="ideal-grid">
@@ -1069,7 +1127,7 @@
 <section id="philosophy">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 06</div>
+            <div class="sec-num">— 07</div>
             <h2 class="sec-title"><span class="lang-en">Design <em>philosophy.</em></span><span class="lang-zh">设计<em>哲学</em></span></h2>
         </div>
         <div class="philo-hero">
@@ -1092,7 +1150,7 @@
 <section id="providers">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 07</div>
+            <div class="sec-num">— 08</div>
             <h2 class="sec-title"><span class="lang-en"><em>Any</em> provider.</span><span class="lang-zh">任意<em>模型</em>接入</span></h2>
         </div>
         <div class="providers">
@@ -1121,8 +1179,8 @@
 <section id="tools">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 08</div>
-            <h2 class="sec-title"><span class="lang-en"><em>13</em> tools.</span><span class="lang-zh"><em>13</em> 个工具</span></h2>
+            <div class="sec-num">— 09</div>
+            <h2 class="sec-title"><span class="lang-en"><em>12</em> tools.</span><span class="lang-zh"><em>12</em> 个工具</span></h2>
         </div>
         <div class="tools">
             <div class="tool"><code>read</code><p><span class="lang-en">File or image (png/jpg/gif/webp auto-routes to vision)</span><span class="lang-zh">文件或图片（png/jpg/gif/webp 自动路由至视觉）</span></p></div>
@@ -1136,7 +1194,6 @@
             <div class="tool"><code>use_skill</code><p><span class="lang-en">Load installed SKILL.md</span><span class="lang-zh">加载已安装技能</span></p></div>
             <div class="tool"><code>search_memory</code><p><span class="lang-en">Multi-keyword markdown search</span><span class="lang-zh">多关键词 markdown 搜索</span></p></div>
             <div class="tool"><code>append_memory</code><p><span class="lang-en">Append long-term memory</span><span class="lang-zh">追加长期记忆</span></p></div>
-            <div class="tool"><code>goal</code><p><span class="lang-en">Plan / step / show / finish</span><span class="lang-zh">计划 / 步骤 / 显示 / 完成</span></p></div>
             <div class="tool"><code>attempt_completion</code><p><span class="lang-en">Task completion signal</span><span class="lang-zh">任务完成信号</span></p></div>
         </div>
 
@@ -1144,7 +1201,7 @@
             <div class="cmd"><code>/q</code><p><span class="lang-en">Quit</span><span class="lang-zh">退出</span></p></div>
             <div class="cmd"><code>/n</code><p><span class="lang-en">New session</span><span class="lang-zh">新会话</span></p></div>
             <div class="cmd"><code>/c</code><p><span class="lang-en">Compact</span><span class="lang-zh">手动压缩</span></p></div>
-            <div class="cmd"><code>/g &lt;goal&gt;</code><p><span class="lang-en">Autonomous goal mode</span><span class="lang-zh">目标模式</span></p></div>
+            <div class="cmd"><code>/l &lt;goal&gt;</code><p><span class="lang-en">Loop engineering (replaces /goal)</span><span class="lang-zh">循环工程（替代 /goal）</span></p></div>
             <div class="cmd"><code>/h</code><p><span class="lang-en">Help</span><span class="lang-zh">帮助</span></p></div>
         </div>
     </div>
@@ -1154,7 +1211,7 @@
 <section id="install">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 09</div>
+            <div class="sec-num">— 10</div>
             <h2 class="sec-title"><span class="lang-en"><em>Install.</em></span><span class="lang-zh"><em>安装</em></span></h2>
         </div>
         <div class="install-row">
@@ -1178,7 +1235,7 @@
 <section id="config">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 10</div>
+            <div class="sec-num">— 11</div>
             <h2 class="sec-title"><span class="lang-en"><em>Config.</em></span><span class="lang-zh"><em>配置</em></span></h2>
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px;">
@@ -1232,7 +1289,7 @@
 <footer>
     <div class="wrap footer-row">
         <span>© 2026 MANGOPI CLI · Apache 2.0</span>
-        <span>v0.1.29 · single file · zero deps</span>
+        <span>v0.1.31 · single file · zero deps</span>
     </div>
 </footer>
 

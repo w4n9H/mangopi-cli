@@ -270,6 +270,41 @@ Every new feature follows these rules, in order of priority:
 
 ---
 
+### 6. Loop Engineering (3-Agent Pipeline)
+
+**Status:** 🟢 Done (Experimental Feature)
+
+**Problem:** Goal-mode execution was a flat state machine (plan → step → finish) with no built-in verification or self-correction. The agent could mark steps "done" without ever running tests, leading to silently broken deliverables.
+
+**Approach:**
+
+- **`loop_engine(goal, max_iter)`** — a fixed 3-agent pipeline replacing the legacy `GoalTool`:
+  - **Implementer** — designs and writes code; explicitly forbidden from running tests ("that's the Verifier's job")
+  - **Verifier** — inspects changed files, determines the right test command, runs tests, judges PASS/FAIL with architecture-level reasoning
+  - **Updater** — on failure, reads the Verifier's analysis and produces a refined prompt (50–200 words) for the next Implementer iteration; read/grep only, no code edits
+- Each agent gets its own `ContextManager` session, stored under `.mangocli/loops/` and cleaned up on exit.
+- CLI entry point: `/loop <goal>` (deprecates `/goal`).
+- Default 5 iterations; the loop short-circuits on first `VERIFY: PASS`.
+
+**Design rationale:**
+
+- **Separation of concerns**: implement vs verify vs refine mirrors real CI/CD + code review workflows.
+- **No self-grading**: the Implementer cannot mark its own work as done — an independent Verifier must confirm.
+- **Feedback loop**: the Updater ensures each retry is informed by concrete failure analysis, not blind retry.
+- **Temporary sessions**: agent contexts are discarded after the loop; no state leaks across `/loop` invocations.
+
+**Why it fits the philosophy:** Reuses existing `agent_loop` + `ContextManager`. The whole feature is ~80 LOC of orchestration around the same core loop. No new dependencies.
+
+**Acceptance criteria:**
+
+- [x] `/loop <goal>` triggers Implementer → Verifier → (Updater → Implementer)* pipeline
+- [x] Verifier runs actual test commands and judges PASS/FAIL
+- [x] Updater produces a refined prompt consumed by the next Implementer iteration
+- [x] Loop session files are cleaned up on exit (success or failure)
+- [x] `/goal` shows deprecation warning pointing to `/loop`
+
+---
+
 ## 🌐 Long-Term (3–6 Months)
 
 > Goal: take Mangopi toward "professional AI coding platform" tier while keeping the main repo's zero-dependency boundary intact.
@@ -438,4 +473,4 @@ Apache License 2.0 · this ROADMAP document shares the codebase license.
 
 ---
 
-Last updated: 2026-06-10
+Last updated: 2026-06-29

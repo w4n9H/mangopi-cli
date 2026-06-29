@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.31] - 2026-06-29
+
+### Added
+- **Loop Engineering** — `loop_engine()`: 3-agent collaborative pipeline (Implementer → Verifier → Updater) replacing `GoalTool`. Verifier runs actual tests; Updater refines prompts on failure. Entry: `/loop <goal>`.
+
+### Removed
+- **`GoalTool`** — deprecated in favor of `loop_engine`. `/goal` now shows a deprecation warning.
+
+### Fixed
+- Loop session files (`.mangocli/loops/`) are now cleaned up on exit via `finally` block.
+
+---
+
 ## [0.1.30] - 2026-06-26
 
 ### Added

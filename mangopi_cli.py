@@ -18,6 +18,7 @@ import base64
 import logging
 import mimetypes
 import argparse
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -27,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.30"
+__version__ = "0.1.31"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -45,7 +46,7 @@ project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
 memory_dir = os.path.join(base_persist_dir, "memory")
-goal_file = os.path.join(base_persist_dir, "goal.json")
+loops_dir = os.path.join(base_persist_dir, "loops")
 providers_file = os.path.join(base_persist_dir, "providers.json")
 
 # ANSI colors
@@ -82,9 +83,10 @@ HELP_COMMANDS = {
     "/q or /quit":          {"zh": "退出程序", "en": "Quit"},
     "/c or /compact":       {"zh": "手动压缩当前会话（释放上下文空间）", "en": "Manually compact current session"},
     "/n or /new":           {"zh": "结束当前会话并创建一个全新的会话", "en": "End current session and start a new one"},
-    "/g or /goal <query>":  {"zh": "Goal 模式，自主规划、执行并验证直到完成目标",
-                             "en": "Goal mode — autonomously plan, execute and verify until the goal is achieved"},
     "/h or /help":          {"zh": "显示本帮助信息", "en": "Show this help info"},
+    "/g or /goal":          {"zh": "[已废弃] GoalTool 在 v0.1.31 移除，请用 /loop",
+                             "en": "[deprecated] GoalTool removed in v0.1.31; use /loop"},
+    "/l or /loop":          {"zh": "启动循环工程完成你的目标", "en": "Start Loop Engineering to complete your goal"},
 }
 
 
@@ -246,6 +248,7 @@ console = Printer()
 def initialize_system():
     os.makedirs(session_dir, exist_ok=True)  # auto create .mangocli
     os.makedirs(memory_dir, exist_ok=True)
+    os.makedirs(loops_dir, exist_ok=True)
 
 
 def doctor():
@@ -391,21 +394,6 @@ def _bocha_search_api(query: str = None, freshness: str = "noLimit",  summary: b
     return [{"date": m.get("dateLastCrawled", ""), "title": m.get("name", ""),
              "link": m.get("url", ""), "summary": m.get("summary", ""), "content": m.get("content", "")}
             for m in pages.get("value", [])] if isinstance(pages, dict) else []
-
-
-def _goal_load() -> Optional[Dict[str, Any]]:
-    try:
-        return json.loads(open(goal_file, encoding="utf-8").read())
-    except Exception as err:
-        return None
-
-
-def _goal_save(g: Dict[str, Any]) -> None:
-    with open(goal_file, "w", encoding="utf-8") as fp:
-        fp.write(json.dumps(g, indent=2, ensure_ascii=False))
-
-
-def _goal_clear() -> None: os.remove(goal_file) if os.path.exists(goal_file) else None
 
 
 class MemoryManager:
@@ -891,91 +879,6 @@ class AppendMemoryTool(ToolBase):
         return self.ok("memory appended")
 
 
-class GoalTool(ToolBase):
-    name = "goal"
-    description = ("Manage the current goal plan. "
-                   "action='plan' creates, 'step' updates a step, 'show' views, 'finish' clears.")
-    params = {
-        "action": {
-            "type": "string",
-            "description": "What to do: 'plan'(create new),'step'(update one step),'show'(view current),"
-                           "'finish'(mark goal done)"},
-        "goal": {
-            "type": "string?",
-            "description": "The user's goal text in plain language, required for action='plan'."},
-        "steps": {
-            "type": "string?",
-            "description": "JSON array of step descriptions, e.g. '[\"set up project\", \"write tests\"]'"
-                           ", required for action='plan'."},
-        "step": {
-            "type": "number?",
-            "description": "Which step to update (1-indexed), required for action='step'."},
-        "status": {
-            "type": "string?",
-            "description": "Step status: 'done' = completed, 'failed' = errored, required for action='step'."},
-        "note": {
-            "type": "string?",
-            "description": "Free-text note about the result,e.g. 'pytest 3/3 passed' or 'compile error: undefined foo',"
-                           "Optional but recommended action='step'."}}
-    use_spinner = True
-    preview_lines = 100
-    preview_width = 500
-
-    def run(self, args):
-        action = args.get("action", "show")
-        method = getattr(self, f"_action_{action}", None)
-        if not method:
-            return self.fail(f"unknown action '{action}', one of 'plan' | 'step' | 'show' | 'finish'")
-        return method(args)
-
-    def _action_plan(self, args):
-        if not args.get("goal") or not args.get("steps"):
-            return self.fail("action='plan' requires 'goal' and 'steps'")
-        try:
-            sl = json.loads(args["steps"])
-            if not isinstance(sl, list) or not sl:
-                return self.fail("steps must be non-empty JSON array")
-        except json.JSONDecodeError as e:
-            return self.fail(f"invalid steps JSON array: {e}")
-        cur = _goal_load()  # 拒绝覆盖未结束的活跃 goal
-        if cur and cur.get("current", 0) < len(cur.get("steps", [])):
-            return self.fail(
-                "action='plan' refused: an active goal is still in progress "
-                f"(step {cur['current'] + 1}/{len(cur['steps'])}). "
-                "Use action='step' to advance the current goal, or action='finish' to close it first.")
-        g = {"goal": args["goal"], "steps": [{"desc": s, "status": "pending"} for s in sl], "current": 0}
-        _goal_save(g)
-        return self.ok(f"plan: {len(sl)} steps\n{json.dumps(g, ensure_ascii=False)}")
-
-    def _action_step(self, args):
-        n, status = args.get("step"), args.get("status", "done")
-        if status not in ("done", "failed"):
-            return self.fail(f"invalid status '{status}', one of 'done' | 'failed'")
-        g = _goal_load()
-        if not g or not n or n < 1 or n > len(g["steps"]):
-            return self.fail("no active goal or invalid step number, the goal may have already ended,"
-                             "call `attempt_completion` tool finish task.")
-        g["steps"][n - 1]["status"] = status
-        if args.get("note"):
-            g["steps"][n - 1]["note"] = args["note"]
-        if status == "done" and n == g["current"] + 1:
-            g["current"] = n
-        _goal_save(g)
-        nxt = (f"next: step {n + 1}" if n < len(g["steps"])
-               else "ALL STEPS DONE. You MUST now: (1) call goal(action='finish'), "
-                    "(2) call attempt_completion. DO NOT call goal(action='plan') again — "
-                    "it will be rejected and will reset your progress.")
-        return self.ok(f"step {n} {status}. {nxt}")
-
-    def _action_show(self, args):
-        g = _goal_load()
-        return self.ok(json.dumps(g, ensure_ascii=False, indent=2)) if g else self.fail("no active goal")
-
-    def _action_finish(self, args):
-        _goal_clear()
-        return self.ok("goal cleared, call `attempt_completion` tool finish task.")
-
-
 class WebSearchTool(ToolBase):
     name = "web_search"
     description = (
@@ -1117,7 +1020,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        SearchMemoryTool(), AppendMemoryTool(), GoalTool(), WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
+        SearchMemoryTool(), AppendMemoryTool(), WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
 
 
 def tool_schema():
@@ -1966,6 +1869,103 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
     ctx.save(ctx_file_path)
 
 
+def loop_engine(goal: str, max_iter: int = 5):
+    """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)。
+    Implementer: 设计与写代码(不 verify), Verifier: 跑 verify_cmd,判断 pass/fail, Updater: 失败时 refine user prompt"""
+    def _get_loop_ctx(loop_type: str):
+        _loop_id = f"loop_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        _loop_file = os.path.join(loops_dir, f"{loop_type}_{_loop_id}.json")
+        _loop_ctx = ContextManager()
+        _loop_ctx.load(_loop_file)
+        return _loop_ctx, _loop_file
+
+    def _extract_changed_files(ctx) -> str:  # 从 edit/write tool_calls 提取 implementer 改过的文件
+        files = set()
+        for m in ctx.messages:
+            if m.get("role") == "tool" and m.get("tool_name") in ("edit", "write"):
+                files.add(f"{m.get('content')}")  # return [edit/write {file_path} ok]
+        return ",\n ".join(files) if files else "(unknown — Verifier inspect project to find)"
+
+    def _get_completion_result(ctx) -> str:  # 从 ctx 最后一条 assistant 提取 attempt_completion 的 result
+        for m in reversed(ctx.messages):
+            if m.get("role") == "tool" and m.get("tool_name") == "attempt_completion":
+                return m.get('content', '')
+        return ''
+
+    loog_prompt_runtime = SystemPrompt()
+    loop_files = []  # 追踪所有创建的临时 ctx 文件，退出时统一清理
+    implementer_ctx, implementer_ctx_file = _get_loop_ctx("implementer")
+    implementer_ctx.append_system(loog_prompt_runtime.assemble())
+    loop_files.append(implementer_ctx_file)
+    try:
+        for iteration in range(1, max_iter + 1):
+            agent_loop(implementer_ctx, implementer_ctx_file,  # Implementer: 设计与写代码(不自己 verify)
+                       f"[Loop iter {iteration}/{max_iter}]\n"
+                       f"GOAL: {goal}\n\n"
+                       f"You are the IMPLEMENTER. Design + write code.\n"
+                       f"1. Read relevant code (read/grep).\n"
+                       f"2. Plan your design.\n"
+                       f"3. Implement progressively: smallest working change first.\n"
+                       f"4. Self-review: read back your changes, verify no logic errors.\n"
+                       f"5. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
+                       f"6. When calling edit/write, briefly explain WHY in your thinking.\n"
+                       f"7. Call `attempt_completion` tool when done.\n\n"
+                       f"DO NOT run tests or verify your own code. That's the Verifier's job.")
+            impl_files = _extract_changed_files(implementer_ctx)
+
+            verifier_ctx, verifier_ctx_file = _get_loop_ctx("verifier")
+            verifier_ctx.append_system(loog_prompt_runtime.assemble())
+            loop_files.append(verifier_ctx_file)
+            agent_loop(verifier_ctx, verifier_ctx_file,  # Verifier: 跑 verify_cmd,判断 pass/fail
+                       f"[Verify iter {iteration}]\n"
+                       f"GOAL: {goal}\n"
+                       f"Files changed by implementer: \n"
+                       f"{impl_files}\n\n"
+                       f"You are an OBJECTIVE Verifier. Independent judgment required.\n"
+                       f"1. Inspect the changed files (read tool).\n"
+                       f"2. Determine the right test command(inspect project:package.json/pyproject.toml/go.mod).\n"
+                       f"3. Run tests with bash tool.\n"
+                       f"4. Judge PASS/FAIL based on exit code AND tests actually verify the goal.\n"
+                       f"5. If FAIL: explain which test, why, and suggested fix.\n"
+                       f"6. Call `attempt_completion` tool with one line:\n"
+                       f"   - 'VERIFY: PASS'\n"
+                       f"   - 'VERIFY: FAIL: <reason>'\n"
+                       f"   - 'VERIFY: PASS, NO_ISSUES' (success + no remaining concerns)\n"
+                       f"   - 'VERIFY: PASS, ISSUES: <list>' (success but with concerns)\n\n"
+                       f"Explain at architecture-level (module/flow), not function-level.")
+            verify_result = _get_completion_result(verifier_ctx)
+            if verify_result and "VERIFY: PASS" in verify_result:
+                console.success(f"Loop succeeded at iter {iteration}")
+                return True
+
+            updater_ctx, updater_ctx_file = _get_loop_ctx("updater")
+            updater_ctx.append_system(loog_prompt_runtime.assemble())
+            loop_files.append(updater_ctx_file)
+            agent_loop(updater_ctx, updater_ctx_file,  # Updater(失败兜底,refine user prompt,只输出字符串)
+                       f"[Updater iter {iteration}]\n"
+                       f"GOAL: {goal}\n"
+                       f"Verifier FAILED: {verify_result}\n\n"
+                       f"You are an UPDATER.\n"
+                       f"Refine the user's prompt for the next implementer iteration.\n"
+                       f"You MUST NOT write code or call write/edit/bash. Only read/grep for context.\n\n"
+                       f"Read the verifier's failure analysis above.\n"
+                       f"Identify what's missing or unclear in the original goal.\n\n"
+                       f"Output: a single prompt, 50-200 words, specific constraints.\n"
+                       f"Call `attempt_completion` tool to return the refined prompt.")
+            refined = _get_completion_result(updater_ctx)
+            if refined:  # 把 refined prompt 注入 implementer 下一轮 ctx
+                implementer_ctx.append_user(f"[Refined prompt from updater iter {iteration}]\n{refined}")
+
+        console.error(f"Loop failed after {max_iter} iterations")
+        return False
+    finally:
+        for f in loop_files:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+
 class FlashExtServer:
     def __init__(self, host="0.0.0.0", port=8080, token=None, provider_obj=None, enable_memory=False, enable_search=False):
         self.host = host
@@ -2246,37 +2246,19 @@ def main():
                 continue
 
             if user_input.strip().startswith("/g") or user_input.strip().startswith("/goal"):
+                console.warning("/goal is deprecated since v0.1.31. Use /loop <goal> instead.")
+                continue
+            if user_input.strip().startswith("/l") or user_input.strip().startswith("/loop"):
                 parts = user_input.split(maxsplit=1)
                 if len(parts) != 2:
-                    console.error("Please input '/g or /goal <query>'")
+                    console.error("Please input '/l or /loop <query>'")
                     continue
                 goal_text = parts[1].strip()
                 if not goal_text:
-                    console.error("Please input '/g or /goal <query>'")
+                    console.error("Please input '/l or /loop <query>'")
                     continue
-                g = _goal_load()
-                if g and (g.get("goal") == goal_text or goal_text.lower() in ("继续", "go on", "continue")):
-                    ctx.inject_user(
-                        f"[GOAL RESUMED] step {g['current']}/{len(g['steps'])} done\n"
-                        f"Plan: {json.dumps(g, ensure_ascii=False)}\n\n"
-                        "Continue with next pending step. Call goal(action='show') to refresh.")
-                else:
-                    if g:
-                        _goal_clear()  # 换 goal 时清掉旧的
-                    ctx.inject_user(
-                        f"[GOAL MODE] {goal_text}\n\n"
-                        "Call goal(action='plan', goal='<verbatim>', steps=[\"...\"]) ONCE with 3-8 steps. "
-                        "Then for each step: execute, call goal(action='step', step=N, status='done', note='...'). "
-                        "After all steps done, call goal(action='finish') then attempt_completion. "
-                        "Do NOT call goal(action='plan') again — it will be rejected.\n\n"
-                        f"Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                console.success(f"🎯 Goal: {goal_text}")
-                if MANGO_ROUTING == "on":
-                    try:
-                        provider.route(ctx, goal_text)
-                    except Exception as e:
-                        console.warning(f"Routing failed ({e})")
-                agent_loop(ctx, ctx_file_path, "[CONTINUE GOAL EXECUTION]")
+                console.success(f"🎯 Loop: {goal_text}")
+                loop_engine(goal_text)
                 continue
             normal_message = f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             if MANGO_ROUTING == "on":
