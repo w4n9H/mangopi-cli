@@ -47,7 +47,7 @@ def _user_msg(content):
 
 def _make_server(provider_obj=None):
     srv = FlashExtServer(host="127.0.0.1", port=9999, provider_obj=provider_obj or MagicMock(),
-                         enable_memory=False, enable_search=False)
+                         enable_search=False)
     srv.logger = MagicMock()
     return srv
 
@@ -294,7 +294,7 @@ class FlashExtServerHandleTests(unittest.TestCase):
         self.provider.headers.return_value = {}
         self.provider.build_body.return_value = {"model": "default-model", "stream": False}
         self.srv = FlashExtServer(host="127.0.0.1", port=9999, provider_obj=self.provider,
-                                  enable_memory=False, enable_search=False)
+                                  enable_search=False)
         self.srv.logger = MagicMock()
 
     def test_preserves_client_temperature(self):

@@ -1804,7 +1804,7 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
     ctx.save(ctx_file_path)
 
 
-def loop_engine(goal: str, max_iter: int = 5, task_id: str | None = None):
+def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
     """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)。
     Implementer: 设计与写代码(不 verify), Verifier: 验证测试,判断 pass/fail, Updater: 失败时 refine user prompt"""
     if task_id is None:
