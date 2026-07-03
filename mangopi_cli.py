@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.31"
+__version__ = "0.1.32"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -45,7 +45,6 @@ MANGO_ROUTING = os.environ.get("MANGO_ROUTING", "off").lower()
 project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
-memory_dir = os.path.join(base_persist_dir, "memory")
 loops_dir = os.path.join(base_persist_dir, "loops")
 providers_file = os.path.join(base_persist_dir, "providers.json")
 
@@ -101,6 +100,8 @@ class Printer:
     SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def __init__(self):
+        self.mode = "console"
+        self._round = 0
         self._spinner_running = False
         self._spinner_thread = None
         self._spinner_message = ""
@@ -112,6 +113,8 @@ class Printer:
         sys.stdout.flush()
 
     def _write_line(self, text: str = ""):
+        if self.mode == "jsonl":
+            return
         with self._lock:
             was_running = self._spinner_running
             if was_running:
@@ -130,10 +133,16 @@ class Printer:
         self._write_line(_c(f"• {title}", ORANGE))
 
     def tool_call(self, name: str, desc: str):
+        if self.mode == "jsonl":
+            _output_event({"type": "tool", "name": name, "args_preview": desc, "round": self._round})
+            return
         self.section(_i18n("tool.call"))
         self._write_line(f"{_c('› ', GREY)}{_c(name, CYAN)}  {_c(desc, GREY)}")
 
-    def tool_result(self, ok=True):
+    def tool_result(self, name: str, ok=True, snippet=""):
+        if self.mode == "jsonl":
+            _output_event({"type": "tool_result", "name": name, "ok": ok, "snippet": snippet[:200], "round": self._round})
+            return
         icon = "✓" if ok else "✗"
         color = GREEN if ok else RED
         suffix = _i18n("tool.result.ok") if ok else _i18n("tool.result.fail")
@@ -151,18 +160,28 @@ class Printer:
         self._write_line(f"{DIM}{'─' * min(os.get_terminal_size().columns, 80)}{RESET}")
 
     def thinking(self, content: str):
+        if self.mode == "jsonl":
+            _output_event({"type": "thinking", "content": content})
+            return
         self.section(_i18n("llm.thinking"))
         for line in content.splitlines():
             self._write_line("  " + _c(line, GREY))
 
     def output(self, content: str):
+        if self.mode == "jsonl":
+            _output_event({"type": "output", "content": content})
+            return
         self.section(_i18n("llm.output"))
         for line in content.splitlines():
             self._write_line("  " + _c(line, SOFT))
 
     def token_usage(self, iteration: int, input_tokens: int, output_tokens: int, context_tokens: int, max_context: int):
-        def fmt(n): return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+        if self.mode == "jsonl":
+            _output_event({"type": "usage", "prompt_tokens": input_tokens,
+                           "completion_tokens": output_tokens, "total": input_tokens + output_tokens})
+            return
 
+        def fmt(n): return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
         ratio = context_tokens / max_context if max_context else 0
         percent = int(ratio * 100)
         color = GREEN if percent < 50 else YELLOW if percent < 70 else RED
@@ -214,6 +233,8 @@ class Printer:
                 self._write_line(_c(dl, GREY))
 
     def start_spinner(self, message: str = "Running..."):
+        if self.mode == "jsonl":
+            return
         if self._spinner_running:
             return
         self._spinner_running = True
@@ -232,6 +253,8 @@ class Printer:
         self._spinner_thread.start()
 
     def end_spinner(self):
+        if self.mode == "jsonl":
+            return
         if not self._spinner_running:
             return
         self._spinner_running = False
@@ -244,10 +267,14 @@ class Printer:
 console = Printer()
 
 
+def _output_event(d: dict) -> None:
+    if console.mode == "jsonl":
+        print(json.dumps(d, ensure_ascii=False), flush=True)
+
+
 # --- Init dir, Base data ---
 def initialize_system():
     os.makedirs(session_dir, exist_ok=True)  # auto create .mangocli
-    os.makedirs(memory_dir, exist_ok=True)
     os.makedirs(loops_dir, exist_ok=True)
 
 
@@ -396,60 +423,6 @@ def _bocha_search_api(query: str = None, freshness: str = "noLimit",  summary: b
             for m in pages.get("value", [])] if isinstance(pages, dict) else []
 
 
-class MemoryManager:
-    def __init__(self):
-        self.memory_dir = memory_dir
-
-    def today_path(self): return os.path.join(self.memory_dir, datetime.now().strftime("%Y-%m-%d.md"))
-
-    def append(self, content: str):
-        with open(self.today_path(), "a", encoding="utf-8") as f:
-            f.write(content.strip() + "\n\n")
-
-    @staticmethod
-    def _tokenize(text: str): return [x.strip().lower() for x in text.split() if x.strip()]
-
-    @staticmethod
-    def _split_chunks(text: str): return [c.strip() for c in re.split(r"\n\s*\n", text) if c.strip()]
-
-    def search(self, query: str, top_k: int = 10):
-        keywords = self._tokenize(query)
-        if not keywords:
-            return "empty query"
-
-        scored = []
-        for path in sorted(globlib.glob(self.memory_dir + "/*.md"), reverse=True):
-            try:
-                with open(path, encoding="utf-8") as fp:
-                    memory_text = fp.read()
-                    chunks = self._split_chunks(memory_text)
-                    for chunk in chunks:
-                        lower = chunk.lower()
-                        score = 0
-                        for kw in keywords:
-                            if kw in lower:
-                                score += lower.count(kw) * 10
-                        if score <= 0:
-                            continue
-                        score += min(len(chunk) // 200, 5)
-                        mtime_bonus = max(0, 30 - int((time.time() - os.path.getmtime(path)) / 86400))
-                        score += mtime_bonus
-                        scored.append({"score": score, "file": os.path.basename(path), "content": chunk[:2000]})
-            except Exception:
-                continue
-        if not scored:
-            return ("No memory found. Tip: append important user preferences, decisions, "
-                    "and non-obvious fixes so future sessions can recall them.")
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        results = []
-        for item in scored[:top_k]:
-            results.append(f"# {item['file']} (score={item['score']})\n{item['content']}")
-        return "\n\n---\n\n".join(results)
-
-
-memory_manager = MemoryManager()
-
-
 class SkillManager:
     def __init__(self, base_paths: List[str] = None, load_level: str = "resources"):
         self.base_paths = base_paths or [os.path.expanduser("~/.mangocli/skills"), Path(base_persist_dir) / "skills"]
@@ -551,7 +524,7 @@ class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 
                               "component", "databas", "config", "集成", "接口", "模块", "组件", "数据库", "存储", "stor"]}
 
     PHASES = {
-        "exploring": lambda tools: tools and all(t in ("read", "grep", "search", "search_memory") for t in tools),
+        "exploring": lambda tools: tools and all(t in ("read", "grep", "search") for t in tools),
         "executing": lambda tools: tools and any(t in ("edit", "write") for t in tools),
         "verifying": lambda tools: tools and sum(1 for t in tools if t == "bash") >= 2}
 
@@ -843,42 +816,6 @@ class UseSkillTool(ToolBase):
         return self.ok("\n".join(result))
 
 
-class SearchMemoryTool(ToolBase):
-    name = "search_memory"
-    description = ("Search YOUR long-term memory — notes YOU have saved in past sessions. CALL THIS WHEN: "
-                   "(1) user references past work ('last time', 'as discussed'), "
-                   "(2) before recommending architecture/patterns (check for prior decisions), "
-                   "(3) user asks about their preferences or project conventions.")
-    params = {
-        "query": {
-            "type": "string",
-            "description": "Search query. Supports multiple space-separated keywords in both English and Chinese."}}
-    use_spinner = True
-
-    def preview(self, args): return (args.get("query") or "")[:self.preview_width]
-
-    def run(self, args):
-        result = memory_manager.search(args["query"])
-        return self.ok(result)
-
-
-class AppendMemoryTool(ToolBase):
-    name = "append_memory"
-    description = ("Save a note to YOUR long-term memory. Persists across sessions. CALL THIS WHEN: "
-                   "(1) user states a preference ('I always use X'), "
-                   "(2) an architecture decision is made, (3) a non-obvious bug fix is found, "
-                   "(4) a project convention is established. "
-                   "DO NOT CALL for ephemeral session context, code already in the repo, or trivial facts.")
-    params = {
-        "content": {
-            "type": "string",
-            "description": "Concise 5-10 sentence note. Prefix tag: [PREFERENCE]/[DECISION]/[BUG-FIX]/[CONVENTION]."}}
-
-    def run(self, args):
-        memory_manager.append(args["content"])
-        return self.ok("memory appended")
-
-
 class WebSearchTool(ToolBase):
     name = "web_search"
     description = (
@@ -1020,7 +957,7 @@ class AttemptCompletionTool(ToolBase):
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        SearchMemoryTool(), AppendMemoryTool(), WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
+        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
 
 
 def tool_schema():
@@ -1738,7 +1675,7 @@ def run_tool(tool_name, tool_args):
                 else:
                     print(f"     {DIM}{line}{RESET}")
 
-        console.tool_result(tool_status)
+        console.tool_result(tool.name, ok=tool_status, snippet=display_str[:200])
         return tool_content
     except Exception as err:
         console.end_spinner()
@@ -1771,11 +1708,9 @@ class SystemPrompt:
     @staticmethod
     def _build_tool_guidance() -> str:
         return ("## Tool Selection\n\n"
-                "Use the dedicated tool when one exists (read/write/edit/search/grep/search_memory/"
-                "append_memory/attempt_completion). Reach for **bash** only when no dedicated tool fits.\n"
+                "Use the dedicated tool when one exists (read/write/edit/search/grep/attempt_completion)."
+                "Reach for **bash** only when no dedicated tool fits.\n"
                 "Use **edit** (not write) for small in-place changes; ensure `old` is unique or pass `all=true`.\n"
-                "Use **search_memory** for long-term knowledge, **append_memory** only for "
-                "architecture decisions / persistent preferences (not ephemeral context).\n"
                 "Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
                 "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
                 "but call `view_image` directly when the path is computed or generated.\n"
@@ -1864,17 +1799,23 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
                 break
         else:
             break
-        if iteration == MANGO_MAX_ITER:
+        if iteration >= MANGO_MAX_ITER:
             break
     ctx.save(ctx_file_path)
 
 
-def loop_engine(goal: str, max_iter: int = 5):
+def loop_engine(goal: str, max_iter: int = 5, task_id: str | None = None):
     """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)。
-    Implementer: 设计与写代码(不 verify), Verifier: 跑 verify_cmd,判断 pass/fail, Updater: 失败时 refine user prompt"""
+    Implementer: 设计与写代码(不 verify), Verifier: 验证测试,判断 pass/fail, Updater: 失败时 refine user prompt"""
+    if task_id is None:
+        task_id = uuid.uuid4().hex[:8]
+    task_dir = os.path.join(loops_dir, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
+
     def _get_loop_ctx(loop_type: str):
         _loop_id = f"loop_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-        _loop_file = os.path.join(loops_dir, f"{loop_type}_{_loop_id}.json")
+        _loop_file = os.path.join(task_dir, f"{loop_type}_{_loop_id}.json")
         _loop_ctx = ContextManager()
         _loop_ctx.load(_loop_file)
         return _loop_ctx, _loop_file
@@ -1892,13 +1833,16 @@ def loop_engine(goal: str, max_iter: int = 5):
                 return m.get('content', '')
         return ''
 
-    loog_prompt_runtime = SystemPrompt()
-    loop_files = []  # 追踪所有创建的临时 ctx 文件，退出时统一清理
+    _output_event({"type": "start", "task_id": task_id, "goal": goal, "started_at": time.time()})
+
+    loop_prompt_runtime = SystemPrompt()
     implementer_ctx, implementer_ctx_file = _get_loop_ctx("implementer")
-    implementer_ctx.append_system(loog_prompt_runtime.assemble())
-    loop_files.append(implementer_ctx_file)
+    implementer_ctx.append_system(loop_prompt_runtime.assemble())
     try:
         for iteration in range(1, max_iter + 1):
+            console._round = iteration
+            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "implementer", "phase": "plan"})
+            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "implementer", "phase": "develop"})
             agent_loop(implementer_ctx, implementer_ctx_file,  # Implementer: 设计与写代码(不自己 verify)
                        f"[Loop iter {iteration}/{max_iter}]\n"
                        f"GOAL: {goal}\n\n"
@@ -1913,16 +1857,17 @@ def loop_engine(goal: str, max_iter: int = 5):
                        f"DO NOT run tests or verify your own code. That's the Verifier's job.")
             impl_files = _extract_changed_files(implementer_ctx)
 
+            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "verifier", "phase": "review"})
+            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "verifier", "phase": "test"})
             verifier_ctx, verifier_ctx_file = _get_loop_ctx("verifier")
-            verifier_ctx.append_system(loog_prompt_runtime.assemble())
-            loop_files.append(verifier_ctx_file)
+            verifier_ctx.append_system(loop_prompt_runtime.assemble())
             agent_loop(verifier_ctx, verifier_ctx_file,  # Verifier: 跑 verify_cmd,判断 pass/fail
                        f"[Verify iter {iteration}]\n"
                        f"GOAL: {goal}\n"
                        f"Files changed by implementer: \n"
                        f"{impl_files}\n\n"
                        f"You are an OBJECTIVE Verifier. Independent judgment required.\n"
-                       f"1. Inspect the changed files (read tool).\n"
+                       f"1. Inspect changed files — use `git diff` first, then `read` individual files as needed.\n"
                        f"2. Determine the right test command(inspect project:package.json/pyproject.toml/go.mod).\n"
                        f"3. Run tests with bash tool.\n"
                        f"4. Judge PASS/FAIL based on exit code AND tests actually verify the goal.\n"
@@ -1934,13 +1879,20 @@ def loop_engine(goal: str, max_iter: int = 5):
                        f"   - 'VERIFY: PASS, ISSUES: <list>' (success but with concerns)\n\n"
                        f"Explain at architecture-level (module/flow), not function-level.")
             verify_result = _get_completion_result(verifier_ctx)
+            _output_event({"type": "verdict", "verdict": verify_result or "FAIL: no result",
+                           "reason": "", "round": iteration})
             if verify_result and "VERIFY: PASS" in verify_result:
+                _output_event(
+                    {"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "implementer", "phase": "push"})
+                # todo: begin push code ...
+
+                _output_event({"type": "complete", "result": f"All rounds completed: {goal}", "iters": iteration})
                 console.success(f"Loop succeeded at iter {iteration}")
                 return True
 
+            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "updater", "phase": "push"})
             updater_ctx, updater_ctx_file = _get_loop_ctx("updater")
-            updater_ctx.append_system(loog_prompt_runtime.assemble())
-            loop_files.append(updater_ctx_file)
+            updater_ctx.append_system(loop_prompt_runtime.assemble())
             agent_loop(updater_ctx, updater_ctx_file,  # Updater(失败兜底,refine user prompt,只输出字符串)
                        f"[Updater iter {iteration}]\n"
                        f"GOAL: {goal}\n"
@@ -1957,22 +1909,20 @@ def loop_engine(goal: str, max_iter: int = 5):
                 implementer_ctx.append_user(f"[Refined prompt from updater iter {iteration}]\n{refined}")
 
         console.error(f"Loop failed after {max_iter} iterations")
+        _output_event({"type": "complete", "result": None, "iters": max_iter})
         return False
-    finally:
-        for f in loop_files:
-            try:
-                os.remove(f)
-            except OSError:
-                pass
+    except Exception as e:
+        _output_event({"type": "complete", "result": None, "iters": iteration})
+        console.error(f"Loop error: {e}")
+        return False
 
 
 class FlashExtServer:
-    def __init__(self, host="0.0.0.0", port=8080, token=None, provider_obj=None, enable_memory=False, enable_search=False):
+    def __init__(self, host="0.0.0.0", port=8080, token=None, provider_obj=None, enable_search=False):
         self.host = host
         self.port = port
         self.token = token
         self.provider: BaseProvider = provider_obj or provider
-        self.enable_memory = enable_memory
         self.enable_search = enable_search and bool(os.environ.get("MANGO_SEARCH_API_KEY"))
         self.thinker: FlashThinking = flash_thinking
         self.logger = logging.getLogger("flash-ext")
@@ -2028,14 +1978,6 @@ class FlashExtServer:
             elif tool_ctx:
                 self.logger.debug(f"tool_context truncated ({len(tool_ctx)} -> 2000 chars)")
                 elems.append(f"<tool_context>{tool_ctx[:2000]}...(truncated)</tool_context>")
-        if self.enable_memory:  # 3. 辅助：记忆 + 搜索
-            try:
-                mem = memory_manager.search(query)
-                if mem and "No memory" not in mem:
-                    self.logger.debug(f"memory hit: {mem[:80]}...")
-                    elems.append(f"<memory>{mem}</memory>")
-            except Exception as e:
-                self.logger.error(f"memory search failed: {e}")
         if self.enable_search:
             try:
                 sr = _bocha_search_api(query=query, count=3, bocha_key=os.environ["MANGO_SEARCH_API_KEY"])
@@ -2089,16 +2031,6 @@ class FlashExtServer:
         except Exception as e:
             self.logger.warning(f"upstream error: {e}")
             return {"error": {"message": f"Upstream model error: {e}", "type": "flash_ext_error", "code": 502}}
-        if self.enable_memory:  # 记忆写入（不阻塞）
-            try:
-                parsed = self.provider.parse_response(raw)
-                mem_content = parsed.get("content", "")
-                if mem_content and len(mem_content) > 50:
-                    q = next((m.get("content", "")[:200] for m in reversed(body.get("messages", []))
-                              if m.get("role") == "user"), "")
-                    memory_manager.append(f"[auto] Q: {q}\nA: {mem_content[:500]}")
-            except Exception as e:
-                self.logger.error(f"memory write failed: {e}")
         return raw  # 透传原始响应
 
     def _models(self): return {"object": "list", "data": [{"id": f"{self.provider.model}", "object": "model"}]}
@@ -2161,9 +2093,9 @@ class FlashExtServer:
         logging.basicConfig(format="%(asctime)s [%(name)s] %(levelname)s %(message)s", level=level)
         from http.server import ThreadingHTTPServer
         self._server = ThreadingHTTPServer((self.host, self.port), self._make_handler())
-        self.logger.info("serving on %s:%s (frameworks=%d memory=%s search=%s auth=%s)",
+        self.logger.info("serving on %s:%s (frameworks=%d search=%s auth=%s)",
                          self.host, self.port, len(self.thinker.frameworks),
-                         self.enable_memory, self.enable_search, bool(self.token))
+                         self.enable_search, bool(self.token))
         try:
             self._server.serve_forever()
         except KeyboardInterrupt:
@@ -2180,9 +2112,15 @@ def _parse_args(args=None):
     flash.add_argument("--host", default="127.0.0.1", help="Server bind host (default: 127.0.0.1)")
     flash.add_argument("--port", type=int, default=8080, help="Server port (default: 8080)")
     flash.add_argument("--token", default=None, help="Bearer token for client auth")
-    flash.add_argument("--memory", action="store_true", help="Enable auto memory write (default: off)")
     flash.add_argument("--web-search", action="store_true", help="Enable web search augmentation (default: off)")
     flash.add_argument("--debug", action="store_true", help="Enable DEBUG-level logging")
+    loop = sub.add_parser("loop", help="Run Loop Engineering (3-agent pipeline) with a goal query and exit")
+    loop.add_argument("query", nargs="+", help="Goal for loop iteration")
+    loop.add_argument("--max-iter", type=int, default=5, help="Max iterations (default: 5)")
+    loop.add_argument("--task-id", type=str, default=None,
+                      help="Task identifier; auto-generated as 8-char hex if omitted")
+    loop.add_argument("--output", choices=["console", "jsonl"], default="console",
+                      help="Output mode (default: console)")
     return parser.parse_args(args)
 
 
@@ -2197,9 +2135,16 @@ def main():
             sys.exit(1)
         server = FlashExtServer(
             host=args.host, port=args.port, token=args.token, provider_obj=create_provider(),
-            enable_memory=args.memory, enable_search=args.web_search)
+            enable_search=args.web_search)
         server.start(debug=args.debug)
         return
+    if args.command == "loop":
+        if not MANGO_KEY:
+            console.error("MANGO_KEY env var is required for loop mode")
+            sys.exit(1)
+        console.mode = args.output
+        success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id)
+        sys.exit(0 if success else 1)
 
     global provider
     if MANGO_ROUTING == "on":

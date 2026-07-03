@@ -832,7 +832,7 @@
                 <div class="stat-label"><span class="lang-en">dependencies</span><span class="lang-zh">依赖</span></div>
             </div>
             <div class="stat">
-                <div class="stat-num">12</div>
+                <div class="stat-num">10</div>
                 <div class="stat-label"><span class="lang-en">built-in tools</span><span class="lang-zh">内置工具</span></div>
             </div>
             <div class="stat">
@@ -1002,13 +1002,13 @@
             <div class="callout-text">
                 <h3><span class="lang-en">Run the server</span><span class="lang-zh">启动服务</span></h3>
                 <p>
-                    <span class="lang-en">Point any OpenAI-compatible client at <code>http://127.0.0.1:8080/v1/chat/completions</code>. Optionally enable memory and web search.</span>
-                    <span class="lang-zh">将任意 OpenAI 兼容客户端指向 <code>http://127.0.0.1:8080/v1/chat/completions</code>。可选择性启用记忆和搜索。</span>
+                    <span class="lang-en">Point any OpenAI-compatible client at <code>http://127.0.0.1:8080/v1/chat/completions</code>. Optionally enable web search.</span>
+                    <span class="lang-zh">将任意 OpenAI 兼容客户端指向 <code>http://127.0.0.1:8080/v1/chat/completions</code>。可选择性启用搜索。</span>
                 </p>
             </div>
             <pre class="callout-code"><span class="cmd-c">$</span> python mangopi_cli.py <span class="key">--flash-ext</span> <span class="key">--debug</span>
 <span class="muted"># Optional</span>
-<span class="cmd-c">$</span> python mangopi_cli.py <span class="key">--flash-ext</span> <span class="key">--memory</span> <span class="key">--web-search</span></pre>
+<span class="cmd-c">$</span> python mangopi_cli.py <span class="key">--flash-ext</span> <span class="key">--web-search</span></pre>
         </div>
     </div>
 </section>
@@ -1180,7 +1180,7 @@
     <div class="wrap">
         <div class="sec-head">
             <div class="sec-num">— 09</div>
-            <h2 class="sec-title"><span class="lang-en"><em>12</em> tools.</span><span class="lang-zh"><em>12</em> 个工具</span></h2>
+            <h2 class="sec-title"><span class="lang-en"><em>10</em> tools.</span><span class="lang-zh"><em>10</em> 个工具</span></h2>
         </div>
         <div class="tools">
             <div class="tool"><code>read</code><p><span class="lang-en">File or image (png/jpg/gif/webp auto-routes to vision)</span><span class="lang-zh">文件或图片（png/jpg/gif/webp 自动路由至视觉）</span></p></div>
@@ -1192,8 +1192,6 @@
             <div class="tool"><code>view_image</code><p><span class="lang-en">Load local image into vision context</span><span class="lang-zh">加载本地图片至视觉上下文</span></p></div>
             <div class="tool"><code>web_search</code><p><span class="lang-en">Bocha AI Search live web</span><span class="lang-zh">Bocha AI 实时搜索</span></p></div>
             <div class="tool"><code>use_skill</code><p><span class="lang-en">Load installed SKILL.md</span><span class="lang-zh">加载已安装技能</span></p></div>
-            <div class="tool"><code>search_memory</code><p><span class="lang-en">Multi-keyword markdown search</span><span class="lang-zh">多关键词 markdown 搜索</span></p></div>
-            <div class="tool"><code>append_memory</code><p><span class="lang-en">Append long-term memory</span><span class="lang-zh">追加长期记忆</span></p></div>
             <div class="tool"><code>attempt_completion</code><p><span class="lang-en">Task completion signal</span><span class="lang-zh">任务完成信号</span></p></div>
         </div>
 

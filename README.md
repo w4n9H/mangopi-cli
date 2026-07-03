@@ -78,14 +78,13 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Python standard library only
 * Instant startup speed
 * Local-first workflow design
-* Autonomous goal execution
+* Autonomous loop execution (3-agent implement / verify / refine pipeline)
 * Smart provider routing with tiered models (high/medium/low)
 * Flash-ext thinking framework server (OpenAI-compatible proxy)
 * Multimodal support (image reading via `view_image`)
 * Web search via Bocha AI Search (`web_search` tool)
 * Context-aware conversation management
 * Automatic context compacting
-* Markdown memory system
 * OpenAI-compatible API support
 * Built-in file and shell tools
 * Persistent local sessions
@@ -218,34 +217,32 @@ python mangopi_cli.py
 | `/n`        | `/new`          | Start a new session (old session is auto-backed-up)      |
 | `/c`        | `/compact`      | Manually trigger full conversation compact               |
 | `/h`        | `/help`         | Show built-in command help                               |
-| `/g <goal>` | `/goal <query>` | Enter Goal mode — plan, execute, verify until completion |
+| `/l <goal>` | `/loop <query>` | Start Loop Engineering — 3-agent pipeline (implement → verify → refine) |
+| `/g <goal>` | `/goal <query>` | *(deprecated)* Use `/loop` instead |
 
-`/g` accepts Chinese resume keywords (`继续`, `继续执行`, `next`, `resume`, `continue`) to resume a paused plan with the same goal text.
+`/loop` runs up to 5 iterations; the pipeline short-circuits on the first `VERIFY: PASS`.
 
 ---
 
-# Goal Mode
+# Loop Engineering
 
-Goal Mode allows Mangopi CLI to autonomously:
+Loop Engineering replaces the legacy Goal Mode with a **3-agent collaborative pipeline**:
 
-* plan
-* execute
-* verify
-* iterate
+| Agent | Role |
+|-------|------|
+| **Implementer** | Designs & writes code. Explicitly forbidden from running tests — "that's the Verifier's job." |
+| **Verifier** | Inspects changed files, determines the right test command, runs tests, judges PASS/FAIL at the architecture level. |
+| **Updater** | On failure, reads the Verifier's analysis and produces a refined prompt (50–200 words) for the next Implementer iteration; read/grep only, no code edits. |
 
-until the objective is fully completed.
+The pipeline runs up to 5 iterations, short-circuiting on the first `VERIFY: PASS`. Session files under `.mangocli/loops/` are automatically cleaned up on exit.
 
 Example:
 
 ```bash
-/g build a fastapi todo app with tests
+/loop build a fastapi todo app with tests
 ```
 
-The agent will continue working until it determines the task is complete.
-
----
-
----
+The agent implements, a dedicated Verifier runs the actual tests, and if anything fails, the Updater refines the prompt for the next attempt — all autonomously.
 
 # Flash-ext Server
 
@@ -255,14 +252,14 @@ Start the server:
 
 ```bash
 python mangopi_cli.py --flash-ext --debug
-# Optional flags: --memory --web-search --port 8080 --token my-token
+# Optional flags: --web-search --port 8080 --token my-token
 ```
 
 Flash-ext:
 - Matches keywords + tool-call patterns to select thinking frameworks (debug/design/explain/optimize/implement/investigate/verify/reevaluate).
 - On complex tasks, calls its own LLM to analyze session state and provide tailored guidance.
 - Injects all context into the user message via XML tags — zero new system messages.
-- Supports optional memory and web search augmentation.
+- Supports optional web search augmentation.
 - Is **cognitive-only**: never touches file I/O or bash; only enhances reasoning before the request reaches upstream.
 
 ---
@@ -280,9 +277,7 @@ Flash-ext:
 | `view_image`         | Load a local image into the model's vision context              |
 | `web_search`         | Search the live web via Bocha AI Search API                     |
 | `use_skill`          | Load an installed `SKILL.md` with its scripts/references        |
-| `search_memory`      | Search long-term markdown memory (multi-keyword, scored)        |
-| `append_memory`      | Append a note to today's long-term memory file                  |
-| `goal`               | Manage the active goal plan (`plan` / `step` / `show` / `finish`) |
+| `loop_engine`       | 3-agent pipeline: implement → verify → refine (invoked via `/loop`) |
 | `attempt_completion` | Final step — present the result to the user                     |
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
@@ -381,8 +376,7 @@ Core components:
 | `Provider`        | API abstraction (`OpenAIProvider`, `DeepSeekProvider`, `MiniMaxProvider`) |
 | `SystemPrompt`    | Layered runtime prompt assembly (base, safety, rules, tools, env)        |
 | `SkillManager`    | Discovers and loads `SKILL.md` + scripts/references                      |
-| `MemoryManager`   | Long-term markdown memory (append + scored multi-keyword search)        |
-| `GoalTool`        | Persistent goal plan (`plan` / `step` / `show` / `finish`) with human checkpoint between steps |
+| `loop_engine`      | 3-agent pipeline (Implementer / Verifier / Updater) with persistent task sessions |
 | `agent_loop`      | Drives the read → think → tool-call → verify loop until the model stops or calls `attempt_completion` |
 
 ---
@@ -390,6 +384,15 @@ Core components:
 # License
 
 Apache License 2.0
+
+---
+
+## ✨ Contributors
+
+
+|                 Contributor                  |                              Role                               |
+|:--------------------------------------------:|:---------------------------------------------------------------:|
+| [@BeWater799](https://github.com/BeWater799) | 💡 Inspiration for the Loop Engineering user prompt constraints |
 
 ---
 

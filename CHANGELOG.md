@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`loop` subcommand** — new CLI entry `mangopi-cli loop <goal> [--task-id] [--max-iter] [--output]`.
+- **`--task-id`** — persistent task directory under `.mangocli/loops/<task_id>/`, enabling future resume.
+- **`--output jsonl`** — `Printer` layer emits structured events (`start`, `iter`, `tool`, `tool_result`, `usage`, `thinking`, `output`, `verdict`, `complete`) for web UI consumption.
+- **README documentation** — Goal Mode fully replaced by Loop Engineering documentation.
+
+### Removed
+- **`MemoryManager` and `search_memory` tool** — long-term memory feature removed. `append_memory` / `search_memory` no longer available.
+
+### Changed
+- **Session persistence** — loop session files are no longer cleaned up on exit; preserved for resume.
+
 ---
 
 ## [0.1.31] - 2026-06-29
