@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.32"
+__version__ = "0.1.33"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -40,6 +40,7 @@ MANGO_MAX_CONTEXT = int(os.environ.get("MANGO_MAX_CONTEXT", 1_000_000))
 MANGO_MAX_ITER = int(os.environ.get("MANGO_MAX_ITER", 100))
 LANGUAGE = os.environ.get("MANGO_LANG", "en").lower()
 MANGO_ROUTING = os.environ.get("MANGO_ROUTING", "off").lower()
+MANGO_YOLO = os.environ.get("MANGO_YOLO", "").lower() in ("1", "true", "yes")
 
 
 project_root = os.getcwd()
@@ -697,7 +698,7 @@ class EditTool(ToolBase):
         if args.get("old") and args.get("new"):
             console.diff(old=args["old"], new=args["new"], filename=args["path"])
 
-    def confirm(self, args): return console.prompt_apply(f"Edit {args['path']} (y or n)?")
+    def confirm(self, args): return MANGO_YOLO or console.prompt_apply(f"Edit {args['path']} (y or n)?")
 
     def run(self, args):
         error = _validate_file_path(args["path"])
@@ -771,6 +772,8 @@ class BashTool(ToolBase):
     use_spinner = True
 
     def confirm(self, args):
+        if MANGO_YOLO:
+            return True
         is_dangerous, reason = _check_command_safety(args["cmd"])
         return not is_dangerous or console.prompt_apply(f"Execute dangerous cmd ({reason})? {args['cmd']}")
 
@@ -1804,9 +1807,73 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
     ctx.save(ctx_file_path)
 
 
+def _emit_iter(n: int, max_iter: int, agent: str, phase: str = ""):
+    _output_event({"type": "iter", "n": n, "max_iter": max_iter, "agent": agent, "phase": phase})
+
+
+def _implementer_prompt(iteration: int, max_iter: int, goal: str) -> str:  # Implementer: 设计与写代码(不 verify)
+    return (
+        f"[Loop iter {iteration}/{max_iter}]\n"
+        f"GOAL: {goal}\n\n"
+        f"You are the IMPLEMENTER. Design + write code.\n"
+        f"1. Read relevant code (read/grep).\n"
+        f"2. Plan your design.\n"
+        f"3. Implement progressively: smallest working change first.\n"
+        f"4. Self-review: read back your changes, verify no logic errors.\n"
+        f"5. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
+        f"6. When calling edit/write, briefly explain WHY in your thinking.\n"
+        f"7. Call `attempt_completion` tool when done.\n\n"
+        f"DO NOT run tests or verify your own code. That's the Verifier's job.")
+
+
+def _verifier_prompt(iteration: int, goal: str, impl_files: str) -> str:  # Verifier: 验证测试,判断 pass/fail
+    return (
+        f"[Verify iter {iteration}]\n"
+        f"GOAL: {goal}\n"
+        f"Files changed by implementer: \n"
+        f"{impl_files}\n\n"
+        f"You are an OBJECTIVE Verifier. Independent judgment required.\n"
+        f"1. Inspect changed files — use `git diff` first, then `read` individual files as needed.\n"
+        f"2. Determine the right test command(inspect project:package.json/pyproject.toml/go.mod).\n"
+        f"3. Run tests with bash tool.\n"
+        f"4. Judge PASS/FAIL based on exit code AND tests actually verify the goal.\n"
+        f"5. If FAIL: explain which test, why, and suggested fix.\n"
+        f"6. Call `attempt_completion` tool with one line:\n"
+        f"   - 'VERIFY: PASS'\n"
+        f"   - 'VERIFY: FAIL: <reason>'\n"
+        f"   - 'VERIFY: PASS, NO_ISSUES' (success + no remaining concerns)\n"
+        f"   - 'VERIFY: PASS, ISSUES: <list>' (success but with concerns)\n\n"
+        f"Explain at architecture-level (module/flow), not function-level.")
+
+
+def _updater_prompt(iteration: int, goal: str, verify_result: Optional[str]) -> str:  # Updater: 失败时 refine user prompt
+    return (
+        f"[Updater iter {iteration}]\n"
+        f"GOAL: {goal}\n"
+        f"Verifier FAILED: {verify_result}\n\n"
+        f"You are an UPDATER.\n"
+        f"Refine the user's prompt for the next implementer iteration.\n"
+        f"You MUST NOT write code or call write/edit/bash. Only read/grep for context.\n\n"
+        f"Read the verifier's failure analysis above.\n"
+        f"Identify what's missing or unclear in the original goal.\n\n"
+        f"Output: a single prompt, 50-200 words, specific constraints.\n"
+        f"Call `attempt_completion` tool to return the refined prompt.")
+
+
+def _push_prompt(iteration: int, goal: str) -> str:
+    return (
+        f"[Push iter {iteration}]\n"
+        f"GOAL: {goal}\n\n"
+        f"All changes are verified. Commit them now.\n"
+        f"1. Use `git diff` to see uncommitted changes, then stage them.\n"
+        f"2. Write a short conventional commit message (e.g. `feat: ...` or `fix: ...`).\n"
+        f"3. Commit with `git commit -m \"<msg>\"`.\n"
+        f"4. Call `attempt_completion` when done.\n"
+        f"The commit message must be a short English sentence following conventional commits.")
+
+
 def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
-    """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)。
-    Implementer: 设计与写代码(不 verify), Verifier: 验证测试,判断 pass/fail, Updater: 失败时 refine user prompt"""
+    """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)"""
     if task_id is None:
         task_id = uuid.uuid4().hex[:8]
     task_dir = os.path.join(loops_dir, task_id)
@@ -1820,14 +1887,14 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
         _loop_ctx.load(_loop_file)
         return _loop_ctx, _loop_file
 
-    def _extract_changed_files(ctx) -> str:  # 从 edit/write tool_calls 提取 implementer 改过的文件
+    def _extract_changed_files(ctx) -> str:
         files = set()
         for m in ctx.messages:
             if m.get("role") == "tool" and m.get("tool_name") in ("edit", "write"):
-                files.add(f"{m.get('content')}")  # return [edit/write {file_path} ok]
+                files.add(f"{m.get('content')}")
         return ",\n ".join(files) if files else "(unknown — Verifier inspect project to find)"
 
-    def _get_completion_result(ctx) -> str:  # 从 ctx 最后一条 assistant 提取 attempt_completion 的 result
+    def _get_completion_result(ctx) -> str:
         for m in reversed(ctx.messages):
             if m.get("role") == "tool" and m.get("tool_name") == "attempt_completion":
                 return m.get('content', '')
@@ -1841,71 +1908,33 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
     try:
         for iteration in range(1, max_iter + 1):
             console._round = iteration
-            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "implementer", "phase": "plan"})
-            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "implementer", "phase": "develop"})
-            agent_loop(implementer_ctx, implementer_ctx_file,  # Implementer: 设计与写代码(不自己 verify)
-                       f"[Loop iter {iteration}/{max_iter}]\n"
-                       f"GOAL: {goal}\n\n"
-                       f"You are the IMPLEMENTER. Design + write code.\n"
-                       f"1. Read relevant code (read/grep).\n"
-                       f"2. Plan your design.\n"
-                       f"3. Implement progressively: smallest working change first.\n"
-                       f"4. Self-review: read back your changes, verify no logic errors.\n"
-                       f"5. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
-                       f"6. When calling edit/write, briefly explain WHY in your thinking.\n"
-                       f"7. Call `attempt_completion` tool when done.\n\n"
-                       f"DO NOT run tests or verify your own code. That's the Verifier's job.")
+
+            _emit_iter(iteration, max_iter, "implementer", "plan")
+            _emit_iter(iteration, max_iter, "implementer", "develop")
+            agent_loop(implementer_ctx, implementer_ctx_file, _implementer_prompt(iteration, max_iter, goal))
             impl_files = _extract_changed_files(implementer_ctx)
 
-            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "verifier", "phase": "review"})
-            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "verifier", "phase": "test"})
+            _emit_iter(iteration, max_iter, "verifier", "review")
+            _emit_iter(iteration, max_iter, "verifier", "test")
             verifier_ctx, verifier_ctx_file = _get_loop_ctx("verifier")
             verifier_ctx.append_system(loop_prompt_runtime.assemble())
-            agent_loop(verifier_ctx, verifier_ctx_file,  # Verifier: 跑 verify_cmd,判断 pass/fail
-                       f"[Verify iter {iteration}]\n"
-                       f"GOAL: {goal}\n"
-                       f"Files changed by implementer: \n"
-                       f"{impl_files}\n\n"
-                       f"You are an OBJECTIVE Verifier. Independent judgment required.\n"
-                       f"1. Inspect changed files — use `git diff` first, then `read` individual files as needed.\n"
-                       f"2. Determine the right test command(inspect project:package.json/pyproject.toml/go.mod).\n"
-                       f"3. Run tests with bash tool.\n"
-                       f"4. Judge PASS/FAIL based on exit code AND tests actually verify the goal.\n"
-                       f"5. If FAIL: explain which test, why, and suggested fix.\n"
-                       f"6. Call `attempt_completion` tool with one line:\n"
-                       f"   - 'VERIFY: PASS'\n"
-                       f"   - 'VERIFY: FAIL: <reason>'\n"
-                       f"   - 'VERIFY: PASS, NO_ISSUES' (success + no remaining concerns)\n"
-                       f"   - 'VERIFY: PASS, ISSUES: <list>' (success but with concerns)\n\n"
-                       f"Explain at architecture-level (module/flow), not function-level.")
+            agent_loop(verifier_ctx, verifier_ctx_file, _verifier_prompt(iteration, goal, impl_files))
             verify_result = _get_completion_result(verifier_ctx)
             _output_event({"type": "verdict", "verdict": verify_result or "FAIL: no result",
                            "reason": "", "round": iteration})
-            if verify_result and "VERIFY: PASS" in verify_result:
-                _output_event(
-                    {"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "implementer", "phase": "push"})
-                # todo: begin push code ...
 
+            if verify_result and "VERIFY: PASS" in verify_result:
+                _emit_iter(iteration, max_iter, "implementer", "push")
+                agent_loop(implementer_ctx, implementer_ctx_file, _push_prompt(iteration, goal))
                 _output_event({"type": "complete", "result": f"All rounds completed: {goal}", "iters": iteration})
-                console.success(f"Loop succeeded at iter {iteration}")
                 return True
 
-            _output_event({"type": "iter", "n": iteration, "max_iter": max_iter, "agent": "updater", "phase": "push"})
+            _emit_iter(iteration, max_iter, "updater", "push")
             updater_ctx, updater_ctx_file = _get_loop_ctx("updater")
             updater_ctx.append_system(loop_prompt_runtime.assemble())
-            agent_loop(updater_ctx, updater_ctx_file,  # Updater(失败兜底,refine user prompt,只输出字符串)
-                       f"[Updater iter {iteration}]\n"
-                       f"GOAL: {goal}\n"
-                       f"Verifier FAILED: {verify_result}\n\n"
-                       f"You are an UPDATER.\n"
-                       f"Refine the user's prompt for the next implementer iteration.\n"
-                       f"You MUST NOT write code or call write/edit/bash. Only read/grep for context.\n\n"
-                       f"Read the verifier's failure analysis above.\n"
-                       f"Identify what's missing or unclear in the original goal.\n\n"
-                       f"Output: a single prompt, 50-200 words, specific constraints.\n"
-                       f"Call `attempt_completion` tool to return the refined prompt.")
+            agent_loop(updater_ctx, updater_ctx_file, _updater_prompt(iteration, goal, verify_result))
             refined = _get_completion_result(updater_ctx)
-            if refined:  # 把 refined prompt 注入 implementer 下一轮 ctx
+            if refined:
                 implementer_ctx.append_user(f"[Refined prompt from updater iter {iteration}]\n{refined}")
 
         console.error(f"Loop failed after {max_iter} iterations")
@@ -2107,6 +2136,7 @@ def _parse_args(args=None):
     parser = argparse.ArgumentParser(prog="mangopi-cli", description="Mangopi CLI — single-file AI coding agent")
     parser.add_argument("--version", action="version", version=f"mangopi-cli v{__version__}")
     parser.add_argument("--doctor", action="store_true", help="Run environment diagnostics and exit")
+    parser.add_argument("--yolo", action="store_true", help="Skip edit/bash confirmations (overrides MANGO_YOLO)")
     sub = parser.add_subparsers(dest="command")
     flash = sub.add_parser("flash-ext", help="Run as OpenAI-compatible proxy server")
     flash.add_argument("--host", default="127.0.0.1", help="Server bind host (default: 127.0.0.1)")
@@ -2127,6 +2157,8 @@ def _parse_args(args=None):
 def main():
     initialize_system()
     args = _parse_args()
+    global MANGO_YOLO
+    MANGO_YOLO = args.yolo or MANGO_YOLO
     if args.doctor:
         sys.exit(doctor())
     if args.command == "flash-ext":
@@ -2157,7 +2189,8 @@ def main():
                                "tier": "high", "api_key": MANGO_KEY or ""}]})
 
     mode = f"smart-routing[{provider.total_providers}]" if MANGO_ROUTING == "on" else provider.model
-    print(f"{BOLD}Mango Cli v{__version__}{RESET} | {DIM}{mode} | {project_root}{RESET}\n")
+    yolo_tag = f" | {BOLD}YOLO{RESET}{DIM}" if MANGO_YOLO else ""
+    print(f"{BOLD}Mango Cli v{__version__}{RESET} | {DIM}{mode}{yolo_tag} | {project_root}{RESET}\n")
 
     ctx_file_path = os.path.join(session_dir, "session.json")
     ctx = ContextManager()
@@ -2204,6 +2237,7 @@ def main():
                     continue
                 console.success(f"🎯 Loop: {goal_text}")
                 loop_engine(goal_text)
+                console.success(f"Loop succeeded")
                 continue
             normal_message = f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             if MANGO_ROUTING == "on":

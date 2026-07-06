@@ -13,6 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.1.33] - 2026-07-06
+
+### Added
+- **YOLO mode** — `MANGO_YOLO` env var / `--yolo` flag to skip edit/bash confirmations. Tagged in startup banner.
+- **Push phase** — `loop_engine` now commits verified changes via conventional commit messages.
+
+### Changed
+- **loop_engine refactor** — agent prompts extracted to module-level functions; loop body reduced from ~80 to ~25 lines.
+
+---
+
+## [0.1.32] - 2026-07-03
+
 ### Added
 - **`loop` subcommand** — new CLI entry `mangopi-cli loop <goal> [--task-id] [--max-iter] [--output]`.
 - **`--task-id`** — persistent task directory under `.mangocli/loops/<task_id>/`, enabling future resume.
