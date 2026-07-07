@@ -535,49 +535,14 @@ class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 
 
     def __init__(self):
         self.frameworks = {
-            "debug": [
-                "Reproduce the issue and confirm trigger conditions",
-                "List all possible causes, ordered by likelihood",
-                "Design verification method for each cause",
-                "Eliminate causes one by one to find root cause",
-                "Propose fix and verification steps"],
-            "design": [
-                "Clarify requirements and constraints",
-                "Propose 2-3 viable approaches",
-                "Compare pros and cons of each approach",
-                "Choose one approach and justify the choice",
-                "Outline key implementation steps"],
-            "explain": [
-                "Give a one-sentence summary first",
-                "Expand on key details",
-                "Provide a concrete example"],
-            "optimize": [
-                "Measure current performance baseline",
-                "Locate bottleneck with data, not guesses",
-                "Propose optimization for the bottleneck",
-                "Estimate expected improvement",
-                "Define verification method"],
-            "implement": [
-                "Understand requirements: confirm inputs and outputs",
-                "Design data structures and core logic",
-                "Write main logic first, then handle edge cases",
-                "Verify: manually trace the happy path",
-                "List possible failure scenarios"],
-            "investigate": [
-                "Summarize what is already known",
-                "Identify missing critical information",
-                "Plan information-gathering order",
-                "Gather first, decide later — don't rush into action"],
-            "verify": [
-                "Check each expected result one by one",
-                "For each: pass = record, fail = fix",
-                "List all remaining issues",
-                "Confirm no new problems introduced"],
-            "reevaluate": [
-                "Stop and re-examine current assumptions",
-                "Could previous conclusions be wrong?",
-                "Are there completely different approaches?",
-                "List alternatives and evaluate feasibility one by one"]}
+            "debug": [],
+            "design": [],
+            "explain": [],
+            "optimize": [],
+            "implement": [],
+            "investigate": [],
+            "verify": [],
+            "reevaluate": []}
 
     def match(self, query, tool_pattern=None):  # 匹配思考框架：query 关键词 + tool pattern 阶段感知
         q = query.lower()
@@ -589,12 +554,6 @@ class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 
             if any(kw in q for kw in keywords):
                 return fw
         return None
-
-    def format_framework(self, framework_name):  # 返回思考框架纯文本（用于注入到 user content）
-        steps_list = self.frameworks.get(framework_name)
-        if not steps_list:
-            return ""
-        return "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps_list))
 
 
 flash_thinking = FlashThinking()
@@ -990,20 +949,6 @@ class ContextManager:
 
     def clear(self): self.messages = []
 
-    @staticmethod
-    def backfill_tool_names(messages):  # 为 OpenAI 标准格式的 tool message 补上 tool_name 字段
-        idx = {}
-        for m in messages:
-            if m.get("role") == "assistant":
-                for tc in m.get("tool_calls") or []:
-                    fn = tc.get("function", {})
-                    if tc.get("id") and fn.get("name"):
-                        idx[tc["id"]] = fn["name"]
-            elif m.get("role") == "tool" and not m.get("tool_name"):
-                tcid = m.get("tool_call_id", "")
-                if tcid and tcid in idx:
-                    m["tool_name"] = idx[tcid]
-
     def append_system(self, content: str): self.messages.append({"role": "system", "content": content})
 
     def append_user(self, content: str):
@@ -1090,94 +1035,6 @@ class ContextManager:
         fp = [[self._last_user_content(t), self._tool_names(t)] for t in self.split_turns()[-n_turns:]]
         fp = [f for f in fp if f[1]]  # 只保留有 tool 调用的 turn
         return str(fp) if fp else "[]"
-
-    def tool_pattern(self, n=10) -> Optional[List[str]]:  # 提取最近 n 条消息的 tool call 模式
-        tools = self._tool_names(self.messages[-n:])
-        return tools if tools else None
-
-    def tool_context(self, n=10, cap=800) -> str:  # 提取最近 tool results 的关键内容，注入为上下文
-        tc = []
-        for m in self._role_msgs("tool", n):
-            content = str(m.get("content", ""))
-            tc.append(f"[{m['tool_name']} tool] {self.compact_text(content, 200, 200) if len(content) > cap else content}")
-        return "\n\n".join(tc) if tc else ""
-
-    def detect_loop(self, threshold=3) -> tuple:  # 检测是否陷入迭代死循环，返回 (is_looping, tool_name)
-        recent = self._role_msgs("tool", 20)
-        if len(recent) < 10:
-            return False, None
-        # 1. 同工具连续失败
-        last_tool, fail_streak = None, 0
-        for m in recent:
-            tool, content = m.get("tool_name", ""), str(m.get("content", "")).lower()
-            if tool == last_tool and ("fail" in content or "error" in content):
-                fail_streak += 1
-            else:
-                fail_streak = 0 if tool != last_tool else fail_streak
-            last_tool = tool
-            if fail_streak >= threshold:
-                return True, tool
-        # 2. 交替循环：近 12 条 tool 中 ≥2 个不同工具在密集失败
-        fail_set, fail_count = set(), 0
-        for m in recent[-12:]:
-            content = str(m.get("content", "")).lower()
-            if "fail" in content or "error" in content:
-                fail_set.add(m.get("tool_name", ""))
-                fail_count += 1
-        if len(fail_set) >= 2 and fail_count >= threshold * 2:
-            return True, ",".join(sorted(fail_set))
-        return False, None
-
-    def detect_phase(self) -> str:  # 推断当前对话阶段（start/exploring/executing/verifying/stuck）
-        is_looping, _ = self.detect_loop()
-        if is_looping:
-            return "stuck"
-        all_tools = self._tool_names()
-        if not all_tools:
-            return "start"
-        recent = all_tools[-5:]
-        if any(t in ("edit", "write") for t in recent):
-            return "executing"
-        if all(t in ("read", "grep", "search") for t in recent):
-            return "exploring"
-        if recent.count("bash") >= 2:
-            return "verifying"
-        return "executing"
-
-    def assess_complexity(self) -> str:  # 判断是否需要深思路径（Flash-ext 自己的 LLM 分析）
-        tool_pattern, tool_ctx = self.tool_pattern(), self.tool_context()
-        if len(tool_ctx) > 2000:
-            return "deep"
-        if tool_pattern:
-            if len(set([t for t in tool_pattern if t != "read"])) >= 4:  # 至少 4 种非 read 工具才走 deep
-                return "deep"
-            if len(tool_pattern) >= 5 and len(set(tool_pattern)) == 1:  # 同工具 5 次认死循环(read 死循环也算)
-                return "deep"
-        fw = flash_thinking.match(self._last_user_content())
-        if fw in ("design", "optimize", "reevaluate"):
-            return "deep"
-        return "fast"
-
-    def summarize_recent_turns(self, n_turns=3) -> str:  # 压缩最近 n 轮对话为轻量上下文文本，用于 Flash-ext LLM 调用
-        lines = []
-        turn_count = 0
-        for m in self.messages[-50:]:
-            role = m.get("role")
-            if role == "user" and turn_count >= n_turns:
-                break
-            if role == "user":
-                turn_count += 1
-                lines.append(f"[USER] {str(m.get('content', ''))[:300]}")
-            elif role == "tool":
-                lines.append(f"[{m.get('tool_name', '?')}] {str(m.get('content', ''))[:300]}")
-            elif role == "assistant":
-                tc = m.get("tool_calls", [])
-                if tc:
-                    names = ",".join(t.get("name", "?") for t in tc)
-                    lines.append(f"[ASSISTANT → tool_calls: {names}]")
-                else:
-                    lines.append(f"[ASSISTANT] {str(m.get('content', ''))[:300]}")
-        return "\n".join(lines)
 
     @staticmethod
     def estimated_tokens(msg: Dict[str, Any]) -> int: return len(json.dumps(msg, ensure_ascii=False)) // 4 + 4
