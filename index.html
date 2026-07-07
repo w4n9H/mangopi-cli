@@ -749,7 +749,6 @@
         <nav>
             <a href="#loop"><span class="lang-en">loop</span><span class="lang-zh">循环工程</span></a>
             <a href="#routing"><span class="lang-en">routing</span><span class="lang-zh">路由</span></a>
-            <a href="#flash"><span class="lang-en">flash-ext</span><span class="lang-zh">flash-ext</span></a>
             <a href="#features"><span class="lang-en">features</span><span class="lang-zh">特性</span></a>
             <a href="#install"><span class="lang-en">install</span><span class="lang-zh">安装</span></a>
             <a href="#config"><span class="lang-en">config</span><span class="lang-zh">配置</span></a>
@@ -955,69 +954,12 @@
     </div>
 </section>
 
-<!-- ═══════════════════════ FLASH-EXT ═══════════════════════ -->
-<section id="flash">
-    <div class="wrap">
-        <div class="sec-head">
-            <div class="sec-num">— 04</div>
-            <h2 class="sec-title"><span class="lang-en">Flash-ext <em>Proxy.</em></span><span class="lang-zh">Flash-ext <em>代理</em></span></h2>
-        </div>
-        <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
-            <span class="lang-en">An <em>intelligent model enhancement layer</em> — wraps itself as an OpenAI-compatible API exposing a "model endpoint," then enhances the upstream model through <em>thinking guidance + information augmentation.</em></span>
-            <span class="lang-zh"><em>智能模型增强层</em>——将自己包装成 OpenAI 兼容的 API 服务，对外暴露"模型接口"，再通过<em>思考引导 + 信息辅助</em>增强底层模型。</span>
-        </p>
-
-        <div class="feat-list" style="margin-top: 48px;">
-            <div class="feat">
-                <div class="feat-tag">— 01</div>
-                <div>
-                    <h3><span class="lang-en">Two-path routing</span><span class="lang-zh">双路径路由</span></h3>
-                    <p><span class="lang-en">Fast path (0ms, keyword match) or deep path (~300ms, Flash-ext's own LLM analyzes session state).</span><span class="lang-zh">快速路径（0ms，关键词匹配）或深思路径（~300ms，Flash-ext 自己的 LLM 分析会话状态）。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 02</div>
-                <div>
-                    <h3><span class="lang-en">Eight frameworks</span><span class="lang-zh">八个框架</span></h3>
-                    <p><span class="lang-en">debug / design / explain / optimize / implement / investigate / verify / reevaluate. Auto-selected by phase + tool pattern.</span><span class="lang-zh">debug / design / explain / optimize / implement / investigate / verify / reevaluate。由阶段和工具模式自动选择。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 03</div>
-                <div>
-                    <h3><span class="lang-en">Loop detection</span><span class="lang-zh">循环检测</span></h3>
-                    <p><span class="lang-en">Catches same-tool and alternating failure loops. Triggers the reevaluate framework before the agent burns through context.</span><span class="lang-zh">检测同工具连续失败与交替失败模式。在 agent 烧光上下文前触发 reevaluate 框架。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 04</div>
-                <div>
-                    <h3><span class="lang-en">Cognitive only</span><span class="lang-zh">仅增强认知</span></h3>
-                    <p><span class="lang-en">Never touches file I/O or bash. Only enhances the model's reasoning before the request reaches upstream.</span><span class="lang-zh">不触碰文件 I/O 或 shell。仅在请求到达上游前增强模型推理。</span></p>
-                </div>
-            </div>
-        </div>
-
-        <div class="callout">
-            <div class="callout-text">
-                <h3><span class="lang-en">Run the server</span><span class="lang-zh">启动服务</span></h3>
-                <p>
-                    <span class="lang-en">Point any OpenAI-compatible client at <code>http://127.0.0.1:8080/v1/chat/completions</code>. Optionally enable web search.</span>
-                    <span class="lang-zh">将任意 OpenAI 兼容客户端指向 <code>http://127.0.0.1:8080/v1/chat/completions</code>。可选择性启用搜索。</span>
-                </p>
-            </div>
-            <pre class="callout-code"><span class="cmd-c">$</span> python mangopi_cli.py <span class="key">--flash-ext</span> <span class="key">--debug</span>
-<span class="muted"># Optional</span>
-<span class="cmd-c">$</span> python mangopi_cli.py <span class="key">--flash-ext</span> <span class="key">--web-search</span></pre>
-        </div>
-    </div>
-</section>
 
 <!-- ═══════════════════════ FEATURES ═══════════════════════ -->
 <section id="features">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 05</div>
+            <div class="sec-num">— 04</div>
             <h2 class="sec-title"><span class="lang-en">All <em>features.</em></span><span class="lang-zh">全部<em>特性</em></span></h2>
         </div>
         <div class="feat-list">
@@ -1085,7 +1027,7 @@
 <section id="ideal">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 06</div>
+            <div class="sec-num">— 05</div>
             <h2 class="sec-title"><span class="lang-en">Ideal <em>for.</em></span><span class="lang-zh">适用<em>人群</em></span></h2>
         </div>
         <div class="ideal-grid">
@@ -1127,7 +1069,7 @@
 <section id="philosophy">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 07</div>
+            <div class="sec-num">— 06</div>
             <h2 class="sec-title"><span class="lang-en">Design <em>philosophy.</em></span><span class="lang-zh">设计<em>哲学</em></span></h2>
         </div>
         <div class="philo-hero">
@@ -1150,7 +1092,7 @@
 <section id="providers">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 08</div>
+            <div class="sec-num">— 07</div>
             <h2 class="sec-title"><span class="lang-en"><em>Any</em> provider.</span><span class="lang-zh">任意<em>模型</em>接入</span></h2>
         </div>
         <div class="providers">
@@ -1179,7 +1121,7 @@
 <section id="tools">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 09</div>
+            <div class="sec-num">— 08</div>
             <h2 class="sec-title"><span class="lang-en"><em>10</em> tools.</span><span class="lang-zh"><em>10</em> 个工具</span></h2>
         </div>
         <div class="tools">
@@ -1209,7 +1151,7 @@
 <section id="install">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 10</div>
+            <div class="sec-num">— 09</div>
             <h2 class="sec-title"><span class="lang-en"><em>Install.</em></span><span class="lang-zh"><em>安装</em></span></h2>
         </div>
         <div class="install-row">
@@ -1233,7 +1175,7 @@
 <section id="config">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 11</div>
+            <div class="sec-num">— 10</div>
             <h2 class="sec-title"><span class="lang-en"><em>Config.</em></span><span class="lang-zh"><em>配置</em></span></h2>
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px;">

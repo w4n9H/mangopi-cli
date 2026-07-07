@@ -149,6 +149,8 @@ class Printer:
         suffix = _i18n("tool.result.ok") if ok else _i18n("tool.result.fail")
         self._write_line(f"  {_c(icon, color)}{_c(suffix, GREY)}")
 
+    def tool_display(self, text: str): self._write_line(text)
+
     def success(self, msg: str): self._write_line(f"{_c('✓ ', GREEN)}{_c(msg, GREY)}")
 
     def error(self, msg: str): self._write_line(f"{_c('✗ ', RED)}{_c(msg, GREY)}")
@@ -1661,7 +1663,7 @@ def run_tool(tool_name, tool_args):
             display_str = str(tool_content)
 
         if not display_str:
-            print(f"  {DIM}⎿  (no output){RESET}")
+            console.tool_display(f"  {DIM}⎿  (no output){RESET}")
         else:
             result_lines = display_str.split("\n")
             lines_to_show = result_lines[:tool.preview_lines]
@@ -1674,9 +1676,9 @@ def run_tool(tool_name, tool_args):
             prefix = f"  {DIM}⎿  "
             for i, line in enumerate(preview_lines):
                 if i == 0:
-                    print(f"{prefix}{line}{RESET}")
+                    console.tool_display(f"{prefix}{line}{RESET}")
                 else:
-                    print(f"     {DIM}{line}{RESET}")
+                    console.tool_display(f"     {DIM}{line}{RESET}")
 
         console.tool_result(tool.name, ok=tool_status, snippet=display_str[:200])
         return tool_content
@@ -1946,191 +1948,6 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
         return False
 
 
-class FlashExtServer:
-    def __init__(self, host="0.0.0.0", port=8080, token=None, provider_obj=None, enable_search=False):
-        self.host = host
-        self.port = port
-        self.token = token
-        self.provider: BaseProvider = provider_obj or provider
-        self.enable_search = enable_search and bool(os.environ.get("MANGO_SEARCH_API_KEY"))
-        self.thinker: FlashThinking = flash_thinking
-        self.logger = logging.getLogger("flash-ext")
-        self._key = None
-        self._server = None
-        self._last_deep_ts = 0.0  # deep 冷却: 避免短时间连续 deep 额外 LLM 调用
-
-    def _augment(self, messages):
-        flash_ext_ctx = ContextManager()
-        flash_ext_ctx.messages = list(messages)
-        ContextManager.backfill_tool_names(flash_ext_ctx.messages)  # 兼容 OpenAI 标准 client(无 tool_name)
-        query = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
-        tool_pattern, tool_ctx = flash_ext_ctx.tool_pattern(), flash_ext_ctx.tool_context()
-        elems = []   # 收集增强内容为 XML 元素
-        complexity = flash_ext_ctx.assess_complexity()  # 1. 决策路径
-        if complexity == "deep" and time.time() - self._last_deep_ts < 60:  # deep cooldown: 60s
-            self.logger.debug("deep cooldown active, fallback to fast")
-            complexity = "fast"
-        elif complexity == "deep":
-            self._last_deep_ts = time.time()
-        self.logger.debug(f"complexity={complexity}, query={query[:10]}")
-        if complexity == "deep":
-            try:
-                analysis = self._analyze_deep(flash_ext_ctx, query, tool_pattern)
-                if analysis:
-                    fw = analysis.get("framework")
-                    self.logger.debug(f"deep framework={fw}")
-                    if fw and fw in self.thinker.frameworks:
-                        elems.append(f"<framework name=\"{fw}\">\n{self.thinker.format_framework(fw)}\n</framework>")
-                    ins = analysis.get("insight")
-                    if ins:
-                        elems.append(f"<insight>{ins}</insight>")
-                    al = analysis.get("anti_loop")
-                    if al:
-                        elems.append(f"<anti_loop>{al}</anti_loop>")
-                    ts = analysis.get("tool_summary")
-                    if ts and len(tool_ctx) > 2000:
-                        self.logger.debug(f"deep tool_context via LLM summary")
-                        elems.append(f"<tool_context>{ts}</tool_context>")
-                    elif tool_ctx:
-                        self.logger.debug(f"deep tool_context raw ({len(tool_ctx)} chars)")
-                        elems.append(f"<tool_context>{tool_ctx}</tool_context>")
-            except Exception as e:
-                self.logger.error(f"_augment deep analysis failed: {e}")
-        if complexity != "deep":  # 2. 快速路径 fallback（deep 成功时跳过）
-            fw = self.thinker.match(query, tool_pattern)
-            self.logger.debug(f"fast framework={fw}")
-            if fw and fw in self.thinker.frameworks:
-                elems.append(f"<framework name=\"{fw}\">\n{self.thinker.format_framework(fw)}\n</framework>")
-            if tool_ctx and len(tool_ctx) < 2000:
-                self.logger.debug(f"tool_context injected ({len(tool_ctx)} chars)")
-                elems.append(f"<tool_context>{tool_ctx}</tool_context>")
-            elif tool_ctx:
-                self.logger.debug(f"tool_context truncated ({len(tool_ctx)} -> 2000 chars)")
-                elems.append(f"<tool_context>{tool_ctx[:2000]}...(truncated)</tool_context>")
-        if self.enable_search:
-            try:
-                sr = _bocha_search_api(query=query, count=3, bocha_key=os.environ["MANGO_SEARCH_API_KEY"])
-                if sr:
-                    self.logger.debug(f"web search hit: {len(sr)} results")
-                    sc = "\n".join(f"- {r['title']}: {r['summary']}" for r in sr[:3])
-                    elems.append(f"<web_search>{sc}</web_search>")
-            except Exception as e:
-                self.logger.error(f"web search failed: {e}")
-        if elems:  # 注入到最后一个 user message（XML 块与用户提问明确分隔）
-            self.logger.debug(f"augmented with {len(elems)} elements: {[e.split()[0].strip('<>') for e in elems]}")
-            prefix = "<flash_ext>\n" + "\n".join(elems) + "\n</flash_ext>"
-            for i in range(len(messages) - 1, -1, -1):
-                if messages[i].get("role") == "user":
-                    # 剥掉上次的注入(避免 client 多轮发回时累计)
-                    clean = re.sub(r'\n*<flash_ext>.*?</flash_ext>\n*', '',
-                                   messages[i].get("content", ""), flags=re.DOTALL).strip()
-                    messages[i] = dict(messages[i], content=f"{prefix}\n\n{clean}")
-                    break
-        return messages
-
-    def _analyze_deep(self, ctx, query, tool_pattern):  # 深思路径：用 Flash-ext 自己的 LLM 分析对话状态
-        is_looping, loop_tool = ctx.detect_loop()
-        phase = ctx.detect_phase()
-        recent = ctx.summarize_recent_turns(n_turns=3)
-
-        prompt = ("Analyze this coding session and respond ONLY as JSON.\n\n"
-                  f"## User question (the goal agent is working toward)\n"
-                  f"{query or '(none)'}\n\n"
-                  f"## Session state\n"
-                  f"Tool pattern: {tool_pattern or 'none'}\nPhase: {phase}\n"
-                  f"Looping: {'yes (' + loop_tool + ')' if is_looping else 'no'}\n\n"
-                  f"{recent}\n\n"
-                  f'{{"framework": "<one of: debug/design/explain/optimize/implement/investigate/verify/reevaluate>", '
-                  f'"insight": "<optional key insight agent is missing>", '
-                  f'"anti_loop": "<optional>", '
-                  f'"tool_summary": "<optional>"}}')
-        body = self.provider.build_body([{"role": "user", "content": prompt}])
-        raw = _request(self.provider.api_url, body, headers=self.provider.headers(), timeout=15)
-        parsed = self.provider.parse_response(raw)
-        try:
-            return json.loads(parsed.get("content", "{}"))
-        except (json.JSONDecodeError, ValueError):
-            return None
-
-    def _handle(self, body):
-        body["messages"] = self._augment(body.get("messages", []))
-        body["stream"] = False  # FlashExtServer 不支持流式
-        try:
-            raw = _request(self.provider.api_url, body, headers=self.provider.headers())
-        except Exception as e:
-            self.logger.warning(f"upstream error: {e}")
-            return {"error": {"message": f"Upstream model error: {e}", "type": "flash_ext_error", "code": 502}}
-        return raw  # 透传原始响应
-
-    def _models(self): return {"object": "list", "data": [{"id": f"{self.provider.model}", "object": "model"}]}
-
-    def _make_handler(self):
-        from http.server import BaseHTTPRequestHandler
-        s = self
-
-        class _H(BaseHTTPRequestHandler):
-            def _ok(self, data):
-                b = json.dumps(data, ensure_ascii=False).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b)
-
-            def _err(self, code, msg): self._ok({"error": {"message": msg, "type": "flash_ext_error", "code": code}})
-
-            def _auth(self):
-                if s.token:
-                    auth = self.headers.get("Authorization", "")
-                    if auth != f"Bearer {s.token}":
-                        self.send_response(401)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"error": {"message": "Invalid token", "code": 401}}).encode())
-                        return False
-                return True
-
-            def do_POST(self):
-                if not self._auth():
-                    return
-                if self.path == "/v1/chat/completions":
-                    t0 = time.time()
-                    try:
-                        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                        self._ok(s._handle(body))
-                        s.logger.info(f"POST {self.path} 200 {(time.time() - t0) * 1000}ms")
-                    except json.JSONDecodeError:
-                        self._err(400, "Invalid JSON")
-                        s.logger.warning(f"POST {self.path} 400 invalid json")
-                    except Exception as e:
-                        self._err(500, str(e))
-                        s.logger.error(f"POST {self.path} 500 {e}")
-                else:
-                    self._err(404, "Not found")
-
-            def do_GET(self):
-                if self.path in ("/v1/models", "/health"):
-                    self._ok(s._models() if self.path == "/v1/models" else {"status": "ok"})
-                else:
-                    self._err(404, "Not found")
-
-            def log_message(self, fmt, *args): pass  # suppress http.server default
-
-        return _H
-
-    def start(self, debug=False):
-        level = logging.DEBUG if debug else logging.INFO
-        logging.basicConfig(format="%(asctime)s [%(name)s] %(levelname)s %(message)s", level=level)
-        from http.server import ThreadingHTTPServer
-        self._server = ThreadingHTTPServer((self.host, self.port), self._make_handler())
-        self.logger.info("serving on %s:%s (frameworks=%d search=%s auth=%s)",
-                         self.host, self.port, len(self.thinker.frameworks),
-                         self.enable_search, bool(self.token))
-        try:
-            self._server.serve_forever()
-        except KeyboardInterrupt:
-            print("\nShutting down...")
-            self._server.shutdown()
-
 
 def _parse_args(args=None):
     parser = argparse.ArgumentParser(prog="mangopi-cli", description="Mangopi CLI — single-file AI coding agent")
@@ -2138,12 +1955,6 @@ def _parse_args(args=None):
     parser.add_argument("--doctor", action="store_true", help="Run environment diagnostics and exit")
     parser.add_argument("--yolo", action="store_true", help="Skip edit/bash confirmations (overrides MANGO_YOLO)")
     sub = parser.add_subparsers(dest="command")
-    flash = sub.add_parser("flash-ext", help="Run as OpenAI-compatible proxy server")
-    flash.add_argument("--host", default="127.0.0.1", help="Server bind host (default: 127.0.0.1)")
-    flash.add_argument("--port", type=int, default=8080, help="Server port (default: 8080)")
-    flash.add_argument("--token", default=None, help="Bearer token for client auth")
-    flash.add_argument("--web-search", action="store_true", help="Enable web search augmentation (default: off)")
-    flash.add_argument("--debug", action="store_true", help="Enable DEBUG-level logging")
     loop = sub.add_parser("loop", help="Run Loop Engineering (3-agent pipeline) with a goal query and exit")
     loop.add_argument("query", nargs="+", help="Goal for loop iteration")
     loop.add_argument("--max-iter", type=int, default=5, help="Max iterations (default: 5)")
@@ -2161,15 +1972,6 @@ def main():
     MANGO_YOLO = args.yolo or MANGO_YOLO
     if args.doctor:
         sys.exit(doctor())
-    if args.command == "flash-ext":
-        if not MANGO_KEY:
-            console.error("MANGO_KEY env var is required for Flash-ext mode")
-            sys.exit(1)
-        server = FlashExtServer(
-            host=args.host, port=args.port, token=args.token, provider_obj=create_provider(),
-            enable_search=args.web_search)
-        server.start(debug=args.debug)
-        return
     if args.command == "loop":
         if not MANGO_KEY:
             console.error("MANGO_KEY env var is required for loop mode")

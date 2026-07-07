@@ -244,25 +244,7 @@ Example:
 
 The agent implements, a dedicated Verifier runs the actual tests, and if anything fails, the Updater refines the prompt for the next attempt — all autonomously.
 
-# Flash-ext Server
 
-Flash-ext is a standalone OpenAI-compatible HTTP proxy that injects phase-aware structured thinking frameworks before each model call. Designed for IDEs and clients that cannot run the full Mangopi agent loop.
-
-Start the server:
-
-```bash
-python mangopi_cli.py --flash-ext --debug
-# Optional flags: --web-search --port 8080 --token my-token
-```
-
-Flash-ext:
-- Matches keywords + tool-call patterns to select thinking frameworks (debug/design/explain/optimize/implement/investigate/verify/reevaluate).
-- On complex tasks, calls its own LLM to analyze session state and provide tailored guidance.
-- Injects all context into the user message via XML tags — zero new system messages.
-- Supports optional web search augmentation.
-- Is **cognitive-only**: never touches file I/O or bash; only enhances reasoning before the request reaches upstream.
-
----
 
 # Built-in Tools
 

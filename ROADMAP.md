@@ -233,42 +233,7 @@ Every new feature follows these rules, in order of priority:
 - ❌ Local search index / RAG over the user's own documents (different project)
 - ❌ Crawling / spidering (search APIs already do the indexing)
 
----
 
-### 5. Flash-ext Thinking Framework Server
-
-**Status:** 🟢 Done (Experimental Feature)
-
-> Provides an OpenAI-compatible HTTP proxy that injects phase-aware structured thinking frameworks before each model call. Designed for IDEs that cannot run the full Mangopi agent loop — the proxy silently augments API requests with debugging/design/optimization checklists, loop detection, and tool-call context.
->
-> **Core insight:** memory and web-search let the model "know more"; thinking frameworks let the model "think better." Inspired by the Fable 5 revelation that a medium model + agent shell outperforms a strong model running bare, Flash-ext applies the same principle transparently: it wraps any OpenAI-compatible model API with cognitive enhancement without ever touching file I/O or execution tools.
-
-**Problem:** The agent often gets stuck in loops, loses context across turns, or fails to apply structured thinking frameworks when debugging/designing complex tasks. A server-side augmentation layer can inject phase-aware thinking guidance before each model call.
-
-**Approach:**
-
-- **`FlashThinking`** — keyword + tool-pattern-driven framework selector (debug/design/explain/optimize/implement/investigate/verify/reevaluate) with English checklist steps per framework. All keyword matching centralized here; `RoutedProvider._keyword_score` and `ContextManager.assess_complexity` derive their decisions from it.
-- **`FlashExtServer`** — OpenAI-compatible HTTP proxy (`--flash-ext --debug`) that wraps a backend model API, injects structured `<flash_ext>` XML context into the last user message before forwarding.
-- **Two-path routing:**
-  - **Fast path** (0ms): keyword + tool-pattern match → inject framework + tool context.
-  - **Deep path** (~300ms): Flash-ext calls its own LLM to analyze session state (loop detection, phase inference, framework recommendation), then injects tailored guidance. Triggered by large tool contexts, diverse tool patterns, or design/optimize keywords.
-- **`ContextManager` enhancements** — `tool_pattern()`, `tool_context()`, `detect_loop()` (same-tool + alternating), `detect_phase()`, `assess_complexity()`, `summarize_recent_turns()`.
-- **Cognitive-only, no execution** — Flash-ext never touches file I/O or bash; it only enhances reasoning before the request reaches upstream.
-- Optional memory and web search, disabled by default (`--memory`, `--web-search`).
-- Zero new system messages — all context injected into the last user message's content via XML tags.
-
-**Why it fits the philosophy:** Pure stdlib (`http.server`, `json`, `logging`). Single-file addition. Adds ~340 LOC.
-
-**Acceptance criteria:**
-
-- [x] `FlashThinking.match()` returns correct framework for keywords
-- [x] `FlashExtServer._augment()` injects XML context into user content
-- [x] `ContextManager.detect_loop()` catches same-tool + alternating loops
-- [x] `ContextManager.assess_complexity()` routes deep vs fast correctly
-- [x] 38 unit tests covering all modules (`test/test_flash_ext.py`)
-- [ ] Live server integration tests pass
-
----
 
 ### 6. Loop Engineering (3-Agent Pipeline)
 
