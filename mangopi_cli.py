@@ -289,20 +289,7 @@ def doctor():
         results.append((False, "session directory not found"))
     else:
         files = [f for f in os.listdir(session_dir) if f.endswith(".json") and not f.endswith(".backup")]
-        results.append((True, f"session: {len(files)} file(s)"))
-        for name in files:
-            try:
-                with open(os.path.join(session_dir, name), "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not isinstance(data, list):
-                    results.append((False, f"  {name}: invalid schema (expected list)"))
-                    continue
-                bad = [i for i, m in enumerate(data) if not isinstance(m, dict) or "role" not in m]
-                results.append((not bad,
-                                f"  {name}: {len(bad)} malformed at idx {bad[:5]}" if bad
-                                else f"  {name}: {len(data)} message(s), valid"))
-            except (json.JSONDecodeError, OSError) as e:
-                results.append((False, f"  {name}: corrupted — {e}"))
+        results.append((True, f"session directory: {len(files)} JSON file(s)"))
     for ok, msg in results:
         if ok:
             console.success(msg)
@@ -1731,38 +1718,226 @@ def _push_prompt(iteration: int, goal: str) -> str:
         f"The commit message must be a short English sentence following conventional commits.")
 
 
-def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
-    """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)"""
-    if task_id is None:
-        task_id = uuid.uuid4().hex[:8]
-    task_dir = os.path.join(loops_dir, task_id)
+# --- PocketFlow Lite: 图调度核 (内化自 The-Pocket/PocketFlow) ---
+
+class _Edge:  # 带 action 的连边中间对象，配合 DSL 使用
+    __slots__ = ("src", "action")
+
+    def __init__(self, src, action): self.src, self.action = src, action
+
+    def __rshift__(self, tgt): return self.src.connect(tgt, self.action)
+
+
+class Step:  # 图节点：状态保存在 ctx 里，三段式钩子（按需 override）在引擎中被自动调用
+    def __init__(self, name=""):
+        self.name = name or self.__class__.__name__
+        self.next = {}                            # action -> Step
+
+    def __repr__(self):
+        return f"<Step {self.name}>"
+
+    def connect(self, other, action="default"):
+        self.next[action] = other
+        return other               # 允许链式：a >> b >> c
+
+    def __rshift__(self, other): return self.connect(other, "default")
+
+    def __sub__(self, action):
+        if not isinstance(action, str):
+            raise TypeError("action must be a string")
+        return _Edge(self, action)
+
+    def prep(self, ctx): return None               # 读 ctx，拿上下文
+
+    def execute(self, prep_res): raise NotImplementedError  # 干脏活
+
+    def post(self, ctx, prep_res, exec_res): return None    # 写回 ctx，返回 action 字符串
+
+    def run(self, ctx):  # 引擎调用
+        p = self.prep(ctx)
+        e = self.execute(p)
+        return self.post(ctx, p, e)
+
+
+class Pipeline:  # Flow：一个 dispatch 表 + while 循环
+    def __init__(self, start: Step):
+        self.start = start
+
+    def run(self, ctx):  # ctx 跨节点共享。各 Step 通过 post 返回值决定路由
+        curr = self.start
+        while curr is not None:
+            action = curr.run(ctx)
+            curr = curr.next.get(action or "default")
+        return ctx
+
+
+def _extract_changed_files(ctx: ContextManager) -> str:
+    files = set()
+    for m in ctx.messages:
+        if m.get("role") == "tool" and m.get("tool_name") in ("edit", "write"):
+            files.add(f"{m.get('content')}")
+    return ",\n ".join(files) if files else "(unknown — Verifier inspect project to find)"
+
+
+def _get_completion_result(ctx: ContextManager) -> str:
+    for m in reversed(ctx.messages):
+        if m.get("role") == "tool" and m.get("tool_name") == "attempt_completion":
+            return m.get('content', '')
+    return ''
+
+
+def _get_loop_ctx(task_dir: str, role: str):
+    _loop_id = f"loop_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    _loop_file = os.path.join(task_dir, f"{role}_{_loop_id}.json")
+    _ctx = ContextManager()
+    _ctx.load(_loop_file)
+    return _ctx, _loop_file
+
+
+class PlanAgent(Step):
+    def prep(self, ctx): _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "plan")
+
+    def execute(self, data): pass
+
+
+class DevAgent(Step):
+    def prep(self, ctx):
+        _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "develop")
+        return {
+            "impl_ctx": ctx["impl_ctx"],
+            "impl_ctx_file": ctx["impl_ctx_file"],
+            "prompt": _implementer_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"])}
+
+    def execute(self, data):
+        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
+        return _extract_changed_files(data["impl_ctx"])
+
+    def post(self, ctx, prep_res, exec_res):
+        ctx["impl_files"] = exec_res
+        return None
+
+
+class ReviewAgent(Step):
+    def prep(self, ctx): _emit_iter(ctx["iteration"], ctx["max_iter"], "verifier", "review")
+
+    def execute(self, data): pass
+
+
+class TestAgent(Step):
+    def prep(self, ctx):
+        _emit_iter(ctx["iteration"], ctx["max_iter"], "verifier", "test")
+        t_ctx, t_file = _get_loop_ctx(ctx["task_dir"], "verifier")
+        t_ctx.append_system(ctx["prompt_runtime"])
+        return {"t_ctx": t_ctx, "t_file": t_file,
+                "prompt": _verifier_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"])}
+
+    def execute(self, data):
+        agent_loop(data["t_ctx"], data["t_file"], data["prompt"])
+        return _get_completion_result(data["t_ctx"])
+
+    def post(self, ctx, prep_res, result):
+        _output_event({"type": "verdict", "verdict": result or "FAIL: no result",
+                       "reason": "", "round": ctx["iteration"]})
+        if result and "VERIFY: PASS" in result:
+            return "pass"
+        ctx["verify_result"] = result
+        return "fail"
+
+
+class UpdaterAgent(Step):
+    def prep(self, ctx):
+        _emit_iter(ctx["iteration"], ctx["max_iter"], "updater", "push")
+        u_ctx, u_file = _get_loop_ctx(ctx["task_dir"], "updater")
+        u_ctx.append_system(ctx["prompt_runtime"])
+        return {"u_ctx": u_ctx, "u_file": u_file,
+                "prompt": _updater_prompt(ctx["iteration"], ctx["goal"], ctx.get("verify_result"))}
+
+    def execute(self, data):
+        agent_loop(data["u_ctx"], data["u_file"], data["prompt"])
+        return _get_completion_result(data["u_ctx"])
+
+    def post(self, ctx, prep_res, refined):
+        if refined:
+            ctx["impl_ctx"].append_user(f"[Refined prompt from updater iter {ctx['iteration']}]\n{refined}")
+        return "refine"
+
+
+class PushAgent(Step):
+    def prep(self, ctx):
+        _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "push")
+        return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
+                "prompt": _push_prompt(ctx["iteration"], ctx["goal"])}
+
+    def execute(self, data):
+        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
+
+    def post(self, ctx, prep_res, exec_res):
+        ctx["succeeded"] = True
+        _output_event({"type": "complete",
+                       "result": f"All rounds completed: {ctx['goal']}",
+                       "iters": ctx["iteration"]})
+        return None
+
+
+class IncrIter(Step):
+    def post(self, ctx, p, e):
+        ctx["iteration"] += 1
+        console._round = ctx["iteration"]
+        if ctx["iteration"] > ctx["max_iter"]:
+            return None
+        return "ok"
+
+
+def loop_engine_future(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
+    """Pipeline 版本 loop_engine，与旧版共存。"""
+    task_dir = os.path.join(loops_dir, task_id or uuid.uuid4().hex[:8])
     os.makedirs(task_dir, exist_ok=True)
     console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
-
-    def _get_loop_ctx(loop_type: str):
-        _loop_id = f"loop_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-        _loop_file = os.path.join(task_dir, f"{loop_type}_{_loop_id}.json")
-        _loop_ctx = ContextManager()
-        _loop_ctx.load(_loop_file)
-        return _loop_ctx, _loop_file
-
-    def _extract_changed_files(ctx) -> str:
-        files = set()
-        for m in ctx.messages:
-            if m.get("role") == "tool" and m.get("tool_name") in ("edit", "write"):
-                files.add(f"{m.get('content')}")
-        return ",\n ".join(files) if files else "(unknown — Verifier inspect project to find)"
-
-    def _get_completion_result(ctx) -> str:
-        for m in reversed(ctx.messages):
-            if m.get("role") == "tool" and m.get("tool_name") == "attempt_completion":
-                return m.get('content', '')
-        return ''
 
     _output_event({"type": "start", "task_id": task_id, "goal": goal, "started_at": time.time()})
 
     loop_prompt_runtime = SystemPrompt()
-    implementer_ctx, implementer_ctx_file = _get_loop_ctx("implementer")
+    impl_ctx, impl_ctx_file = _get_loop_ctx(task_dir, "implementer")
+    impl_ctx.append_system(loop_prompt_runtime.assemble())
+
+    shared = {
+        "goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
+        "impl_ctx_file": impl_ctx_file, "prompt_runtime": loop_prompt_runtime.assemble()}
+
+    plan, dev, review, test, updater, push = PlanAgent(), DevAgent(), ReviewAgent(), TestAgent(), UpdaterAgent(), PushAgent()
+    incr = IncrIter()
+
+    plan >> dev >> review >> test
+    test - "pass"
+    test - "fail" >> updater - "refine" >> incr - "ok" >> plan
+
+    p = Pipeline(plan)
+    console._round = 1
+    try:
+        p.run(shared)
+    except Exception as e:
+        _output_event({"type": "complete", "result": None, "iters": shared["iteration"]})
+        console.error(f"Loop error: {e}")
+        return False
+
+    if shared.get("succeeded"):
+        return True
+
+    console.error(f"Loop failed after {max_iter} iterations")
+    _output_event({"type": "complete", "result": None, "iters": max_iter})
+    return False
+
+
+def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
+    """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)"""
+    task_dir = os.path.join(loops_dir, task_id or uuid.uuid4().hex[:8])
+    os.makedirs(task_dir, exist_ok=True)
+    console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
+
+    _output_event({"type": "start", "task_id": task_id, "goal": goal, "started_at": time.time()})
+
+    loop_prompt_runtime = SystemPrompt()
+    implementer_ctx, implementer_ctx_file = _get_loop_ctx(task_dir, "implementer")
     implementer_ctx.append_system(loop_prompt_runtime.assemble())
     try:
         for iteration in range(1, max_iter + 1):
@@ -1775,7 +1950,7 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
 
             _emit_iter(iteration, max_iter, "verifier", "review")
             _emit_iter(iteration, max_iter, "verifier", "test")
-            verifier_ctx, verifier_ctx_file = _get_loop_ctx("verifier")
+            verifier_ctx, verifier_ctx_file = _get_loop_ctx(task_dir, "verifier")
             verifier_ctx.append_system(loop_prompt_runtime.assemble())
             agent_loop(verifier_ctx, verifier_ctx_file, _verifier_prompt(iteration, goal, impl_files))
             verify_result = _get_completion_result(verifier_ctx)
@@ -1789,7 +1964,7 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
                 return True
 
             _emit_iter(iteration, max_iter, "updater", "push")
-            updater_ctx, updater_ctx_file = _get_loop_ctx("updater")
+            updater_ctx, updater_ctx_file = _get_loop_ctx(task_dir, "updater")
             updater_ctx.append_system(loop_prompt_runtime.assemble())
             agent_loop(updater_ctx, updater_ctx_file, _updater_prompt(iteration, goal, verify_result))
             refined = _get_completion_result(updater_ctx)
@@ -1803,7 +1978,6 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
         _output_event({"type": "complete", "result": None, "iters": iteration})
         console.error(f"Loop error: {e}")
         return False
-
 
 
 def _parse_args(args=None):
@@ -1834,7 +2008,7 @@ def main():
             console.error("MANGO_KEY env var is required for loop mode")
             sys.exit(1)
         console.mode = args.output
-        success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id)
+        success = loop_engine_future(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id)
         sys.exit(0 if success else 1)
 
     global provider
@@ -1895,7 +2069,7 @@ def main():
                     console.error("Please input '/l or /loop <query>'")
                     continue
                 console.success(f"🎯 Loop: {goal_text}")
-                loop_engine(goal_text)
+                loop_engine_future(goal_text)
                 console.success(f"Loop succeeded")
                 continue
             normal_message = f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
