@@ -1882,6 +1882,8 @@ class PushAgent(Step):
 
 
 class SucceedStep(Step):
+    def execute(self, data): pass
+
     def post(self, ctx, p, e):
         ctx["succeeded"] = True
         _output_event({"type": "complete",
@@ -1891,6 +1893,8 @@ class SucceedStep(Step):
 
 
 class IncrIter(Step):
+    def execute(self, data): pass
+
     def post(self, ctx, p, e):
         ctx["iteration"] += 1
         console._round = ctx["iteration"]
