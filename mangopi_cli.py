@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.33"
+__version__ = "0.1.34"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -900,6 +900,8 @@ class AttemptCompletionTool(ToolBase):
     params = {"result": {"type": "string", "description": "The final result or summary of the completed task"}}
     preview_lines = 500
     preview_width = 500
+
+    def preview(self, args): return ''
 
     def run(self, args):
         return self.ok(args["result"])
@@ -1879,6 +1881,15 @@ class PushAgent(Step):
         return None
 
 
+class SucceedStep(Step):
+    def post(self, ctx, p, e):
+        ctx["succeeded"] = True
+        _output_event({"type": "complete",
+                       "result": f"All rounds completed: {ctx['goal']}",
+                       "iters": ctx["iteration"]})
+        return None
+
+
 class IncrIter(Step):
     def post(self, ctx, p, e):
         ctx["iteration"] += 1
@@ -1888,9 +1899,11 @@ class IncrIter(Step):
         return "ok"
 
 
-def loop_engine_future(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
-    """Pipeline 版本 loop_engine，与旧版共存。"""
-    task_dir = os.path.join(loops_dir, task_id or uuid.uuid4().hex[:8])
+def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False):
+    """Pipeline 版本 loop_engine。"""
+    if task_id is None:
+        task_id = uuid.uuid4().hex[:8]
+    task_dir = os.path.join(loops_dir, task_id)
     os.makedirs(task_dir, exist_ok=True)
     console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
 
@@ -1904,11 +1917,15 @@ def loop_engine_future(goal: str, max_iter: int = 5, task_id: Optional[str] = No
         "goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
         "impl_ctx_file": impl_ctx_file, "prompt_runtime": loop_prompt_runtime.assemble()}
 
-    plan, dev, review, test, updater, push = PlanAgent(), DevAgent(), ReviewAgent(), TestAgent(), UpdaterAgent(), PushAgent()
-    incr = IncrIter()
+    plan, dev, review, test = PlanAgent(), DevAgent(), ReviewAgent(), TestAgent()
+    updater, push = UpdaterAgent(), PushAgent()
+    incr, succeed = IncrIter(), SucceedStep()
 
     plan >> dev >> review >> test
-    test - "pass"
+    if is_push:
+        test - "pass" >> push
+    else:
+        test - "pass" >> succeed
     test - "fail" >> updater - "refine" >> incr - "ok" >> plan
 
     p = Pipeline(plan)
@@ -1928,58 +1945,6 @@ def loop_engine_future(goal: str, max_iter: int = 5, task_id: Optional[str] = No
     return False
 
 
-def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None):
-    """Loop Engineering: 3-agent 协作(Implementer + Verifier + Updater)"""
-    task_dir = os.path.join(loops_dir, task_id or uuid.uuid4().hex[:8])
-    os.makedirs(task_dir, exist_ok=True)
-    console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
-
-    _output_event({"type": "start", "task_id": task_id, "goal": goal, "started_at": time.time()})
-
-    loop_prompt_runtime = SystemPrompt()
-    implementer_ctx, implementer_ctx_file = _get_loop_ctx(task_dir, "implementer")
-    implementer_ctx.append_system(loop_prompt_runtime.assemble())
-    try:
-        for iteration in range(1, max_iter + 1):
-            console._round = iteration
-
-            _emit_iter(iteration, max_iter, "implementer", "plan")
-            _emit_iter(iteration, max_iter, "implementer", "develop")
-            agent_loop(implementer_ctx, implementer_ctx_file, _implementer_prompt(iteration, max_iter, goal))
-            impl_files = _extract_changed_files(implementer_ctx)
-
-            _emit_iter(iteration, max_iter, "verifier", "review")
-            _emit_iter(iteration, max_iter, "verifier", "test")
-            verifier_ctx, verifier_ctx_file = _get_loop_ctx(task_dir, "verifier")
-            verifier_ctx.append_system(loop_prompt_runtime.assemble())
-            agent_loop(verifier_ctx, verifier_ctx_file, _verifier_prompt(iteration, goal, impl_files))
-            verify_result = _get_completion_result(verifier_ctx)
-            _output_event({"type": "verdict", "verdict": verify_result or "FAIL: no result",
-                           "reason": "", "round": iteration})
-
-            if verify_result and "VERIFY: PASS" in verify_result:
-                _emit_iter(iteration, max_iter, "implementer", "push")
-                agent_loop(implementer_ctx, implementer_ctx_file, _push_prompt(iteration, goal))
-                _output_event({"type": "complete", "result": f"All rounds completed: {goal}", "iters": iteration})
-                return True
-
-            _emit_iter(iteration, max_iter, "updater", "push")
-            updater_ctx, updater_ctx_file = _get_loop_ctx(task_dir, "updater")
-            updater_ctx.append_system(loop_prompt_runtime.assemble())
-            agent_loop(updater_ctx, updater_ctx_file, _updater_prompt(iteration, goal, verify_result))
-            refined = _get_completion_result(updater_ctx)
-            if refined:
-                implementer_ctx.append_user(f"[Refined prompt from updater iter {iteration}]\n{refined}")
-
-        console.error(f"Loop failed after {max_iter} iterations")
-        _output_event({"type": "complete", "result": None, "iters": max_iter})
-        return False
-    except Exception as e:
-        _output_event({"type": "complete", "result": None, "iters": iteration})
-        console.error(f"Loop error: {e}")
-        return False
-
-
 def _parse_args(args=None):
     parser = argparse.ArgumentParser(prog="mangopi-cli", description="Mangopi CLI — single-file AI coding agent")
     parser.add_argument("--version", action="version", version=f"mangopi-cli v{__version__}")
@@ -1993,6 +1958,7 @@ def _parse_args(args=None):
                       help="Task identifier; auto-generated as 8-char hex if omitted")
     loop.add_argument("--output", choices=["console", "jsonl"], default="console",
                       help="Output mode (default: console)")
+    loop.add_argument("--push", action="store_true", help="Commit verified changes on PASS")
     return parser.parse_args(args)
 
 
@@ -2008,7 +1974,8 @@ def main():
             console.error("MANGO_KEY env var is required for loop mode")
             sys.exit(1)
         console.mode = args.output
-        success = loop_engine_future(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id)
+        success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id,
+                                     is_push=args.push)
         sys.exit(0 if success else 1)
 
     global provider
@@ -2069,8 +2036,7 @@ def main():
                     console.error("Please input '/l or /loop <query>'")
                     continue
                 console.success(f"🎯 Loop: {goal_text}")
-                loop_engine_future(goal_text)
-                console.success(f"Loop succeeded")
+                loop_engine(goal_text)
                 continue
             normal_message = f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             if MANGO_ROUTING == "on":

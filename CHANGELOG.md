@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.34] - 2026-07-08
+
+### Removed
+- **FlashExtServer and Flash-thinking framework** — all related code removed.
+- **Old `loop_engine`** — replaced by Pipeline-based version.
+
+### Added
+- **PocketFlow Lite** — `Step` + `Pipeline` graph scheduler with DSL (`>>`, `-`).
+- **`loop --push`** — commit verified changes on PASS.
+- **`SucceedStep`** — explicit success endpoint in Pipeline.
+
+### Changed
+- **`loop_engine` rewritten on Pipeline** — `PlanAgent` → `DevAgent` → `ReviewAgent` → `TestAgent` → `SucceedStep` / `UpdaterAgent`.
+- **`_get_loop_ctx` extracted** to module-level, shared by all agents.
+
+---
+
 ## [0.1.33] - 2026-07-06
 
 ### Added
