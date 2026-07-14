@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.35] - 2026-07-14
+
+### Added
+- **`loop --fast`** — skip design/review, only dev → test → push.
+- **`loop --dry-run`** — print pipeline topology and exit.
+- **ReviewAgent** — full agent with independent ctx, inspects changes via `_review_prompt`.
+
+### Changed
+- **Prompt split** — `_implementer_prompt` → `_design_prompt` + `_dev_prompt`; `_verifier_prompt` → `_review_prompt` + `_test_prompt`.
+- **ReviewAgent** — from stub to real agent loop with `VERIFY: PASS/FAIL` routing.
+- **`_Edge` operator precedence fix** — split chained `-`/`>>` into separate lines.
+
+---
+
 ## [0.1.34] - 2026-07-08
 
 ### Removed

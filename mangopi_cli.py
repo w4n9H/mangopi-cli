@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.34"
+__version__ = "0.1.35"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -1659,38 +1659,53 @@ def _emit_iter(n: int, max_iter: int, agent: str, phase: str = ""):
     _output_event({"type": "iter", "n": n, "max_iter": max_iter, "agent": agent, "phase": phase})
 
 
-def _implementer_prompt(iteration: int, max_iter: int, goal: str) -> str:  # Implementer: 设计与写代码(不 verify)
+def _design_prompt(iteration: int, max_iter: int, goal: str) -> str:
     return (
-        f"[Loop iter {iteration}/{max_iter}]\n"
+        f"[Design iter {iteration}/{max_iter}]\n"
         f"GOAL: {goal}\n\n"
-        f"You are the IMPLEMENTER. Design + write code.\n"
+        f"You are the DESIGNER. Plan before coding.\n"
         f"1. Read relevant code (read/grep).\n"
         f"2. Plan your design.\n"
-        f"3. Implement progressively: smallest working change first.\n"
-        f"4. Self-review: read back your changes, verify no logic errors.\n"
-        f"5. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
-        f"6. When calling edit/write, briefly explain WHY in your thinking.\n"
-        f"7. Call `attempt_completion` tool when done.\n\n"
+        f"3. Call `attempt_completion` when done.\n")
+
+
+def _dev_prompt(iteration: int, max_iter: int, goal: str) -> str:
+    return (
+        f"[Dev iter {iteration}/{max_iter}]\n"
+        f"GOAL: {goal}\n\n"
+        f"You are the DEVELOPER. Implement the plan.\n"
+        f"1. Implement progressively: smallest working change first.\n"
+        f"2. Self-review: read back your changes, verify no logic errors.\n"
+        f"3. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
+        f"4. When calling edit/write, briefly explain WHY in your thinking.\n"
+        f"5. Call `attempt_completion` tool when done.\n\n"
         f"DO NOT run tests or verify your own code. That's the Verifier's job.")
 
 
-def _verifier_prompt(iteration: int, goal: str, impl_files: str) -> str:  # Verifier: 验证测试,判断 pass/fail
+def _review_prompt(iteration: int, goal: str, impl_files: str) -> str:
     return (
-        f"[Verify iter {iteration}]\n"
+        f"[Review iter {iteration}]\n"
         f"GOAL: {goal}\n"
-        f"Files changed by implementer: \n"
-        f"{impl_files}\n\n"
-        f"You are an OBJECTIVE Verifier. Independent judgment required.\n"
-        f"1. Inspect changed files — use `git diff` first, then `read` individual files as needed.\n"
-        f"2. Determine the right test command(inspect project:package.json/pyproject.toml/go.mod).\n"
-        f"3. Run tests with bash tool.\n"
-        f"4. Judge PASS/FAIL based on exit code AND tests actually verify the goal.\n"
-        f"5. If FAIL: explain which test, why, and suggested fix.\n"
-        f"6. Call `attempt_completion` tool with one line:\n"
+        f"Files changed: \n{impl_files}\n\n"
+        f"You are a REVIEWER. Inspect the changes.\n"
+        f"1. Use `git diff` to see what changed.\n"
+        f"2. Read individual files as needed (`read` tool).\n"
+        f"3. Call `attempt_completion` with one line:\n"
+        f"   - 'VERIFY: PASS' if the changes look reasonable\n"
+        f"   - 'VERIFY: FAIL: <reason>' if you spot issues")
+
+
+def _test_prompt(iteration: int, goal: str) -> str:
+    return (
+        f"[Test iter {iteration}]\n"
+        f"GOAL: {goal}\n\n"
+        f"You are a TESTER. Run tests and judge PASS/FAIL.\n"
+        f"1. Determine the right test command.\n"
+        f"2. Run tests with bash tool.\n"
+        f"3. Judge PASS/FAIL based on exit code.\n"
+        f"4. Call `attempt_completion` with one line:\n"
         f"   - 'VERIFY: PASS'\n"
-        f"   - 'VERIFY: FAIL: <reason>'\n"
-        f"   - 'VERIFY: PASS, NO_ISSUES' (success + no remaining concerns)\n"
-        f"   - 'VERIFY: PASS, ISSUES: <list>' (success but with concerns)\n\n"
+        f"   - 'VERIFY: FAIL: <reason>'\n\n"
         f"Explain at architecture-level (module/flow), not function-level.")
 
 
@@ -1772,6 +1787,22 @@ class Pipeline:  # Flow：一个 dispatch 表 + while 循环
             curr = curr.next.get(action or "default")
         return ctx
 
+    def trace(self):
+        """Print full pipeline topology (DFS)。"""
+        seen = set()
+
+        def _dfs(step, indent=""):
+            if not step or id(step) in seen:
+                return
+            seen.add(id(step))
+            for action, nxt in step.next.items():
+                if not isinstance(nxt, Step):
+                    continue
+                arrow = " → " if action == "default" else f" ──{action}──→ "
+                print(f"  {DIM}{indent}{step.name}{arrow}{nxt.name}{RESET}")
+                _dfs(nxt, indent=indent)
+        _dfs(self.start)
+
 
 def _extract_changed_files(ctx: ContextManager) -> str:
     files = set()
@@ -1796,19 +1827,21 @@ def _get_loop_ctx(task_dir: str, role: str):
     return _ctx, _loop_file
 
 
-class PlanAgent(Step):
-    def prep(self, ctx): _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "plan")
+class DesignAgent(Step):
+    def prep(self, ctx):
+        _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "plan")
+        return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
+                "prompt": _design_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"])}
 
-    def execute(self, data): pass
+    def execute(self, data):
+        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
 
 
 class DevAgent(Step):
     def prep(self, ctx):
         _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "develop")
-        return {
-            "impl_ctx": ctx["impl_ctx"],
-            "impl_ctx_file": ctx["impl_ctx_file"],
-            "prompt": _implementer_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"])}
+        return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
+                "prompt": _dev_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"])}
 
     def execute(self, data):
         agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
@@ -1820,18 +1853,33 @@ class DevAgent(Step):
 
 
 class ReviewAgent(Step):
-    def prep(self, ctx): _emit_iter(ctx["iteration"], ctx["max_iter"], "verifier", "review")
+    def prep(self, ctx):
+        _emit_iter(ctx["iteration"], ctx["max_iter"], "verifier", "review")
+        r_ctx, r_file = _get_loop_ctx(ctx["task_dir"], "reviewer")
+        r_ctx.append_system(ctx["prompt_runtime"])
+        return {"r_ctx": r_ctx, "r_file": r_file,
+                "prompt": _review_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"])}
 
-    def execute(self, data): pass
+    def execute(self, data):
+        agent_loop(data["r_ctx"], data["r_file"], data["prompt"])
+        return _get_completion_result(data["r_ctx"])
+
+    def post(self, ctx, prep_res, result):
+        if result and "VERIFY: PASS" in result:
+            return "pass"
+        ctx["review_fail"] = result or "FAIL: review rejected"
+        _output_event({"type": "verdict", "verdict": ctx["review_fail"],
+                       "reason": "", "round": ctx["iteration"]})
+        return "fail"
 
 
 class TestAgent(Step):
     def prep(self, ctx):
         _emit_iter(ctx["iteration"], ctx["max_iter"], "verifier", "test")
-        t_ctx, t_file = _get_loop_ctx(ctx["task_dir"], "verifier")
+        t_ctx, t_file = _get_loop_ctx(ctx["task_dir"], "tester")
         t_ctx.append_system(ctx["prompt_runtime"])
         return {"t_ctx": t_ctx, "t_file": t_file,
-                "prompt": _verifier_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"])}
+                "prompt": _test_prompt(ctx["iteration"], ctx["goal"])}
 
     def execute(self, data):
         agent_loop(data["t_ctx"], data["t_file"], data["prompt"])
@@ -1903,10 +1951,42 @@ class IncrIter(Step):
         return "ok"
 
 
-def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False):
+def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False,
+                dry_run: bool = False, fast: bool = False):
     """Pipeline 版本 loop_engine。"""
     if task_id is None:
         task_id = uuid.uuid4().hex[:8]
+
+    dev, review, test = DevAgent(), ReviewAgent(), TestAgent()
+    updater, push = UpdaterAgent(), PushAgent()
+    incr, succeed = IncrIter(), SucceedStep()
+
+    if fast:
+        start = dev
+        dev >> test
+        test - "pass" >> (push if is_push else succeed)
+        test - "fail" >> updater
+    else:
+        design = DesignAgent()
+        start = design
+        design >> dev >> review
+        review - "pass" >> test
+        review - "fail" >> updater
+        if is_push:
+            test - "pass" >> push
+        else:
+            test - "pass" >> succeed
+        test - "fail" >> updater
+        updater - "refine" >> incr
+        incr - "ok" >> design
+
+    updater - "refine" >> incr
+    incr - "ok" >> start
+    p = Pipeline(start)
+    if dry_run:
+        p.trace()
+        return True
+
     task_dir = os.path.join(loops_dir, task_id)
     os.makedirs(task_dir, exist_ok=True)
     console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
@@ -1921,18 +2001,6 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_
         "goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
         "impl_ctx_file": impl_ctx_file, "prompt_runtime": loop_prompt_runtime.assemble()}
 
-    plan, dev, review, test = PlanAgent(), DevAgent(), ReviewAgent(), TestAgent()
-    updater, push = UpdaterAgent(), PushAgent()
-    incr, succeed = IncrIter(), SucceedStep()
-
-    plan >> dev >> review >> test
-    if is_push:
-        test - "pass" >> push
-    else:
-        test - "pass" >> succeed
-    test - "fail" >> updater - "refine" >> incr - "ok" >> plan
-
-    p = Pipeline(plan)
     console._round = 1
     try:
         p.run(shared)
@@ -1963,6 +2031,8 @@ def _parse_args(args=None):
     loop.add_argument("--output", choices=["console", "jsonl"], default="console",
                       help="Output mode (default: console)")
     loop.add_argument("--push", action="store_true", help="Commit verified changes on PASS")
+    loop.add_argument("--dry-run", action="store_true", help="Print pipeline topology and exit")
+    loop.add_argument("--fast", action="store_true", help="Skip design/review, only dev → test → push")
     return parser.parse_args(args)
 
 
@@ -1979,7 +2049,7 @@ def main():
             sys.exit(1)
         console.mode = args.output
         success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id,
-                                     is_push=args.push)
+                             is_push=args.push, dry_run=args.dry_run, fast=args.fast)
         sys.exit(0 if success else 1)
 
     global provider

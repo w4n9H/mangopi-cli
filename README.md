@@ -80,7 +80,6 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Local-first workflow design
 * Autonomous loop execution (3-agent implement / verify / refine pipeline)
 * Smart provider routing with tiered models (high/medium/low)
-* Flash-ext thinking framework server (OpenAI-compatible proxy)
 * Multimodal support (image reading via `view_image`)
 * Web search via Bocha AI Search (`web_search` tool)
 * Context-aware conversation management
