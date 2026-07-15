@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.36"
+__version__ = "0.1.37"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -428,8 +428,13 @@ class SkillManager:
             dir_path = os.path.join(_skill_path, _dirname)
             if not os.path.exists(dir_path):
                 return {}
-            return {os.path.join(root, file): open(os.path.join(root, file), 'r', encoding='utf-8').read()
-                    for root, _, files in os.walk(dir_path) for file in files}
+            files = {}
+            for root, _, filenames in os.walk(dir_path):
+                for file in filenames:
+                    path = os.path.join(root, file)
+                    with open(path, 'r', encoding='utf-8') as f:
+                        files[path] = f.read()
+            return files
 
         skills = {}
         for base in self.base_paths:
@@ -652,7 +657,8 @@ class EditTool(ToolBase):
         error = _validate_file_path(args["path"])
         if error:
             return self.fail(f"edit error: {error}")
-        text = open(args["path"]).read()
+        with open(args["path"]) as f:
+            text = f.read()
         old, new = args["old"], args["new"]
         if old not in text:
             return self.fail("edit error: old_string not found")
@@ -702,9 +708,10 @@ class GrepTool(ToolBase):
             if not os.path.isfile(filepath):
                 continue
             try:
-                for line_num, line in enumerate(open(filepath), 1):
-                    if pattern.search(line):
-                        hits.append(f"{filepath}:{line_num}:{line.rstrip()}")
+                with open(filepath) as f:
+                    for line_num, line in enumerate(f, 1):
+                        if pattern.search(line):
+                            hits.append(f"{filepath}:{line_num}:{line.rstrip()}")
             except Exception:
                 continue
         return self.ok("\n".join(hits[:500]) or "none")
@@ -1593,7 +1600,8 @@ class SystemPrompt:
         memory_path = os.path.join(project_root, ".mangocli", "MANGO.md")
         if not os.path.exists(memory_path) or os.path.getsize(memory_path) == 0:
             return "## User Rules\n\nNo user-defined rules.\n"
-        return "## User Rules\n\n" + open(memory_path, "r", encoding="utf-8").read()
+        with open(memory_path, "r", encoding="utf-8") as f:
+            return "## User Rules\n\n" + f.read()
 
     @staticmethod
     def _build_safety() -> str:
@@ -1859,7 +1867,7 @@ class ResearchAgent(Step):
 
     def post(self, ctx, prep_res, summary):
         ctx["research"] = summary
-        return "ok"
+        return None
 
 
 class DesignAgent(Step):

@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.37] - 2026-07-15
+
+### Fixed
+- **`--wish` mode** — `ResearchAgent.post` returns `None` instead of `"ok"`, fixing premature pipeline exit after research.
+
+### Added
+- **`test/test_loop_engine.py`** — 11 unit tests covering success/failure/fast/wish/error paths.
+
+### Changed
+- **Resource cleanup** — 4 unclosed file handles fixed (`MANGO.md`, skill scripts, edit tool, grep tool).
+
+---
+
 ## [0.1.36] - 2026-07-15
 
 ### Added
