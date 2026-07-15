@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.36] - 2026-07-15
+
+### Added
+- **`--wish` mode** — prepend ResearchAgent with `web_search` before normal pipeline.
+- **ResearchAgent** — independent ctx, `_research_prompt`, checks `MANGO_SEARCH_API_KEY`.
+- **Memo skill** — `examples/skills/memo/` for long-term memory persistence.
+
+### Changed
+- **Research → Design data flow** — `ctx["research"]` injected into `_design_prompt`.
+- **Doc sync** — ROADMAP, README, index.html updated to reflect current pipeline and modes.
+
+---
+
 ## [0.1.35] - 2026-07-14
 
 ### Added

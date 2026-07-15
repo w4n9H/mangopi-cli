@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.35"
+__version__ = "0.1.36"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -1659,10 +1659,11 @@ def _emit_iter(n: int, max_iter: int, agent: str, phase: str = ""):
     _output_event({"type": "iter", "n": n, "max_iter": max_iter, "agent": agent, "phase": phase})
 
 
-def _design_prompt(iteration: int, max_iter: int, goal: str) -> str:
+def _design_prompt(iteration: int, max_iter: int, goal: str, research: str = "") -> str:
+    research_section = f"\nResearch summary:\n{research}\n" if research else ""
     return (
         f"[Design iter {iteration}/{max_iter}]\n"
-        f"GOAL: {goal}\n\n"
+        f"GOAL: {goal}{research_section}\n"
         f"You are the DESIGNER. Plan before coding.\n"
         f"1. Read relevant code (read/grep).\n"
         f"2. Plan your design.\n"
@@ -1682,6 +1683,20 @@ def _dev_prompt(iteration: int, max_iter: int, goal: str) -> str:
         f"DO NOT run tests or verify your own code. That's the Verifier's job.")
 
 
+def _research_prompt(goal: str) -> str:
+    return (
+        f"[Research]\n"
+        f"GOAL: {goal}\n\n"
+        f"You are a RESEARCHER. Gather information before implementation.\n"
+        f"1. Break the goal into 2-3 research questions.\n"
+        f"2. Use `web_search` for each question to find:\n"
+        f"   - Relevant documentation or API references\n"
+        f"   - Best practices and common patterns\n"
+        f"   - Example implementations\n"
+        f"3. Synthesize findings into a concise summary.\n"
+        f"4. Call `attempt_completion` to return the summary.")
+
+
 def _review_prompt(iteration: int, goal: str, impl_files: str) -> str:
     return (
         f"[Review iter {iteration}]\n"
@@ -1695,10 +1710,11 @@ def _review_prompt(iteration: int, goal: str, impl_files: str) -> str:
         f"   - 'VERIFY: FAIL: <reason>' if you spot issues")
 
 
-def _test_prompt(iteration: int, goal: str) -> str:
+def _test_prompt(iteration: int, goal: str, impl_files: str) -> str:
     return (
         f"[Test iter {iteration}]\n"
-        f"GOAL: {goal}\n\n"
+        f"GOAL: {goal}\n"
+        f"Files changed: \n{impl_files}\n\n"
         f"You are a TESTER. Run tests and judge PASS/FAIL.\n"
         f"1. Determine the right test command.\n"
         f"2. Run tests with bash tool.\n"
@@ -1827,11 +1843,30 @@ def _get_loop_ctx(task_dir: str, role: str):
     return _ctx, _loop_file
 
 
+class ResearchAgent(Step):
+    def prep(self, ctx):
+        if not os.environ.get("MANGO_SEARCH_API_KEY"):
+            raise RuntimeError("MANGO_SEARCH_API_KEY is required for research mode")
+        _emit_iter(ctx["iteration"], ctx["max_iter"], "researcher", "research")
+        r_ctx, r_file = _get_loop_ctx(ctx["task_dir"], "researcher")
+        r_ctx.append_system(ctx["prompt_runtime"])
+        return {"r_ctx": r_ctx, "r_file": r_file,
+                "prompt": _research_prompt(ctx["goal"])}
+
+    def execute(self, data):
+        agent_loop(data["r_ctx"], data["r_file"], data["prompt"])
+        return _get_completion_result(data["r_ctx"])
+
+    def post(self, ctx, prep_res, summary):
+        ctx["research"] = summary
+        return "ok"
+
+
 class DesignAgent(Step):
     def prep(self, ctx):
         _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "plan")
         return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
-                "prompt": _design_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"])}
+                "prompt": _design_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"], ctx.get("research", ""))}
 
     def execute(self, data):
         agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
@@ -1868,8 +1903,7 @@ class ReviewAgent(Step):
         if result and "VERIFY: PASS" in result:
             return "pass"
         ctx["review_fail"] = result or "FAIL: review rejected"
-        _output_event({"type": "verdict", "verdict": ctx["review_fail"],
-                       "reason": "", "round": ctx["iteration"]})
+        _output_event({"type": "verdict", "verdict": ctx["review_fail"], "reason": "", "round": ctx["iteration"]})
         return "fail"
 
 
@@ -1879,7 +1913,7 @@ class TestAgent(Step):
         t_ctx, t_file = _get_loop_ctx(ctx["task_dir"], "tester")
         t_ctx.append_system(ctx["prompt_runtime"])
         return {"t_ctx": t_ctx, "t_file": t_file,
-                "prompt": _test_prompt(ctx["iteration"], ctx["goal"])}
+                "prompt": _test_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"])}
 
     def execute(self, data):
         agent_loop(data["t_ctx"], data["t_file"], data["prompt"])
@@ -1952,11 +1986,12 @@ class IncrIter(Step):
 
 
 def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False,
-                dry_run: bool = False, fast: bool = False):
+                dry_run: bool = False, fast: bool = False, wish: bool = False):
     """Pipeline 版本 loop_engine。"""
     if task_id is None:
         task_id = uuid.uuid4().hex[:8]
 
+    research = ResearchAgent() if wish and not fast else None
     dev, review, test = DevAgent(), ReviewAgent(), TestAgent()
     updater, push = UpdaterAgent(), PushAgent()
     incr, succeed = IncrIter(), SucceedStep()
@@ -1982,6 +2017,9 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_
 
     updater - "refine" >> incr
     incr - "ok" >> start
+    if wish and not fast:
+        research >> start
+        start = research
     p = Pipeline(start)
     if dry_run:
         p.trace()
@@ -1994,12 +2032,13 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_
     _output_event({"type": "start", "task_id": task_id, "goal": goal, "started_at": time.time()})
 
     loop_prompt_runtime = SystemPrompt()
+    prompt_text = loop_prompt_runtime.assemble()
     impl_ctx, impl_ctx_file = _get_loop_ctx(task_dir, "implementer")
-    impl_ctx.append_system(loop_prompt_runtime.assemble())
+    impl_ctx.append_system(prompt_text)
 
     shared = {
         "goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
-        "impl_ctx_file": impl_ctx_file, "prompt_runtime": loop_prompt_runtime.assemble()}
+        "impl_ctx_file": impl_ctx_file, "prompt_runtime": prompt_text}
 
     console._round = 1
     try:
@@ -2033,6 +2072,7 @@ def _parse_args(args=None):
     loop.add_argument("--push", action="store_true", help="Commit verified changes on PASS")
     loop.add_argument("--dry-run", action="store_true", help="Print pipeline topology and exit")
     loop.add_argument("--fast", action="store_true", help="Skip design/review, only dev → test → push")
+    loop.add_argument("--wish", action="store_true", help="Prepend research before normal pipeline")
     return parser.parse_args(args)
 
 
@@ -2049,7 +2089,7 @@ def main():
             sys.exit(1)
         console.mode = args.output
         success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id,
-                             is_push=args.push, dry_run=args.dry_run, fast=args.fast)
+                             is_push=args.push, dry_run=args.dry_run, fast=args.fast, wish=args.wish)
         sys.exit(0 if success else 1)
 
     global provider

@@ -858,37 +858,58 @@
             <h2 class="sec-title"><span class="lang-en">Loop <em>Engineering.</em></span><span class="lang-zh">循环<em>工程</em></span></h2>
         </div>
         <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
-            <span class="lang-en">A <em>3-agent collaborative pipeline</em> that implements, verifies, and self-corrects — replacing the legacy flat goal-state machine with a CI/CD-like loop.</span>
-            <span class="lang-zh"><em>三代理协作流水线</em>，集实施、验证与自我纠偏于一体——用类 CI/CD 循环取代了旧版扁平目标状态机。</span>
+            <span class="lang-en">A <em>configurable Step/Pipeline</em> that designs, implements, reviews, and tests — replacing the legacy flat goal-state machine with a CI/CD-like loop.</span>
+            <span class="lang-zh"><em>可配置的 Step/Pipeline</em>，集设计、实现、审查与测试于一体——用类 CI/CD 循环取代了旧版扁平目标状态机。</span>
         </p>
 
         <div class="feat-list" style="margin-top: 48px;">
             <div class="feat">
                 <div class="feat-tag">— 01</div>
                 <div>
-                    <h3><span class="lang-en">Implementer</span><span class="lang-zh">实施者</span></h3>
-                    <p><span class="lang-en">Designs & writes code. Explicitly forbidden from running tests — "that's the Verifier's job."</span><span class="lang-zh">设计并编写代码，明确禁止自我测试——"那是 Verifier 的事"。</span></p>
+                    <h3><span class="lang-en">ResearchAgent</span><span class="lang-zh">研究员</span></h3>
+                    <p><span class="lang-en">Optional (<code>--wish</code>). Gathers information via <code>web_search</code> before design.</span><span class="lang-zh">可选（<code>--wish</code>）。在设计前通过 <code>web_search</code> 收集信息。</span></p>
                 </div>
             </div>
             <div class="feat">
                 <div class="feat-tag">— 02</div>
                 <div>
-                    <h3><span class="lang-en">Verifier</span><span class="lang-zh">验证者</span></h3>
-                    <p><span class="lang-en">Inspects changed files, runs actual test commands, judges PASS/FAIL at the architecture level.</span><span class="lang-zh">检查改动文件，执行实际测试命令，在架构层面判定 PASS/FAIL。</span></p>
+                    <h3><span class="lang-en">DesignAgent</span><span class="lang-zh">设计师</span></h3>
+                    <p><span class="lang-en">Reads code, plans the design. Shares <code>impl_ctx</code> with DevAgent.</span><span class="lang-zh">阅读代码并设计方案，与 DevAgent 共享上下文。</span></p>
                 </div>
             </div>
             <div class="feat">
                 <div class="feat-tag">— 03</div>
                 <div>
-                    <h3><span class="lang-en">Updater</span><span class="lang-zh">修正者</span></h3>
-                    <p><span class="lang-en">On failure, analyzes the Verifier's report and produces a refined prompt (50–200 words) for the next iteration.</span><span class="lang-zh">失败时分析 Verifier 报告，生成 refined prompt（50–200 词）注入下一轮。</span></p>
+                    <h3><span class="lang-en">DevAgent</span><span class="lang-zh">开发者</span></h3>
+                    <p><span class="lang-en">Implements progressively, extracts changed files for downstream agents.</span><span class="lang-zh">逐步实现并提取改动文件供下游使用。</span></p>
                 </div>
             </div>
             <div class="feat">
                 <div class="feat-tag">— 04</div>
                 <div>
-                    <h3><span class="lang-en">Auto-cleanup</span><span class="lang-zh">自动清理</span></h3>
-                    <p><span class="lang-en">Session files under <code>.mangocli/loops/</code> are discarded after the loop — no state leaks.</span><span class="lang-zh"><code>.mangocli/loops/</code> 下的会话文件在循环退出后自动清理，无状态泄露。</span></p>
+                    <h3><span class="lang-en">ReviewAgent</span><span class="lang-zh">审查者</span></h3>
+                    <p><span class="lang-en">Inspects <code>git diff</code>, returns <code>VERIFY: PASS/FAIL</code>. Independent ctx.</span><span class="lang-zh">审查 git diff，返回 <code>VERIFY: PASS/FAIL</code>。独立上下文。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 05</div>
+                <div>
+                    <h3><span class="lang-en">TestAgent</span><span class="lang-zh">测试者</span></h3>
+                    <p><span class="lang-en">Runs tests, judges PASS/FAIL. Independent ctx.</span><span class="lang-zh">执行测试并判定 PASS/FAIL。独立上下文。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 06</div>
+                <div>
+                    <h3><span class="lang-en">UpdaterAgent</span><span class="lang-zh">修正者</span></h3>
+                    <p><span class="lang-en">On failure, analyzes the report and refines the prompt for the next iteration.</span><span class="lang-zh">失败时分析报告并精炼 prompt 进入下一轮迭代。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 07</div>
+                <div>
+                    <h3><span class="lang-en">Modes</span><span class="lang-zh">运行模式</span></h3>
+                    <p><span class="lang-en">Normal, <code>--fast</code> (skip design/review), <code>--wish</code> (prepend research).</span><span class="lang-zh">正常模式、<code>--fast</code>（跳过设计/审查）、<code>--wish</code>（前置调研）。</span></p>
                 </div>
             </div>
         </div>
@@ -897,12 +918,12 @@
             <div class="callout-text">
                 <h3><span class="lang-en">One command to iterate</span><span class="lang-zh">一条命令启动迭代</span></h3>
                 <p>
-                    <span class="lang-en">Start with <code>/loop</code> followed by your goal. The pipeline runs up to 5 iterations, short-circuiting on the first <code>VERIFY: PASS</code>.</span>
-                    <span class="lang-zh">输入 <code>/loop</code> 加目标描述即可启动。流水线最多运行 5 轮迭代，首次 <code>VERIFY: PASS</code> 即提前结束。</span>
+                    <span class="lang-en">Start with <code>/loop</code> followed by your goal.</span>
+                    <span class="lang-zh">输入 <code>/loop</code> 加目标描述即可启动。</span>
                 </p>
             </div>
             <pre class="callout-code"><span class="cmd-c">❯</span> /loop <span class="str">"refactor utils.py to use dataclasses"</span>
-<span class="muted"># Implementer → Verifier → (Updater → Implementer)* → PASS</span></pre>
+<span class="muted"># Design → Dev → Review → Test → PASS / Updater → …</span></pre>
         </div>
     </div>
 </section>

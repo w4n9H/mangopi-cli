@@ -243,29 +243,40 @@ Every new feature follows these rules, in order of priority:
 
 **Approach:**
 
-- **`loop_engine(goal, max_iter)`** — a fixed 3-agent pipeline replacing the legacy `GoalTool`:
-  - **Implementer** — designs and writes code; explicitly forbidden from running tests ("that's the Verifier's job")
-  - **Verifier** — inspects changed files, determines the right test command, runs tests, judges PASS/FAIL with architecture-level reasoning
-  - **Updater** — on failure, reads the Verifier's analysis and produces a refined prompt (50–200 words) for the next Implementer iteration; read/grep only, no code edits
-- Each agent gets its own `ContextManager` session, stored under `.mangocli/loops/` and cleaned up on exit.
+- **`loop_engine(goal, max_iter, fast, wish, dry_run)`** — a configurable Step/Pipeline replacing the legacy 3-agent loop:
+  - **DesignAgent** — reads code, plans the design (shared `impl_ctx` with DevAgent)
+  - **DevAgent** — implements progressively, extracts changed files for downstream agents
+  - **ReviewAgent** — independent ctx, inspects git diff, returns `VERIFY: PASS/FAIL`
+  - **TestAgent** — independent ctx, runs actual test commands, judges PASS/FAIL
+  - **UpdaterAgent** — on failure, reads the Verifier's analysis and produces a refined prompt; only read/grep, no code edits
+  - **ResearchAgent** — optional (`--wish`), independent ctx, uses `web_search` before design
+- Built-in modes:
+  - **Normal**: `DesignAgent → DevAgent → ReviewAgent → TestAgent → SucceedStep / UpdaterAgent`
+  - **`--fast`**: `DevAgent → TestAgent → PushAgent / UpdaterAgent` (skip design/review)
+  - **`--wish`**: prepend `ResearchAgent →` before normal pipeline
+  - **`--dry-run`**: print pipeline topology and exit without executing
+- Session files stored under `.mangocli/loops/<task_id>/` (persisted for resume).
 - CLI entry point: `/loop <goal>` (deprecates `/goal`).
 - Default 5 iterations; the loop short-circuits on first `VERIFY: PASS`.
+- All agents use `attempt_completion` to return structured results (`VERIFY: PASS/FAIL`).
 
 **Design rationale:**
 
-- **Separation of concerns**: implement vs verify vs refine mirrors real CI/CD + code review workflows.
-- **No self-grading**: the Implementer cannot mark its own work as done — an independent Verifier must confirm.
-- **Feedback loop**: the Updater ensures each retry is informed by concrete failure analysis, not blind retry.
-- **Temporary sessions**: agent contexts are discarded after the loop; no state leaks across `/loop` invocations.
+- **Separation of concerns**: design vs dev vs review vs test mirrors real CI/CD + code review workflows.
+- **No self-grading**: the DevAgent cannot mark its own work as done — an independent TestAgent must confirm.
+- **Feedback loop**: the UpdaterAgent ensures each retry is informed by concrete failure analysis, not blind retry.
+- **Persistent sessions**: task files are preserved under `.mangocli/loops/<task_id>/` for future resume.
 
-**Why it fits the philosophy:** Reuses existing `agent_loop` + `ContextManager`. The whole feature is ~80 LOC of orchestration around the same core loop. No new dependencies.
+**Why it fits the philosophy:** Reuses existing `agent_loop` + `ContextManager`. The whole pipeline is orchestrated by a ~50-line Step/Pipeline framework. No new dependencies.
 
 **Acceptance criteria:**
 
-- [x] `/loop <goal>` triggers Implementer → Verifier → (Updater → Implementer)* pipeline
-- [x] Verifier runs actual test commands and judges PASS/FAIL
-- [x] Updater produces a refined prompt consumed by the next Implementer iteration
-- [x] Loop session files are cleaned up on exit (success or failure)
+- [x] `/loop <goal>` triggers pipeline execution
+- [x] All agents return structured results via `attempt_completion`
+- [x] `--fast` skips design/review
+- [x] `--wish` prepends ResearchAgent
+- [x] `--dry-run` prints topology and exits
+- [x] Loop session files are preserved for resume
 - [x] `/goal` shows deprecation warning pointing to `/loop`
 
 ---

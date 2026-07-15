@@ -216,24 +216,43 @@ python mangopi_cli.py
 | `/n`        | `/new`          | Start a new session (old session is auto-backed-up)      |
 | `/c`        | `/compact`      | Manually trigger full conversation compact               |
 | `/h`        | `/help`         | Show built-in command help                               |
-| `/l <goal>` | `/loop <query>` | Start Loop Engineering — 3-agent pipeline (implement → verify → refine) |
-| `/g <goal>` | `/goal <query>` | *(deprecated)* Use `/loop` instead |
+| `/l <goal>` | `/loop <query>` | Start Loop Engineering — configurable pipeline with optional modes |
 
 `/loop` runs up to 5 iterations; the pipeline short-circuits on the first `VERIFY: PASS`.
+
+| Flag | Description |
+|------|-------------|
+| `--fast` | Skip design/review, only dev → test → push |
+| `--wish` | Prepend research (`web_search`) before the pipeline |
+| `--dry-run` | Print pipeline topology and exit |
+| `--push` | Commit verified changes on PASS |
+| `--task-id <id>` | Assign a persistent task ID (for resume) |
+| `--output jsonl` | Emit structured events for web UI |
 
 ---
 
 # Loop Engineering
 
-Loop Engineering replaces the legacy Goal Mode with a **3-agent collaborative pipeline**:
+Loop Engineering replaces the legacy Goal Mode with a **configurable Step/Pipeline**:
 
 | Agent | Role |
 |-------|------|
-| **Implementer** | Designs & writes code. Explicitly forbidden from running tests — "that's the Verifier's job." |
-| **Verifier** | Inspects changed files, determines the right test command, runs tests, judges PASS/FAIL at the architecture level. |
-| **Updater** | On failure, reads the Verifier's analysis and produces a refined prompt (50–200 words) for the next Implementer iteration; read/grep only, no code edits. |
+| **ResearchAgent** | Optional (`--wish`). Gathers information via `web_search`; independent ctx. |
+| **DesignAgent** | Reads code, plans the design; shares `impl_ctx` with DevAgent. |
+| **DevAgent** | Implements progressively, extracts changed files for downstream agents. |
+| **ReviewAgent** | Inspects `git diff`, returns `VERIFY: PASS/FAIL`; independent ctx. |
+| **TestAgent** | Runs tests, judges PASS/FAIL; independent ctx. |
+| **UpdaterAgent** | On failure, refines the prompt for the next iteration; read/grep only. |
 
-The pipeline runs up to 5 iterations, short-circuiting on the first `VERIFY: PASS`. Session files under `.mangocli/loops/` are automatically cleaned up on exit.
+**Modes:**
+
+| Mode | Pipeline | Command |
+|------|----------|---------|
+| Normal | `DesignAgent → DevAgent → ReviewAgent → TestAgent → SucceedStep / UpdaterAgent` | `/loop <goal>` |
+| Fast | `DevAgent → TestAgent → PushAgent / UpdaterAgent` | `/loop <goal> --fast` |
+| Wish | `ResearchAgent → DesignAgent → DevAgent → ReviewAgent → TestAgent → …` | `/loop <goal> --wish` |
+
+The pipeline runs up to 5 iterations, short-circuiting on the first `VERIFY: PASS`. All agents return structured results via `attempt_completion`.
 
 Example:
 
@@ -241,7 +260,11 @@ Example:
 /loop build a fastapi todo app with tests
 ```
 
-The agent implements, a dedicated Verifier runs the actual tests, and if anything fails, the Updater refines the prompt for the next attempt — all autonomously.
+Or with research:
+
+```bash
+/loop build a fastapi todo app with tests --wish
+```
 
 
 
@@ -258,7 +281,7 @@ The agent implements, a dedicated Verifier runs the actual tests, and if anythin
 | `view_image`         | Load a local image into the model's vision context              |
 | `web_search`         | Search the live web via Bocha AI Search API                     |
 | `use_skill`          | Load an installed `SKILL.md` with its scripts/references        |
-| `loop_engine`       | 3-agent pipeline: implement → verify → refine (invoked via `/loop`) |
+| `loop_engine`       | Pipeline: design → dev → review → test (invoked via `/loop`) |
 | `attempt_completion` | Final step — present the result to the user                     |
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
