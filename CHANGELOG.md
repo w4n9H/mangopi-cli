@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.39] - 2026-07-15
+
+### Fixed
+- **`verify_result` key** — `ReviewAgent` now writes `ctx["verify_result"]` instead of `ctx["review_fail"]`, fixing review failures not reaching UpdaterAgent.
+
+### Changed
+- **Prompt improvements** — `_test_prompt` adds project inspection hints; `_review_prompt` adds architecture-level evaluation criteria; `_dev_prompt` / `_updater_prompt` remove outdated "Verifier" references.
+
+---
+
 ## [0.1.38] - 2026-07-15
 
 ### Fixed

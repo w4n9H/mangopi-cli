@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.38"
+__version__ = "0.1.39"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -1688,7 +1688,7 @@ def _dev_prompt(iteration: int, max_iter: int, goal: str) -> str:
         f"3. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
         f"4. When calling edit/write, briefly explain WHY in your thinking.\n"
         f"5. Call `attempt_completion` tool when done.\n\n"
-        f"DO NOT run tests or verify your own code. That's the Verifier's job.")
+        f"DO NOT run tests or verify your own code. That's the Reviewer and Tester's job.")
 
 
 def _research_prompt(goal: str) -> str:
@@ -1715,7 +1715,9 @@ def _review_prompt(iteration: int, goal: str, impl_files: str) -> str:
         f"2. Read individual files as needed (`read` tool).\n"
         f"3. Call `attempt_completion` with one line:\n"
         f"   - 'VERIFY: PASS' if the changes look reasonable\n"
-        f"   - 'VERIFY: FAIL: <reason>' if you spot issues")
+        f"   - 'VERIFY: FAIL: <reason>' if you spot issues\n\n"
+        f"Evaluate at architecture-level (module/flow, logic correctness),\n"
+        f"not function-level (naming, formatting).")
 
 
 def _test_prompt(iteration: int, goal: str, impl_files: str) -> str:
@@ -1724,9 +1726,9 @@ def _test_prompt(iteration: int, goal: str, impl_files: str) -> str:
         f"GOAL: {goal}\n"
         f"Files changed: \n{impl_files}\n\n"
         f"You are a TESTER. Run tests and judge PASS/FAIL.\n"
-        f"1. Determine the right test command.\n"
+        f"1. Determine the right test command (inspect project: package.json/pyproject.toml/go.mod).\n"
         f"2. Run tests with bash tool.\n"
-        f"3. Judge PASS/FAIL based on exit code.\n"
+        f"3. Judge PASS/FAIL based on exit code (non-zero = FAIL).\n"
         f"4. Call `attempt_completion` with one line:\n"
         f"   - 'VERIFY: PASS'\n"
         f"   - 'VERIFY: FAIL: <reason>'\n\n"
@@ -1737,11 +1739,11 @@ def _updater_prompt(iteration: int, goal: str, verify_result: Optional[str]) -> 
     return (
         f"[Updater iter {iteration}]\n"
         f"GOAL: {goal}\n"
-        f"Verifier FAILED: {verify_result}\n\n"
+        f"Failed at: {verify_result}\n\n"
         f"You are an UPDATER.\n"
         f"Refine the user's prompt for the next implementer iteration.\n"
         f"You MUST NOT write code or call write/edit/bash. Only read/grep for context.\n\n"
-        f"Read the verifier's failure analysis above.\n"
+        f"Read the failure analysis above.\n"
         f"Identify what's missing or unclear in the original goal.\n\n"
         f"Output: a single prompt, 50-200 words, specific constraints.\n"
         f"Call `attempt_completion` tool to return the refined prompt.")
@@ -1910,8 +1912,8 @@ class ReviewAgent(Step):
     def post(self, ctx, prep_res, result):
         if result and "VERIFY: PASS" in result:
             return "pass"
-        ctx["review_fail"] = result or "FAIL: review rejected"
-        _output_event({"type": "verdict", "verdict": ctx["review_fail"], "reason": "", "round": ctx["iteration"]})
+        ctx["verify_result"] = result or "FAIL: review rejected"
+        _output_event({"type": "verdict", "verdict": ctx["verify_result"], "reason": "", "round": ctx["iteration"]})
         return "fail"
 
 
