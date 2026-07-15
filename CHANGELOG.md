@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.38] - 2026-07-15
+
+### Fixed
+- **`test/test_loop_engine.py`** - not set `MANGO_SEARCH_API_KEY`
+
+---
+
 ## [0.1.37] - 2026-07-15
 
 ### Fixed

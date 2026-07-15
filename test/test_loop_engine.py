@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 os.environ.setdefault("MANGO_KEY", "test-key-not-used")
+os.environ.setdefault("MANGO_SEARCH_API_KEY", "test-search-key")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
