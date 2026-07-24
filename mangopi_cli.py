@@ -22,13 +22,14 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from contextlib import contextmanager
 
 try:
     import readline  # 解决 Unix-like 系统中 input 无法正常删除中文的问题
 except Exception:
     pass
 
-__version__ = "0.1.39"
+__version__ = "0.1.40"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -48,6 +49,7 @@ base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
 loops_dir = os.path.join(base_persist_dir, "loops")
 providers_file = os.path.join(base_persist_dir, "providers.json")
+mailbox_basic = os.path.expanduser("~/.mangocli/mail")
 
 # ANSI colors
 RESET, BOLD, SOFT, DIM = "\033[0m", "\033[1m", "\033[37m", "\033[2m"
@@ -551,6 +553,169 @@ class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 
 flash_thinking = FlashThinking()
 
 
+# --- Mailbox definitions: ---
+class MailBox:
+    def __init__(self, base: str = mailbox_basic, self_handle: str = "@mangopi"):
+        self.base = base
+        self.self_handle = self_handle
+
+    def _gid_dir(self, gid): return os.path.join(self.base, "groups", gid)
+
+    def _roster_path(self, gid): return os.path.join(self._gid_dir(gid), "roster.json")
+
+    def _thread_path(self, gid): return os.path.join(self._gid_dir(gid), "thread.jsonl")
+
+    def _inbox_path(self, handle): return os.path.join(self.base, "inbox", handle.lstrip("@") + ".jsonl")
+
+    @contextmanager
+    def _lock(self, path, timeout=5.0):  # POSIX 咨询锁（macOS/Linux），仅 append 那一瞬持锁
+        import fcntl
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            deadline = time.time() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.time() > deadline:
+                        raise TimeoutError("mailbox lock timeout")
+                    time.sleep(0.02)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def _load_roster(self, gid):
+        if os.path.exists(self._roster_path(gid)):
+            with open(self._roster_path(gid), encoding="utf-8") as f:
+                return json.load(f)
+        return {"group_id": gid, "subject": "", "members": []}
+
+    def _save_roster(self, gid, r):
+        os.makedirs(self._gid_dir(gid), exist_ok=True)
+        with open(self._roster_path(gid), "w", encoding="utf-8") as f:
+            json.dump(r, f, ensure_ascii=False, indent=2)
+
+    def _member(self, r, handle): return next((m for m in r["members"] if m["handle"] == handle), None)
+
+    def _guess_kind(self, h):
+        return "human" if any(k in h for k in ("lead", "you", "human", "pm", "user", "reviewer", "boss")) else "agent"
+
+    def create_group(self, gid, subject="", creator=None):
+        creator = creator or self.self_handle
+        r = self._load_roster(gid)
+        r["subject"] = subject or gid
+        if not self._member(r, creator):
+            r["members"].append({"handle": creator, "kind": self._guess_kind(creator),
+                                 "role": "owner", "last_read_id": None})
+        self._save_roster(gid, r)
+        return r
+
+    def add_member(self, gid, handle, kind=None, role="member"):
+        r = self._load_roster(gid)
+        r["members"] = [m for m in r["members"] if m["handle"] != handle]
+        r["members"].append({"handle": handle, "kind": kind or self._guess_kind(handle),
+                             "role": role, "last_read_id": None})
+        self._save_roster(gid, r)
+
+    def remove_member(self, gid, handle):
+        r = self._load_roster(gid)
+        r["members"] = [m for m in r["members"] if m["handle"] != handle]
+        self._save_roster(gid, r)
+
+    def group_info(self, gid):
+        r = self._load_roster(gid)
+        return {"group_id": gid, "subject": r["subject"],
+                "members": [{"handle": m["handle"], "kind": m["kind"], "role": m["role"],
+                             "unread": self.unread_for(gid, m["handle"])} for m in r["members"]]}
+
+    def post(self, gid, subject, body, frm=None, mtype="chat",
+             priority="normal", mentions=None, ask=None):
+        frm = frm or self.self_handle
+        if not os.path.exists(self._roster_path(gid)):
+            self.create_group(gid, subject)          # 不存在则自动建组
+        if ask:                                       # 请某人类回复：urgent+request+拉人
+            mentions = (mentions or []) + [ask]
+            if priority == "normal":
+                priority = "urgent"
+            if mtype == "chat":
+                mtype = "request"
+        for h in set(mentions or []):                 # 被 @ 的未知成员自动入组
+            if not self._member(self._load_roster(gid), h):
+                self.add_member(gid, h)
+        msg = {"msg_id": "m_" + uuid.uuid4().hex[:6], "from": frm, "gid": gid,
+               "subject": subject, "body": body, "type": mtype, "priority": priority,
+               "mentions": mentions or [], "ts": int(time.time())}
+        self._write_thread(gid, msg)
+        for h in (mentions or []):                    # @人类桥接：副本进其个人 inbox
+            mm = self._member(self._load_roster(gid), h)
+            if mm and mm["kind"] == "human":
+                self._bridge_to_inbox(h, gid, subject, body)
+        return msg
+
+    def _write_thread(self, gid, msg):
+        os.makedirs(self._gid_dir(gid), exist_ok=True)
+        with self._lock(self._thread_path(gid)):
+            with open(self._thread_path(gid), "a", encoding="utf-8") as f:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                f.flush()
+
+    def _bridge_to_inbox(self, handle, gid, subject, body):
+        os.makedirs(os.path.join(self.base, "inbox"), exist_ok=True)
+        with open(self._inbox_path(handle), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"from": "@group/" + gid,
+                                "subject": f"[{gid}] {subject}", "body": body,
+                                "ts": int(time.time())}, ensure_ascii=False) + "\n")
+
+    def read(self, gid, depth="summary", for_handle=None, mark_read=False):
+        msgs = self._load_thread(gid)
+        out = msgs if depth == "full" else msgs[-10:]
+        if mark_read:
+            self.mark_read(gid, for_handle or self.self_handle)
+        return out
+
+    def _load_thread(self, gid):
+        if not os.path.exists(self._thread_path(gid)):
+            return []
+        with open(self._thread_path(gid), encoding="utf-8") as f:
+            return [json.loads(ln) for ln in f if ln.strip()]
+
+    def unread_for(self, gid, handle):
+        msgs = self._load_thread(gid)
+        m = self._member(self._load_roster(gid), handle)
+        if not m:
+            return 0
+        if m["last_read_id"] is None:
+            return len(msgs)
+        idx = next((i for i, x in enumerate(msgs) if x["msg_id"] == m["last_read_id"]), -1)
+        return len(msgs) - (idx + 1)
+
+    def mark_read(self, gid, handle):
+        msgs = self._load_thread(gid)
+        last = msgs[-1]["msg_id"] if msgs else None
+        r = self._load_roster(gid)
+        for m in r["members"]:
+            if m["handle"] == handle:
+                m["last_read_id"] = last
+        self._save_roster(gid, r)
+
+    def check(self, handle=None):
+        """返回 handle 所在、有待读更新的组（默认 self_handle）。run 边界入口。"""
+        handle = handle or self.self_handle
+        out = []
+        gdir = os.path.join(self.base, "groups")
+        if os.path.isdir(gdir):
+            for gid in sorted(os.listdir(gdir)):
+                if self.unread_for(gid, handle) > 0:
+                    out.append({"gid": gid, "subject": self._load_roster(gid)["subject"],
+                                "unread_for_me": self.unread_for(gid, handle)})
+        return {"attention": bool(out), "groups": out}
+
+
+mailbox = MailBox()
+
+
 # --- Tool definitions: (description, schema, function) ---
 class ToolBase:
     name = ""
@@ -914,10 +1079,64 @@ class AttemptCompletionTool(ToolBase):
         return self.ok(args["result"])
 
 
+class MailBoxPostTool(ToolBase):
+    name = "mailbox_post"
+    description = "Post a message or record task progress to a group. " \
+                  "If gid doesn't exist it will be auto-created. Use @to to mention someone (auto-joins them). " \
+                  "Convention: subject='[State] <phase> | <progress>%' for checkpoint, free text for chat."
+    params = {"gid": {"type": "string", "description": "Group/task ID"},
+              "subject": {"type": "string", "description": "Message subject."},
+              "body": {"type": "string?", "description": "Detailed content."},
+              "to": {"type": "string?", "description": "@mention someone, e.g. '@human-pm'."},
+              "priority": {"type": "string?", "description": "'urgent' or 'normal' (default)."}}
+
+    def preview(self, args): return f"{args.get('gid','')} | {args.get('subject','')}"[:80]
+
+    def run(self, args):
+        msg = mailbox.post(gid=args["gid"], subject=args["subject"], body=args.get("body", ""),
+                           mentions=[args["to"]] if args.get("to") else None,
+                           priority=args.get("priority", "normal"))
+        return self.ok(f"[{msg['msg_id']}] posted to {args['gid']}")
+
+
+class MailBoxReadTool(ToolBase):
+    name = "mailbox_read"
+    description = "Read messages and member info from a group.Returns members overview + message history (newest last)."
+    params = {"gid": {"type": "string", "description": "Group/task ID"},
+              "depth": {"type": "string?", "description": "'summary'(default, last 10) or 'full'(entire thread)"},
+              "mark_read": {"type": "boolean?", "description": "Mark all as read for you (default false)."}}
+
+    def preview(self, args): return args.get("gid", "")[:80]
+
+    def run(self, args):
+        gid = args["gid"]
+        info = mailbox.group_info(gid)
+        msgs = mailbox.read(gid, depth=args.get("depth", "summary"), mark_read=args.get("mark_read", False))
+        header = f"Group: {gid}  |  {info['subject']}\nMembers: " + \
+                 ", ".join(f"{m['handle']}({m['kind']},{m['role']},unread={m['unread']})" for m in info["members"])
+        if not msgs:
+            return self.ok(header + "\n(no messages)")
+        lines = [f"[{m['ts']}] {m['from']}: {m['subject']}" for m in msgs]
+        return self.ok(header + f"\n─ {len(msgs)} messages ─\n" + "\n".join(lines))
+
+
+class MailBoxCheckTool(ToolBase):
+    name = "mailbox_check"
+    description = "Check all groups for unread messages. Returns which groups have updates waiting for you."
+    params = {}
+
+    def run(self, args):
+        r = mailbox.check()
+        if not r["attention"]:
+            return self.ok("(no unread updates)")
+        return self.ok("\n".join(f"{g['gid']}: {g['subject']} ({g['unread_for_me']} unread)" for g in r["groups"]))
+
+
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
+        WebSearchTool(), ViewImageTool(), AttemptCompletionTool(),
+        MailBoxPostTool(), MailBoxReadTool(), MailBoxCheckTool()]}
 
 
 def tool_schema():
@@ -1667,7 +1886,26 @@ def _emit_iter(n: int, max_iter: int, agent: str, phase: str = ""):
     _output_event({"type": "iter", "n": n, "max_iter": max_iter, "agent": agent, "phase": phase})
 
 
-def _design_prompt(iteration: int, max_iter: int, goal: str, research: str = "") -> str:
+def _mailbox_guidance(gid: str) -> str:
+    if not gid:
+        return ""
+    return (
+        f"\n\n## MailBox Collaboration (group: {gid})\n"
+        f"All agents in this pipeline share this group as collective memory.\n"
+        f"\n"
+        f"### Workflow\n"
+        f"1. **Start** — `mailbox_read` to review previous progress before acting\n"
+        f"2. **Claim** — `mailbox_post` to announce what you're about to do\n"
+        f"3. **Update** — `mailbox_post` at key milestones: decisions, blockers, [State] changes\n"
+        f"4. **Finish** — `mailbox_post` with `[Result]` to mark completion for the next agent\n"
+        f"\n"
+        f"### Tools\n"
+        f"- `mailbox_read` — read full thread\n"
+        f"- `mailbox_post` — record progress, decisions, [State] checkpoints\n")
+
+
+def _design_prompt(iteration: int, max_iter: int, goal: str, research: str = "",
+                   sparse: bool = False, gid: str = "") -> str:
     research_section = f"\nResearch summary:\n{research}\n" if research else ""
     return (
         f"[Design iter {iteration}/{max_iter}]\n"
@@ -1675,10 +1913,12 @@ def _design_prompt(iteration: int, max_iter: int, goal: str, research: str = "")
         f"You are the DESIGNER. Plan before coding.\n"
         f"1. Read relevant code (read/grep).\n"
         f"2. Plan your design.\n"
-        f"3. Call `attempt_completion` when done.\n")
+        f"3. Call `attempt_completion` when done.\n"
+        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _dev_prompt(iteration: int, max_iter: int, goal: str) -> str:
+def _dev_prompt(iteration: int, max_iter: int, goal: str,
+                sparse: bool = False, gid: str = "") -> str:
     return (
         f"[Dev iter {iteration}/{max_iter}]\n"
         f"GOAL: {goal}\n\n"
@@ -1688,10 +1928,11 @@ def _dev_prompt(iteration: int, max_iter: int, goal: str) -> str:
         f"3. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
         f"4. When calling edit/write, briefly explain WHY in your thinking.\n"
         f"5. Call `attempt_completion` tool when done.\n\n"
-        f"DO NOT run tests or verify your own code. That's the Reviewer and Tester's job.")
+        f"DO NOT run tests or verify your own code. That's the Reviewer and Tester's job.\n"
+        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _research_prompt(goal: str) -> str:
+def _research_prompt(goal: str, sparse: bool = False, gid: str = "") -> str:
     return (
         f"[Research]\n"
         f"GOAL: {goal}\n\n"
@@ -1702,10 +1943,12 @@ def _research_prompt(goal: str) -> str:
         f"   - Best practices and common patterns\n"
         f"   - Example implementations\n"
         f"3. Synthesize findings into a concise summary.\n"
-        f"4. Call `attempt_completion` to return the summary.")
+        f"4. Call `attempt_completion` to return the summary.\n"
+        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _review_prompt(iteration: int, goal: str, impl_files: str) -> str:
+def _review_prompt(iteration: int, goal: str, impl_files: str,
+                   sparse: bool = False, gid: str = "") -> str:
     return (
         f"[Review iter {iteration}]\n"
         f"GOAL: {goal}\n"
@@ -1717,10 +1960,12 @@ def _review_prompt(iteration: int, goal: str, impl_files: str) -> str:
         f"   - 'VERIFY: PASS' if the changes look reasonable\n"
         f"   - 'VERIFY: FAIL: <reason>' if you spot issues\n\n"
         f"Evaluate at architecture-level (module/flow, logic correctness),\n"
-        f"not function-level (naming, formatting).")
+        f"not function-level (naming, formatting).\n"
+        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _test_prompt(iteration: int, goal: str, impl_files: str) -> str:
+def _test_prompt(iteration: int, goal: str, impl_files: str,
+                 sparse: bool = False, gid: str = "") -> str:
     return (
         f"[Test iter {iteration}]\n"
         f"GOAL: {goal}\n"
@@ -1731,8 +1976,9 @@ def _test_prompt(iteration: int, goal: str, impl_files: str) -> str:
         f"3. Judge PASS/FAIL based on exit code (non-zero = FAIL).\n"
         f"4. Call `attempt_completion` with one line:\n"
         f"   - 'VERIFY: PASS'\n"
-        f"   - 'VERIFY: FAIL: <reason>'\n\n"
-        f"Explain at architecture-level (module/flow), not function-level.")
+        f"   - 'VERIFY: FAIL: <reason>'\n"
+        f"Explain at architecture-level (module/flow), not function-level.\n"
+        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
 def _updater_prompt(iteration: int, goal: str, verify_result: Optional[str]) -> str:  # Updater: 失败时 refine user prompt
@@ -1861,7 +2107,8 @@ class ResearchAgent(Step):
         r_ctx, r_file = _get_loop_ctx(ctx["task_dir"], "researcher")
         r_ctx.append_system(ctx["prompt_runtime"])
         return {"r_ctx": r_ctx, "r_file": r_file,
-                "prompt": _research_prompt(ctx["goal"])}
+                "prompt": _research_prompt(ctx["goal"],
+                                           sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
 
     def execute(self, data):
         agent_loop(data["r_ctx"], data["r_file"], data["prompt"])
@@ -1876,7 +2123,8 @@ class DesignAgent(Step):
     def prep(self, ctx):
         _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "plan")
         return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
-                "prompt": _design_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"], ctx.get("research", ""))}
+                "prompt": _design_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"], ctx.get("research", ""),
+                                         sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
 
     def execute(self, data):
         agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
@@ -1886,7 +2134,8 @@ class DevAgent(Step):
     def prep(self, ctx):
         _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "develop")
         return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
-                "prompt": _dev_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"])}
+                "prompt": _dev_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"],
+                                      sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
 
     def execute(self, data):
         agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
@@ -1903,7 +2152,8 @@ class ReviewAgent(Step):
         r_ctx, r_file = _get_loop_ctx(ctx["task_dir"], "reviewer")
         r_ctx.append_system(ctx["prompt_runtime"])
         return {"r_ctx": r_ctx, "r_file": r_file,
-                "prompt": _review_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"])}
+                "prompt": _review_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"],
+                                         sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
 
     def execute(self, data):
         agent_loop(data["r_ctx"], data["r_file"], data["prompt"])
@@ -1923,7 +2173,8 @@ class TestAgent(Step):
         t_ctx, t_file = _get_loop_ctx(ctx["task_dir"], "tester")
         t_ctx.append_system(ctx["prompt_runtime"])
         return {"t_ctx": t_ctx, "t_file": t_file,
-                "prompt": _test_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"])}
+                "prompt": _test_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"],
+                                       sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
 
     def execute(self, data):
         agent_loop(data["t_ctx"], data["t_file"], data["prompt"])
@@ -1996,17 +2247,24 @@ class IncrIter(Step):
 
 
 def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False,
-                dry_run: bool = False, fast: bool = False, wish: bool = False):
+                dry_run: bool = False, fast: bool = False, wish: bool = False,
+                only_dev: bool = False, sparse: str = ""):
     """Pipeline 版本 loop_engine。"""
     if task_id is None:
         task_id = uuid.uuid4().hex[:8]
+
+    if sparse:
+        mailbox.create_group(task_id, subject=goal)
 
     research = ResearchAgent() if wish and not fast else None
     dev, review, test = DevAgent(), ReviewAgent(), TestAgent()
     updater, push = UpdaterAgent(), PushAgent()
     incr, succeed = IncrIter(), SucceedStep()
 
-    if fast:
+    if only_dev:
+        start = dev
+        dev >> (push if is_push else succeed)
+    elif fast:
         start = dev
         dev >> test
         test - "pass" >> (push if is_push else succeed)
@@ -2048,7 +2306,8 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_
 
     shared = {
         "goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
-        "impl_ctx_file": impl_ctx_file, "prompt_runtime": prompt_text}
+        "impl_ctx_file": impl_ctx_file, "prompt_runtime": prompt_text,
+        "sparse": sparse, "gid": task_id}
 
     console._round = 1
     try:
@@ -2082,7 +2341,10 @@ def _parse_args(args=None):
     loop.add_argument("--push", action="store_true", help="Commit verified changes on PASS")
     loop.add_argument("--dry-run", action="store_true", help="Print pipeline topology and exit")
     loop.add_argument("--fast", action="store_true", help="Skip design/review, only dev → test → push")
+    loop.add_argument("--only-dev", action="store_true", help="Dev only: no test, no review, dev → push/succeed")
     loop.add_argument("--wish", action="store_true", help="Prepend research before normal pipeline")
+    loop.add_argument("--sparse", type=str, metavar="HANDLE",
+                      help="Sparse mode: collaborate via MailBox with this handle (e.g. @agent-a)")
     return parser.parse_args(args)
 
 
@@ -2098,8 +2360,12 @@ def main():
             console.error("MANGO_KEY env var is required for loop mode")
             sys.exit(1)
         console.mode = args.output
+        if args.sparse:
+            global mailbox
+            mailbox = MailBox(self_handle=args.sparse)
         success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id,
-                             is_push=args.push, dry_run=args.dry_run, fast=args.fast, wish=args.wish)
+                              is_push=args.push, dry_run=args.dry_run, fast=args.fast, wish=args.wish,
+                              only_dev=args.only_dev, sparse=args.sparse)
         sys.exit(0 if success else 1)
 
     global provider

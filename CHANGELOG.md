@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.40] - 2026-07-24
+
+### Added
+- **MailBox** — file-based async messaging system for long-running sparse tasks, multi-agent coordination, and human-in-the-loop collaboration
+- **Mailbox tools** — `mailbox_post`, `mailbox_read`, `mailbox_check` (3 tools, zero deps)
+- **Sparse Loop (`--sparse HANDLE`)** — extends `loop_engine` with MailBox collective memory; agents share a persistent group thread across sessions; same `--task-id` resumes history across days
+- **`--only-dev` mode** — `loop_engine` pipeline: DevAgent → Push/Succeed, no test/review
+- **Prompt injection** — `_mailbox_guidance()` appended to all agent prompts when `--sparse` is set; agents follow: Start → `mailbox_read`, Claim → `mailbox_post`, Update → `mailbox_post [State]`, Finish → `mailbox_post [Result]`
+
+### Changed
+- **`loop_engine`** — accepts `sparse` and `only_dev` parameters; injects `gid`/`sparse` into shared ctx
+- **`_dev_prompt`, `_design_prompt`, `_review_prompt`, `_test_prompt`, `_research_prompt`** — accept `sparse`, `gid` params for conditional guidance
+- **README / ROADMAP / index.html** — document Sparse Loop and MailBox features
+- **`test/test_mailbox.py`** — 39 tests covering MailBox class and 3 mailbox tools
+
+---
+
 ## [0.1.39] - 2026-07-15
 
 ### Fixed

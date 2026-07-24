@@ -235,15 +235,15 @@ Every new feature follows these rules, in order of priority:
 
 
 
-### 6. Loop Engineering (3-Agent Pipeline)
+### 6. Loop Engineering
 
 **Status:** 🟢 Done (Experimental Feature)
 
-**Problem:** Goal-mode execution was a flat state machine (plan → step → finish) with no built-in verification or self-correction. The agent could mark steps "done" without ever running tests, leading to silently broken deliverables.
+**Problem:** Goal-mode execution was a flat state machine (plan → step → finish) with no built-in verification or self-correction. The agent could mark steps "done" without ever running tests, leading to silently broken deliverables. Additionally, agents have no cross-session memory — a task spanning days or weeks loses all context between invocations.
 
 **Approach:**
 
-- **`loop_engine(goal, max_iter, fast, wish, dry_run)`** — a configurable Step/Pipeline replacing the legacy 3-agent loop:
+- **`loop_engine(goal, max_iter, fast, wish, dry_run, sparse)`** — a configurable Step/Pipeline:
   - **DesignAgent** — reads code, plans the design (shared `impl_ctx` with DevAgent)
   - **DevAgent** — implements progressively, extracts changed files for downstream agents
   - **ReviewAgent** — independent ctx, inspects git diff, returns `VERIFY: PASS/FAIL`
@@ -253,12 +253,19 @@ Every new feature follows these rules, in order of priority:
 - Built-in modes:
   - **Normal**: `DesignAgent → DevAgent → ReviewAgent → TestAgent → SucceedStep / UpdaterAgent`
   - **`--fast`**: `DevAgent → TestAgent → PushAgent / UpdaterAgent` (skip design/review)
+  - **`--only-dev`**: `DevAgent → PushAgent / SucceedStep` (no test, no review)
   - **`--wish`**: prepend `ResearchAgent →` before normal pipeline
   - **`--dry-run`**: print pipeline topology and exit without executing
+  - **`--sparse HANDLE`**: inject MailBox collective memory into all agent prompts; task history persisted across separate `loop` invocations via shared MailBox group (`gid = task-id`)
 - Session files stored under `.mangocli/loops/<task_id>/` (persisted for resume).
 - CLI entry point: `/loop <goal>` (deprecates `/goal`).
 - Default 5 iterations; the loop short-circuits on first `VERIFY: PASS`.
 - All agents use `attempt_completion` to return structured results (`VERIFY: PASS/FAIL`).
+- **Sparse mode** (`--sparse @agent-a`):
+  - Each task maps to a MailBox group; all pipeline agents read/write the same thread
+  - Prompt guidance (`_mailbox_guidance`) tells agents: Start → `mailbox_read`, Claim → `mailbox_post`, Update → `mailbox_post` milestones, Finish → `mailbox_post [Result]`
+  - Same `--task-id` across separate days → agents inherit full history via MailBox
+  - No new Agent classes — existing pipeline reused; only prompt suffix differs
 
 **Design rationale:**
 
@@ -266,8 +273,9 @@ Every new feature follows these rules, in order of priority:
 - **No self-grading**: the DevAgent cannot mark its own work as done — an independent TestAgent must confirm.
 - **Feedback loop**: the UpdaterAgent ensures each retry is informed by concrete failure analysis, not blind retry.
 - **Persistent sessions**: task files are preserved under `.mangocli/loops/<task_id>/` for future resume.
+- **Collective memory**: sparse mode adds cross-session persistence — agents coordinate via MailBox thread, not just in-memory shared dict.
 
-**Why it fits the philosophy:** Reuses existing `agent_loop` + `ContextManager`. The whole pipeline is orchestrated by a ~50-line Step/Pipeline framework. No new dependencies.
+**Why it fits the philosophy:** Reuses existing `agent_loop` + `ContextManager`. The whole pipeline is orchestrated by a ~50-line Step/Pipeline framework. Sparse mode reuses the existing `MailBox` class and `ToolBase` — zero new dependencies. The `--sparse` flag is a one-line argparse addition.
 
 **Acceptance criteria:**
 
@@ -278,6 +286,9 @@ Every new feature follows these rules, in order of priority:
 - [x] `--dry-run` prints topology and exits
 - [x] Loop session files are preserved for resume
 - [x] `/goal` shows deprecation warning pointing to `/loop`
+- [x] `loop --sparse @agent-a` injects MailBox guidance into all agent prompts
+- [x] Same `--task-id` across separate invocations restores task history via MailBox
+- [x] Non-sparse `loop` is completely unaffected
 
 ---
 
@@ -449,4 +460,4 @@ Apache License 2.0 · this ROADMAP document shares the codebase license.
 
 ---
 
-Last updated: 2026-06-29
+Last updated: 2026-07-24
