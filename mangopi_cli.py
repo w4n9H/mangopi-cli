@@ -29,7 +29,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.40"
+__version__ = "0.1.41"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -42,6 +42,7 @@ MANGO_MAX_ITER = int(os.environ.get("MANGO_MAX_ITER", 100))
 LANGUAGE = os.environ.get("MANGO_LANG", "en").lower()
 MANGO_ROUTING = os.environ.get("MANGO_ROUTING", "off").lower()
 MANGO_YOLO = os.environ.get("MANGO_YOLO", "").lower() in ("1", "true", "yes")
+MANGO_TRACE = os.environ.get("MANGO_TRACE", "off").lower() in ("1", "true", "yes", "on")
 
 
 project_root = os.getcwd()
@@ -49,6 +50,7 @@ base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
 loops_dir = os.path.join(base_persist_dir, "loops")
 providers_file = os.path.join(base_persist_dir, "providers.json")
+traces_dir = os.path.join(base_persist_dir, "traces")
 mailbox_basic = os.path.expanduser("~/.mangocli/mail")
 
 # ANSI colors
@@ -78,8 +80,7 @@ I18N = {
     "safety.danger.sudo":            {"zh": "提权操作",         "en": "Privilege escalation"},
     "safety.danger.kill":            {"zh": "危险进程操作",     "en": "Dangerous process operation"},
     "safety.danger.env":             {"zh": "环境变量或系统配置修改", "en": "Environment or system config change"},
-    "safety.danger.history":         {"zh": "清理历史/日志",    "en": "History/log clearing"},
-}
+    "safety.danger.history":         {"zh": "清理历史/日志",    "en": "History/log clearing"}}
 
 HELP_COMMANDS = {
     "/q or /quit":          {"zh": "退出程序", "en": "Quit"},
@@ -88,8 +89,7 @@ HELP_COMMANDS = {
     "/h or /help":          {"zh": "显示本帮助信息", "en": "Show this help info"},
     "/g or /goal":          {"zh": "[已废弃] GoalTool 在 v0.1.31 移除，请用 /loop",
                              "en": "[deprecated] GoalTool removed in v0.1.31; use /loop"},
-    "/l or /loop":          {"zh": "启动循环工程完成你的目标", "en": "Start Loop Engineering to complete your goal"},
-}
+    "/l or /loop":          {"zh": "启动循环工程完成你的目标", "en": "Start Loop Engineering to complete your goal"}}
 
 
 def _c(text, color): return f"{color}{text}{RESET}"
@@ -281,6 +281,7 @@ def _output_event(d: dict) -> None:
 def initialize_system():
     os.makedirs(session_dir, exist_ok=True)  # auto create .mangocli
     os.makedirs(loops_dir, exist_ok=True)
+    os.makedirs(traces_dir, exist_ok=True)
 
 
 def doctor():
@@ -1153,6 +1154,8 @@ COMPACT_RULES = {
 class ContextManager:
     def __init__(self):
         self.messages: List[Dict] = []
+        self.trace_list: List[Dict] = []
+        self.trace_meta: Dict = {}
         self.white_tool_list = ["attempt_completion"]
         self.auto_compact_threshold = int(MANGO_MAX_CONTEXT * 0.8)
         self.auto_compact_disabled = False
@@ -1172,6 +1175,18 @@ class ContextManager:
     def inject_user(self, content: str): self.runtime_injections.append({"role": "user", "content": content})
 
     def clear_runtime_injections(self): self.runtime_injections = []
+
+    def append_trace(self, kind, **fields):
+        MANGO_TRACE and self.trace_list.append({"ts": int(time.time() * 1000), "kind": kind, **fields})
+
+    def save_trace(self):
+        if not MANGO_TRACE or not self.trace_list:
+            return
+        fname = f"run_{self.trace_meta.get('mode','x')}_{int(time.time())}_{uuid.uuid4().hex[:6]}.json"
+        with open(os.path.join(traces_dir, fname), "w", encoding="utf-8") as f:
+            f.write(json.dumps(self.trace_list, indent=2, ensure_ascii=False))
+        self.trace_list.clear()
+        self.trace_meta.clear()
 
     def append_assistant(self, content: dict):
         content.update({"ts": int(time.time())})
@@ -1431,6 +1446,7 @@ class ContextManager:
         if before > after:  # Compatible with Python 3.6+
             console.compact_status(
                 before_tokens=before, after_tokens=after, max_context=MANGO_MAX_CONTEXT, strategy="auto")
+            self.append_trace("compact", tokens_before=before, tokens_after=after, saved=before - after)
         return self.messages + self.runtime_injections
 
 
@@ -1712,13 +1728,13 @@ def chat_completion(messages: List[Dict[str, str]]):
     return _request(provider.api_url, provider.build_body(messages), headers=provider.headers())
 
 
-def run_tool(tool_name, tool_args):
+def run_tool(tool_name, tool_args) -> dict:
     tool: ToolBase = TOOLS[tool_name]
     try:
         console.tool_call(tool.name, tool.preview(tool_args))
         tool.before(tool_args)
         if not tool.confirm(tool_args):
-            return "error: User denied action"
+            return {"success": False, "content": "error: User denied action"}
         if tool.use_spinner:
             console.start_spinner()
         result = tool.run(tool_args)
@@ -1753,10 +1769,10 @@ def run_tool(tool_name, tool_args):
                     console.tool_display(f"     {DIM}{line}{RESET}")
 
         console.tool_result(tool.name, ok=tool_status, snippet=display_str[:200])
-        return tool_content
+        return result
     except Exception as err:
         console.end_spinner()
-        return f"run tool {tool_name} error: {err}"
+        return {"success": False, "content": f"run tool {tool_name} error: {err}"}
 
 
 class SystemPrompt:
@@ -1841,7 +1857,11 @@ class SystemPrompt:
 
 
 def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
+    agent_mode = 'loop' if "/loops/" in ctx_file_path else 'chat'
+    ctx.trace_meta.update(session_file=ctx_file_path, goal=user_input, mode=f"{agent_mode}")
+
     ctx.append_user(user_input)
+    ctx.append_trace("user_input", mode=agent_mode, goal=user_input, length=len(user_input), session_file=ctx_file_path)
 
     iteration = 0
     while True:
@@ -1856,6 +1876,14 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
             output_tokens=response["usage"]["completion_tokens"], context_tokens=ctx.total_tokens(),
             max_context=MANGO_MAX_CONTEXT)
 
+        ctx.append_trace("assistant", round=iteration, finish_reason=response.get("finish_reason", ""),
+                         has_tool_calls=response["has_tool_calls"], tool_calls_count=len(response["tool_calls"]),
+                         has_reasoning=bool(response["reasoning_content"]),
+                         reasoning_len=len(response["reasoning_content"]),
+                         content_len=len(response["content"]), model=response["model"],
+                         prompt_tokens=(response.get("usage") or {}).get("prompt_tokens"),
+                         completion_tokens=(response.get("usage") or {}).get("completion_tokens"))
+
         if response["reasoning_content"]:
             console.thinking(response["reasoning_content"])
         if (response["content"] and
@@ -1868,8 +1896,11 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
             completed = False
             for tool in response["tool_calls"]:
                 tool_name, tool_args = tool["name"], tool["arguments"]
+                ctx.append_trace("tool_call", name=tool_name, args_preview=str(tool_args)[:150])
                 result = run_tool(tool_name, tool_args)
-                ctx.append_tool(tool["id"], tool_name, result)
+                ctx.append_tool(tool["id"], tool_name, result["content"])
+                ctx.append_trace("tool_result", name=tool_name, success=result["success"],
+                                 content_size=len(result["content"]))
                 if tool_name == "attempt_completion":
                     completed = True
                     break  # 遇到完成工具就退出当前轮工具调用
@@ -1880,6 +1911,9 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
         if iteration >= MANGO_MAX_ITER:
             break
     ctx.save(ctx_file_path)
+    if MANGO_TRACE and ctx.trace_list:  # ── trace: close ──
+        ctx.append_trace("end", total_rounds=iteration)
+        ctx.save_trace()
 
 
 def _emit_iter(n: int, max_iter: int, agent: str, phase: str = ""):

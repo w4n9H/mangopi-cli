@@ -11,7 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.1.41] - 2026-07-29
+
+### Added
+- **Call Trace System** — `MANGO_TRACE=on` enables structured trace capture; per-run JSON event files written to `.mangocli/traces/run_*.json`
+- **Trace events** — 6 event types (`user_input`, `assistant`, `tool_call`, `tool_result`, `compact`, `end`) captured at hook points in `agent_loop()` and `ContextManager`
+- **`eval/eval_analyzer.py`** — offline analyzer that reads trace files and produces aggregate/per-run reports (table or JSON)
+- **Compact event tracking** — compression logged to trace when context reduction occurs (`prepare_for_api`)
+
+### Changed
+- **`run_tool()` return type** — unified to always return `{"success": bool, "content": ...}` instead of mixed string/dict; updated consumer in `agent_loop()` and 3 `test_view_image` tests accordingly
 
 ---
 

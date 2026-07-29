@@ -359,8 +359,11 @@ class TestRunToolDisplayForImage(unittest.TestCase):
              mock.patch.object(console, "start_spinner"), \
              mock.patch.object(console, "end_spinner"), \
              mock.patch("builtins.print"):
-            content = m.run_tool("view_image", {"path": path})
-        # Returned content should be a dict (multimodal payload)
+            result = m.run_tool("view_image", {"path": path})
+        # run_tool now returns {"success": True, "content": {...}}
+        self.assertIsInstance(result, dict)
+        self.assertTrue(result["success"])
+        content = result["content"]
         self.assertIsInstance(content, dict)
         self.assertEqual(content["type"], "image")
         self.assertTrue(content["image_url"].startswith("data:image/png;base64,"))
@@ -371,10 +374,11 @@ class TestRunToolDisplayForImage(unittest.TestCase):
              mock.patch.object(console, "start_spinner"), \
              mock.patch.object(console, "end_spinner"), \
              mock.patch("builtins.print"):
-            content = m.run_tool("view_image", {"path": "https://example.com/x.png"})
-        # URL input → tool fails → run_tool returns a string error message
-        self.assertIsInstance(content, str)
-        self.assertIn("URL inputs are not supported", content)
+            result = m.run_tool("view_image", {"path": "https://example.com/x.png"})
+        # run_tool always returns dict with success/content keys
+        self.assertIsInstance(result, dict)
+        self.assertFalse(result["success"])
+        self.assertIn("URL inputs are not supported", result["content"])
 
     def test_run_view_image_invalid_path(self):
         # Path outside project root → validator rejects
@@ -384,10 +388,11 @@ class TestRunToolDisplayForImage(unittest.TestCase):
              mock.patch.object(console, "start_spinner"), \
              mock.patch.object(console, "end_spinner"), \
              mock.patch("builtins.print"):
-            content = m.run_tool("view_image", {"path": "/etc/passwd.png"})
-        # When tool fails, content is a string error
-        self.assertIsInstance(content, str)
-        self.assertIn("outside project root", content)
+            result = m.run_tool("view_image", {"path": "/etc/passwd.png"})
+        # run_tool always returns dict with success/content keys
+        self.assertIsInstance(result, dict)
+        self.assertFalse(result["success"])
+        self.assertIn("outside project root", result["content"])
 
 
 class TestToolSchemaIncludesViewImage(unittest.TestCase):
