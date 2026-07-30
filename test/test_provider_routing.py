@@ -68,27 +68,64 @@ class KeywordScoreTests(unittest.TestCase):
         self.assertEqual(RoutedProvider._keyword_score("系统设计 for microservice"), 9)
 
     def test_medium_high_keywords(self):
-        self.assertEqual(RoutedProvider._keyword_score("refactor the auth module"), 9)
-        self.assertEqual(RoutedProvider._keyword_score("migrate to new API"), 9)
+        self.assertEqual(RoutedProvider._keyword_score("refactor the auth module"), 8)
+        self.assertEqual(RoutedProvider._keyword_score("migrate to new API"), 8)
 
     def test_medium_low_keywords(self):
         self.assertEqual(RoutedProvider._keyword_score("implement a new feature"), 5)
         self.assertEqual(RoutedProvider._keyword_score("integrate with external API"), 5)
+        self.assertEqual(RoutedProvider._keyword_score("update config"), 5)
 
     def test_low_keywords(self):
         self.assertEqual(RoutedProvider._keyword_score("fix the login bug"), 3)
-        self.assertEqual(RoutedProvider._keyword_score("add test for utils"), 3)
+        self.assertEqual(RoutedProvider._keyword_score("修复编译错误"), 3)
 
     def test_trivial_keywords(self):
         self.assertEqual(RoutedProvider._keyword_score("read main.py"), 1)
         self.assertEqual(RoutedProvider._keyword_score("explain decorator"), 1)
-        self.assertEqual(RoutedProvider._keyword_score("update config"), 3)
+        self.assertEqual(RoutedProvider._keyword_score("show the content"), 1)
 
     def test_case_insensitive(self):
         self.assertEqual(RoutedProvider._keyword_score("DESIGN a System"), 9)
 
     def test_no_match_returns_default(self):
         self.assertEqual(RoutedProvider._keyword_score("blah blah blah"), 4)
+
+
+class MultiFrameworkAggregationTests(unittest.TestCase):
+    """多框架命中时聚合加权评分（以中文 query 为主）."""
+
+    def test_single_framework_explain(self):
+        """单框架：仅命中 explain → 1 分"""
+        self.assertEqual(RoutedProvider._keyword_score("列举目录结构"), 1)
+
+    def test_single_framework_design(self):
+        """单框架：仅命中 design → 9 分"""
+        self.assertEqual(RoutedProvider._keyword_score("重构整个系统的架构设计"), 9)
+
+    def test_dual_framework_debug_explain(self):
+        """双框架：explain + debug → 加权 3 分"""
+        score = RoutedProvider._keyword_score("解释一下这个 bug 并修复它")
+        self.assertEqual(score, 3)
+
+    def test_triple_framework(self):
+        """三框架：optimize + implement + design → 加权 8 分"""
+        score = RoutedProvider._keyword_score("优化接口性能并重构数据库")
+        self.assertEqual(score, 8)
+
+    def test_quad_framework(self):
+        """四框架：debug + design + optimize + implement → 加权 8 分"""
+        score = RoutedProvider._keyword_score("修复 bug，重构设计，优化性能，实现新功能")
+        self.assertEqual(score, 8)
+
+    def test_design_implement_blend(self):
+        """双框架：design + implement → 加权 8 分"""
+        self.assertEqual(RoutedProvider._keyword_score("设计并实现一个新模块"), 8)
+
+    def test_english_still_works(self):
+        """英文 query 保持正常"""
+        self.assertEqual(RoutedProvider._keyword_score("just a read query"), 1)
+        self.assertEqual(RoutedProvider._keyword_score("design and implement a new module"), 8)
 
 
 class RoutedProviderInitTests(unittest.TestCase):

@@ -29,7 +29,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.41"
+__version__ = "0.1.42"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -507,48 +507,45 @@ skill_manager = SkillManager()
 class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 tool call 模式选择和注入结构化思考框架。
     KEYWORDS = {"debug": ["报错", "bug", "error", "失败", "fail", "慢", "slow", "崩溃", "crash", "排查", "debug",
                           "修复", "fix", "test", "修改", "modif", "update", "chang", "issue", "adjust",
-                          "patch", "correct", "错误", "问题", "调整", "更正", "改动", "alter"],
+                          "patch", "correct", "错误", "问题", "调整", "更正", "改动", "alter",
+                          "调试", "debugging", "异常", "exception", "日志", "log", "logging",
+                          "堆栈", "stack", "trace", "broken", "挂起", "hang", "leak",
+                          "undefined", "null", "复现", "reproduc"],
                 "design": ["设计", "design", "架构", "architect", "选型", "规划",
                            "distribut", "microservic", "scalab", "infrastructur",
                            "overall", "可扩展", "高可用", "容灾", "分布式", "framework", "platform",
                            "重构", "refactor", "migrat", "死锁", "deadlock", "并发", "concurren",
-                           "async", "multithread", "异步", "迁移"],
+                           "async", "multithread", "异步", "迁移",
+                           "模式", "pattern", "抽象", "abstraction", "模块化", "modular",
+                           "分层", "layered", "安全", "security", "灵活", "flexib", "可靠", "reliab"],
                 "explain": ["什么是", "解释", "explain", "区别", "原理", "怎么理解", "what is",
                             "read", "查看", "show", "find", "search", "搜索", "查询", "query",
-                            "display", "获取", "了解", "描述", "describe"],
-                "optimize": ["优化", "optimize", "性能", "performance", "加速", "提升"],
+                            "display", "获取", "了解", "描述", "describe",
+                            "文档", "doc", "document", "注释", "comment",
+                            "概述", "overview", "总结", "summar",
+                            "对比", "compar", "列举", "list", "分析", "analy"],
+                "optimize": ["优化", "optimize", "性能", "performance", "加速", "提升",
+                             "延迟", "latency", "吞吐", "throughput", "响应", "respons",
+                             "内存", "memory", "磁盘", "disk", "缓存", "cache", "索引", "index", "瓶颈", "bottleneck",
+                             "profile", "profiling", "benchmark", "压缩", "compress", "减少", "reduc",
+                             "预加载", "preload", "懒加载", "lazy", "连接池", "调用量", "负载", "load"],
                 "implement": ["实现", "implement", "写", "create", "build", "开发", "生成",
                               "integrat", "multi", "feature", "api", "interfac", "modul",
-                              "component", "databas", "config", "集成", "接口", "模块", "组件", "数据库", "存储", "stor"]}
-
-    PHASES = {
-        "exploring": lambda tools: tools and all(t in ("read", "grep", "search") for t in tools),
-        "executing": lambda tools: tools and any(t in ("edit", "write") for t in tools),
-        "verifying": lambda tools: tools and sum(1 for t in tools if t == "bash") >= 2}
-
-    PHASE_MAP = {"exploring": "investigate", "executing": "implement", "verifying": "verify", "stuck": "reevaluate"}
+                              "component", "databas", "config", "集成", "接口", "模块", "组件", "数据库", "存储", "stor",
+                              "编写", "write", "添加", "add", "函数", "function", "class", "初始化", "init",
+                              "部署", "deploy", "继承", "extend", "导入", "import", "配置", "configure",
+                              "模板", "template", "注册", "register"]}
 
     def __init__(self):
-        self.frameworks = {
-            "debug": [],
-            "design": [],
-            "explain": [],
-            "optimize": [],
-            "implement": [],
-            "investigate": [],
-            "verify": [],
-            "reevaluate": []}
+        self.frameworks = {}
 
-    def match(self, query, tool_pattern=None):  # 匹配思考框架：query 关键词 + tool pattern 阶段感知
+    def match(self, query):  # 返回所有命中的 framework 名称（去重），用于综合评分
         q = query.lower()
-        if tool_pattern:  # 1. tool pattern 阶段框架（优先，更实时）
-            for phase, test in self.PHASES.items():
-                if test(tool_pattern):
-                    return self.PHASE_MAP[phase]
-        for fw, keywords in self.KEYWORDS.items():  # 2. query 关键词匹配
+        matched = []
+        for fw, keywords in self.KEYWORDS.items():
             if any(kw in q for kw in keywords):
-                return fw
-        return None
+                matched.append(fw)
+        return matched
 
 
 flash_thinking = FlashThinking()
@@ -1642,11 +1639,7 @@ class RoutedProvider:  # A provider that scores task complexity and delegates to
         "fuck", "fuxx", "f**k", "shit", "damn", "asshole", "bastard", "傻子", "笨蛋", "蠢货", "白痴", "脑残", "sb", "废物",
         "垃圾", "特么", "卧槽", "我操", "cnm", "tmd", "废物", "傻x"]
 
-    _FRAMEWORK_SCORE: Dict[str, int] = {
-        "design": 9, "reevaluate": 8,
-        "implement": 5, "optimize": 5,
-        "debug": 3, "investigate": 3, "verify": 3, "explain": 1,
-    }
+    _FRAMEWORK_SCORE: Dict[str, int] = {"design": 9, "implement": 5, "optimize": 5, "debug": 3, "explain": 1}
 
     _SCORING_PROMPT = """\
 Rate this coding task complexity from 1-10 (1=trivial, 10=architectural/system design).
@@ -1668,8 +1661,13 @@ Respond with ONLY a single integer."""
         for kw in RoutedProvider._FRAMEWORK_ANGER:
             if kw in q:
                 return 10
-        fw = flash_thinking.match(query)
-        return RoutedProvider._FRAMEWORK_SCORE.get(fw, 4)
+        matched = flash_thinking.match(query)
+        if not matched:
+            return 4
+        scores = [RoutedProvider._FRAMEWORK_SCORE.get(fw, 0) for fw in matched]
+        max_s = max(scores)  # 综合加权: max(70%) 反映复杂度天花板, avg(30%) 反映多维度密度
+        avg_s = sum(scores) / len(scores)
+        return max(1, min(10, round(max_s * 0.7 + avg_s * 0.3)))
 
     @staticmethod
     def _llm_score(user_query: str, fingerprint: str, high_provider) -> int:

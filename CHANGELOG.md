@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.42] - 2026-07-30
+
+### Added
+- **Multi-hit keyword aggregation** — `_keyword_score()` now collects all matched frameworks and computes a weighted score (`max×70% + avg×30%`) instead of returning on first hit; multi-framework queries (e.g. "优化 bug 并重构 design") now correctly score higher
+- **FlashThinking.KEYWORDS expansion** — ~63 new keywords across all 5 frameworks (debug +12, design +8, explain +10, optimize +20, implement +13); greatly reduces cold-miss rate for common coding scenarios
+
+### Changed
+- **`FlashThinking.match( )`** — removed unused `tool_pattern` parameter and phase-detection logic (`PHASES`, `PHASE_MAP`); simplified `self.frameworks` initialisation; added `match_all( )` helper
+- **`RoutedProvider._FRAMEWORK_SCORE`** — stripped unreferenced frameworks (`reevaluate`, `investigate`, `verify`)
+- **3 test expectations** updated for improved scoring accuracy; **7 new Chinese-first multi-framework tests** added
+
+---
+
 ## [0.1.41] - 2026-07-29
 
 ### Added
