@@ -15,7 +15,7 @@ import urllib.request
 import glob as globlib
 import platform
 import base64
-import logging
+import shutil
 import mimetypes
 import argparse
 import uuid
@@ -29,7 +29,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.42"
+__version__ = "0.1.43"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -53,10 +53,27 @@ providers_file = os.path.join(base_persist_dir, "providers.json")
 traces_dir = os.path.join(base_persist_dir, "traces")
 mailbox_basic = os.path.expanduser("~/.mangocli/mail")
 
-# ANSI colors
-RESET, BOLD, SOFT, DIM = "\033[0m", "\033[1m", "\033[37m", "\033[2m"
-BLUE, CYAN, GREEN, YELLOW, RED, GREY, ORANGE = (
-    "\033[34m", "\033[36m", "\033[32m", "\033[33m", "\033[31m", "\033[90m", "\033[38;2;245;78;0m")
+# --- Catppuccin Mocha palette (24-bit, active roles only) ---
+MOCHA = {  # Ghostty theme: Catppuccin Mocha. https://github.com/catppuccin/catppuccin
+    "blue": "#89b4fa", "sky": "#89dceb", "green": "#a6e3a1", "yellow": "#f9e2af",
+    "red": "#f38ba8", "subtext0": "#a6adc8", "mauve": "#cba6f7", "text": "#cdd6f4"}
+
+
+def _fg(hex_color: str) -> str:  # '#rrggbb' -> ANSI 24-bit foreground escape (\033[38;2;r;g;bm).
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+# ANSI attributes (kept as-is; colors below are role-mapped to Catppuccin Mocha)
+RESET, BOLD, DIM = "\033[0m", "\033[1m", "\033[2m"
+BLUE = _fg(MOCHA["blue"])      # interactive input prompt (❯)
+CYAN = _fg(MOCHA["sky"])       # tool names, diff @@ headers
+GREEN = _fg(MOCHA["green"])    # success / ok / diff additions
+YELLOW = _fg(MOCHA["yellow"])  # warnings / mid-thresholds
+RED = _fg(MOCHA["red"])        # errors / diff deletions
+GREY = _fg(MOCHA["subtext0"])  # secondary & thinking text
+ACCENT = _fg(MOCHA["mauve"])   # section titles, spinner, strategy
+SOFT = _fg(MOCHA["text"])      # LLM final output text
 
 
 # --- i18n dict (zh, en)---
@@ -127,13 +144,13 @@ class Printer:
                 self._render_spinner_frame()
 
     def _render_spinner_frame(self, frame: str = "⠋"):
-        text = f"{_c(frame, ORANGE)} {_c(self._spinner_message, ORANGE)}"
+        text = f"{_c(frame, ACCENT)} {_c(self._spinner_message, ACCENT)}"
         sys.stdout.write("\r" + text)
         sys.stdout.flush()
 
     def section(self, title):
         self._write_line()
-        self._write_line(_c(f"• {title}", ORANGE))
+        self._write_line(_c(f"• {title}", ACCENT))
 
     def tool_call(self, name: str, desc: str):
         if self.mode == "jsonl":
@@ -162,7 +179,7 @@ class Printer:
     def text(self, msg: str): self._write_line(_c(msg, GREY))
 
     def separator(self):
-        self._write_line(f"{DIM}{'─' * min(os.get_terminal_size().columns, 80)}{RESET}")
+        self._write_line(f"{DIM}{'─' * min(shutil.get_terminal_size().columns, 80)}{RESET}")
 
     def thinking(self, content: str):
         if self.mode == "jsonl":
@@ -204,10 +221,10 @@ class Printer:
         color = GREEN if percent < 50 else YELLOW if percent < 70 else RED
 
         self.section(_i18n("context.compact"))
-        self._write_line(f"  {_c(_i18n('context.compact.strategy'), GREY)} {_c(strategy, ORANGE)}")
+        self._write_line(f"  {_c(_i18n('context.compact.strategy'), GREY)} {_c(strategy, ACCENT)}")
         self._write_line(
             f"  {_c('tokens', GREY)} {_c(f'{before_tokens:,}', RED)} {_c('→', GREY)} "
-            f"{_c(f'{after_tokens:,}', GREEN)} {_c(f'(-{saved:,})', ORANGE)}")
+            f"{_c(f'{after_tokens:,}', GREEN)} {_c(f'(-{saved:,})', ACCENT)}")
         self._write_line(f"  {_c('context', GREY)} {_c(f'{percent}%', color)}")
 
     @staticmethod
@@ -1936,12 +1953,13 @@ def _mailbox_guidance(gid: str) -> str:
         f"- `mailbox_post` — record progress, decisions, [State] checkpoints\n")
 
 
-def _design_prompt(iteration: int, max_iter: int, goal: str, research: str = "",
-                   sparse: bool = False, gid: str = "") -> str:
+def _design_prompt(ctx) -> str:
+    research = ctx.get("research", "")
     research_section = f"\nResearch summary:\n{research}\n" if research else ""
+    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
-        f"[Design iter {iteration}/{max_iter}]\n"
-        f"GOAL: {goal}{research_section}\n"
+        f"[Design iter {ctx['iteration']}/{ctx['max_iter']}]\n"
+        f"GOAL: {ctx['goal']}{research_section}\n"
         f"You are the DESIGNER. Plan before coding.\n"
         f"1. Read relevant code (read/grep).\n"
         f"2. Plan your design.\n"
@@ -1949,11 +1967,11 @@ def _design_prompt(iteration: int, max_iter: int, goal: str, research: str = "",
         f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _dev_prompt(iteration: int, max_iter: int, goal: str,
-                sparse: bool = False, gid: str = "") -> str:
+def _dev_prompt(ctx) -> str:
+    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
-        f"[Dev iter {iteration}/{max_iter}]\n"
-        f"GOAL: {goal}\n\n"
+        f"[Dev iter {ctx['iteration']}/{ctx['max_iter']}]\n"
+        f"GOAL: {ctx['goal']}\n\n"
         f"You are the DEVELOPER. Implement the plan.\n"
         f"1. Implement progressively: smallest working change first.\n"
         f"2. Self-review: read back your changes, verify no logic errors.\n"
@@ -1964,10 +1982,11 @@ def _dev_prompt(iteration: int, max_iter: int, goal: str,
         f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _research_prompt(goal: str, sparse: bool = False, gid: str = "") -> str:
+def _research_prompt(ctx) -> str:
+    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
         f"[Research]\n"
-        f"GOAL: {goal}\n\n"
+        f"GOAL: {ctx['goal']}\n\n"
         f"You are a RESEARCHER. Gather information before implementation.\n"
         f"1. Break the goal into 2-3 research questions.\n"
         f"2. Use `web_search` for each question to find:\n"
@@ -1979,12 +1998,12 @@ def _research_prompt(goal: str, sparse: bool = False, gid: str = "") -> str:
         f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _review_prompt(iteration: int, goal: str, impl_files: str,
-                   sparse: bool = False, gid: str = "") -> str:
+def _review_prompt(ctx) -> str:
+    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
-        f"[Review iter {iteration}]\n"
-        f"GOAL: {goal}\n"
-        f"Files changed: \n{impl_files}\n\n"
+        f"[Review iter {ctx['iteration']}]\n"
+        f"GOAL: {ctx['goal']}\n"
+        f"Files changed: \n{ctx['impl_files']}\n\n"
         f"You are a REVIEWER. Inspect the changes.\n"
         f"1. Use `git diff` to see what changed.\n"
         f"2. Read individual files as needed (`read` tool).\n"
@@ -1996,12 +2015,12 @@ def _review_prompt(iteration: int, goal: str, impl_files: str,
         f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _test_prompt(iteration: int, goal: str, impl_files: str,
-                 sparse: bool = False, gid: str = "") -> str:
+def _test_prompt(ctx) -> str:
+    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
-        f"[Test iter {iteration}]\n"
-        f"GOAL: {goal}\n"
-        f"Files changed: \n{impl_files}\n\n"
+        f"[Test iter {ctx['iteration']}]\n"
+        f"GOAL: {ctx['goal']}\n"
+        f"Files changed: \n{ctx['impl_files']}\n\n"
         f"You are a TESTER. Run tests and judge PASS/FAIL.\n"
         f"1. Determine the right test command (inspect project: package.json/pyproject.toml/go.mod).\n"
         f"2. Run tests with bash tool.\n"
@@ -2013,11 +2032,11 @@ def _test_prompt(iteration: int, goal: str, impl_files: str,
         f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
 
 
-def _updater_prompt(iteration: int, goal: str, verify_result: Optional[str]) -> str:  # Updater: 失败时 refine user prompt
+def _updater_prompt(ctx) -> str:  # Updater: 失败时 refine user prompt
     return (
-        f"[Updater iter {iteration}]\n"
-        f"GOAL: {goal}\n"
-        f"Failed at: {verify_result}\n\n"
+        f"[Updater iter {ctx['iteration']}]\n"
+        f"GOAL: {ctx['goal']}\n"
+        f"Failed at: {ctx.get('verify_result', '')}\n\n"
         f"You are an UPDATER.\n"
         f"Refine the user's prompt for the next implementer iteration.\n"
         f"You MUST NOT write code or call write/edit/bash. Only read/grep for context.\n\n"
@@ -2027,10 +2046,10 @@ def _updater_prompt(iteration: int, goal: str, verify_result: Optional[str]) -> 
         f"Call `attempt_completion` tool to return the refined prompt.")
 
 
-def _push_prompt(iteration: int, goal: str) -> str:
+def _push_prompt(ctx) -> str:
     return (
-        f"[Push iter {iteration}]\n"
-        f"GOAL: {goal}\n\n"
+        f"[Push iter {ctx['iteration']}]\n"
+        f"GOAL: {ctx['goal']}\n\n"
         f"All changes are verified. Commit them now.\n"
         f"1. Use `git diff` to see uncommitted changes, then stage them.\n"
         f"2. Write a short conventional commit message (e.g. `feat: ...` or `fix: ...`).\n"
@@ -2131,140 +2150,54 @@ def _get_loop_ctx(task_dir: str, role: str):
     return _ctx, _loop_file
 
 
-class ResearchAgent(Step):
-    def prep(self, ctx):
-        if not os.environ.get("MANGO_SEARCH_API_KEY"):
-            raise RuntimeError("MANGO_SEARCH_API_KEY is required for research mode")
-        _emit_iter(ctx["iteration"], ctx["max_iter"], "researcher", "research")
-        r_ctx, r_file = _get_loop_ctx(ctx["task_dir"], "researcher")
-        r_ctx.append_system(ctx["prompt_runtime"])
-        return {"r_ctx": r_ctx, "r_file": r_file,
-                "prompt": _research_prompt(ctx["goal"],
-                                           sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
-
-    def execute(self, data):
-        agent_loop(data["r_ctx"], data["r_file"], data["prompt"])
-        return _get_completion_result(data["r_ctx"])
-
-    def post(self, ctx, prep_res, summary):
-        ctx["research"] = summary
-        return None
+def _route_noop(r, ctx):  # 默认路由:不写 ctx,返回 None(走 default 边)
+    return None
 
 
-class DesignAgent(Step):
-    def prep(self, ctx):
-        _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "plan")
-        return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
-                "prompt": _design_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"], ctx.get("research", ""),
-                                         sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
-
-    def execute(self, data):
-        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
+def _route_research(r, ctx):  # Research:把 research 摘要写回 ctx,继续 pipeline
+    ctx["research"] = r
+    return None
 
 
-class DevAgent(Step):
-    def prep(self, ctx):
-        _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "develop")
-        return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
-                "prompt": _dev_prompt(ctx["iteration"], ctx["max_iter"], ctx["goal"],
-                                      sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
-
-    def execute(self, data):
-        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
-        return _extract_changed_files(data["impl_ctx"])
-
-    def post(self, ctx, prep_res, exec_res):
-        ctx["impl_files"] = exec_res
-        return None
+def _route_files(r, ctx):  # Dev:把 changed files 写回 ctx['impl_files']
+    ctx["impl_files"] = r
+    return None
 
 
-class ReviewAgent(Step):
-    def prep(self, ctx):
-        _emit_iter(ctx["iteration"], ctx["max_iter"], "verifier", "review")
-        r_ctx, r_file = _get_loop_ctx(ctx["task_dir"], "reviewer")
-        r_ctx.append_system(ctx["prompt_runtime"])
-        return {"r_ctx": r_ctx, "r_file": r_file,
-                "prompt": _review_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"],
-                                         sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
-
-    def execute(self, data):
-        agent_loop(data["r_ctx"], data["r_file"], data["prompt"])
-        return _get_completion_result(data["r_ctx"])
-
-    def post(self, ctx, prep_res, result):
-        if result and "VERIFY: PASS" in result:
-            return "pass"
-        ctx["verify_result"] = result or "FAIL: review rejected"
-        _output_event({"type": "verdict", "verdict": ctx["verify_result"], "reason": "", "round": ctx["iteration"]})
-        return "fail"
+def _route_verify(r, ctx):  # Review:识别 'VERIFY: PASS' 决定 pass/fail 路由,只在 fail 时输出 verdict
+    if r and "VERIFY: PASS" in r:
+        return "pass"
+    ctx["verify_result"] = r or "FAIL: review rejected"
+    _output_event({"type": "verdict", "verdict": ctx["verify_result"], "reason": "", "round": ctx["iteration"]})
+    return "fail"
 
 
-class TestAgent(Step):
-    def prep(self, ctx):
-        _emit_iter(ctx["iteration"], ctx["max_iter"], "verifier", "test")
-        t_ctx, t_file = _get_loop_ctx(ctx["task_dir"], "tester")
-        t_ctx.append_system(ctx["prompt_runtime"])
-        return {"t_ctx": t_ctx, "t_file": t_file,
-                "prompt": _test_prompt(ctx["iteration"], ctx["goal"], ctx["impl_files"],
-                                       sparse=ctx.get("sparse", False), gid=ctx.get("gid", ""))}
-
-    def execute(self, data):
-        agent_loop(data["t_ctx"], data["t_file"], data["prompt"])
-        return _get_completion_result(data["t_ctx"])
-
-    def post(self, ctx, prep_res, result):
-        _output_event({"type": "verdict", "verdict": result or "FAIL: no result",
-                       "reason": "", "round": ctx["iteration"]})
-        if result and "VERIFY: PASS" in result:
-            return "pass"
-        ctx["verify_result"] = result
-        return "fail"
+def _route_test(r, ctx):  # Test:与 verify 类似,但无论 pass/fail 都输出 verdict
+    _output_event({"type": "verdict", "verdict": r or "FAIL: no result", "reason": "", "round": ctx["iteration"]})
+    if r and "VERIFY: PASS" in r:
+        return "pass"
+    ctx["verify_result"] = r
+    return "fail"
 
 
-class UpdaterAgent(Step):
-    def prep(self, ctx):
-        _emit_iter(ctx["iteration"], ctx["max_iter"], "updater", "push")
-        u_ctx, u_file = _get_loop_ctx(ctx["task_dir"], "updater")
-        u_ctx.append_system(ctx["prompt_runtime"])
-        return {"u_ctx": u_ctx, "u_file": u_file,
-                "prompt": _updater_prompt(ctx["iteration"], ctx["goal"], ctx.get("verify_result"))}
-
-    def execute(self, data):
-        agent_loop(data["u_ctx"], data["u_file"], data["prompt"])
-        return _get_completion_result(data["u_ctx"])
-
-    def post(self, ctx, prep_res, refined):
-        if refined:
-            ctx["impl_ctx"].append_user(f"[Refined prompt from updater iter {ctx['iteration']}]\n{refined}")
-        return "refine"
+def _route_updater(r, ctx):  # Updater:把 refined prompt 追加到 impl_ctx 触发下一轮
+    if r:
+        ctx["impl_ctx"].append_user(f"[Refined prompt from updater iter {ctx['iteration']}]\n{r}")
+    return "refine"
 
 
-class PushAgent(Step):
-    def prep(self, ctx):
-        _emit_iter(ctx["iteration"], ctx["max_iter"], "implementer", "push")
-        return {"impl_ctx": ctx["impl_ctx"], "impl_ctx_file": ctx["impl_ctx_file"],
-                "prompt": _push_prompt(ctx["iteration"], ctx["goal"])}
-
-    def execute(self, data):
-        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
-
-    def post(self, ctx, prep_res, exec_res):
-        ctx["succeeded"] = True
-        _output_event({"type": "complete",
-                       "result": f"All rounds completed: {ctx['goal']}",
-                       "iters": ctx["iteration"]})
-        return None
+def _route_succeed(r, ctx):  # Push/Succeed:标记 succeeded,发 complete 事件
+    ctx["succeeded"] = True
+    _output_event({"type": "complete",
+                   "result": f"All rounds completed: {ctx['goal']}",
+                   "iters": ctx["iteration"]})
+    return None
 
 
 class SucceedStep(Step):
     def execute(self, data): pass
 
-    def post(self, ctx, p, e):
-        ctx["succeeded"] = True
-        _output_event({"type": "complete",
-                       "result": f"All rounds completed: {ctx['goal']}",
-                       "iters": ctx["iteration"]})
-        return None
+    def post(self, ctx, p, e): return _route_succeed(None, ctx)
 
 
 class IncrIter(Step):
@@ -2278,6 +2211,32 @@ class IncrIter(Step):
         return "ok"
 
 
+class Agent(Step):  # 声明式 LLM 节点:prompt 构建、子会话来源、结果提取、路由全部由构造参数决定
+    def __init__(self, role, phase, prompt_fn, *, fresh_role=None, extract=None, route=None, name=None):
+        super().__init__(name=name or f"{role}:{phase}")
+        self.role, self.phase = role, phase
+        self.prompt_fn = prompt_fn          # (ctx) -> str
+        self.fresh_role = fresh_role        # None=共享 impl_ctx; str=该角色的独立子会话
+        self.extract = extract              # None=不提取子会话结果 (execute 返回 None)
+        self.route = route or _route_noop
+
+    def prep(self, ctx):
+        _emit_iter(ctx["iteration"], ctx["max_iter"], self.role, self.phase)
+        if self.fresh_role:
+            sub_ctx, sub_file = _get_loop_ctx(ctx["task_dir"], self.fresh_role)
+            sub_ctx.append_system(ctx["prompt_runtime"])
+        else:
+            sub_ctx, sub_file = ctx["impl_ctx"], ctx["impl_ctx_file"]
+        return {"impl_ctx": sub_ctx, "impl_ctx_file": sub_file, "prompt": self.prompt_fn(ctx)}
+
+    def execute(self, data):
+        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
+        return self.extract(data["impl_ctx"]) if self.extract else None
+
+    def post(self, ctx, prep_res, exec_res):
+        return self.route(exec_res, ctx)
+
+
 def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False,
                 dry_run: bool = False, fast: bool = False, wish: bool = False,
                 only_dev: bool = False, sparse: str = ""):
@@ -2288,9 +2247,21 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_
     if sparse:
         mailbox.create_group(task_id, subject=goal)
 
-    research = ResearchAgent() if wish and not fast else None
-    dev, review, test = DevAgent(), ReviewAgent(), TestAgent()
-    updater, push = UpdaterAgent(), PushAgent()
+    if wish and not fast:
+        if not os.environ.get("MANGO_SEARCH_API_KEY"):
+            raise RuntimeError("MANGO_SEARCH_API_KEY is required for research mode")
+        research = Agent("researcher", "research", _research_prompt,
+                         fresh_role="researcher", extract=_get_completion_result, route=_route_research)
+    else:
+        research = None
+    dev = Agent("implementer", "develop", _dev_prompt, route=_route_files, extract=_extract_changed_files)
+    review = Agent("verifier", "review", _review_prompt,
+                   fresh_role="reviewer", extract=_get_completion_result, route=_route_verify)
+    test = Agent("verifier", "test", _test_prompt,
+                 fresh_role="tester", extract=_get_completion_result, route=_route_test)
+    updater = Agent("updater", "push", _updater_prompt,
+                    fresh_role="updater", extract=_get_completion_result, route=_route_updater)
+    push = Agent("implementer", "push", _push_prompt, route=_route_succeed)
     incr, succeed = IncrIter(), SucceedStep()
 
     if only_dev:
@@ -2302,7 +2273,7 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_
         test - "pass" >> (push if is_push else succeed)
         test - "fail" >> updater
     else:
-        design = DesignAgent()
+        design = Agent("implementer", "plan", _design_prompt)
         start = design
         design >> dev >> review
         review - "pass" >> test

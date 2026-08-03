@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.43] - 2026-08-03
+
+### Changed
+- **Declarative `Agent` refactor** — the 7 role classes are replaced by one parameterized `Agent` (`role`, `phase`, `prompt_fn`, `fresh_role`, `extract`, `route`); prompt builders unified to a `(ctx) -> str` signature; routing extracted into standalone `_route_*` functions
+- **24-bit Catppuccin Mocha color system** — ANSI 16-color palette replaced with truecolor role-mapped colors (`BLUE`/`CYAN`/`GREEN`/`YELLOW`/`RED`/`GREY`/`ACCENT`/`SOFT`) via new `_fg()` converter and a slimmed `MOCHA` palette (8 active roles only); `ORANGE` renamed to `ACCENT`
+- **Research mode guard** — starting research mode now requires `MANGO_SEARCH_API_KEY`, with a clear error otherwise
+- **Terminal width detection** — `os.get_terminal_size()` replaced with `shutil.get_terminal_size()` for portability when stdout is redirected
+
+---
+
 ## [0.1.42] - 2026-07-30
 
 ### Added
