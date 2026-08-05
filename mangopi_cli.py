@@ -247,8 +247,10 @@ class Printer:
                 print("input y or n")
 
     def prompt_apply(self, message: str) -> bool:
-        if self.mode == "acp" and self.permission_handler:
-            return self.permission_handler(message)  # ACP: 经 session/request_permission 由 client 裁决
+        if self.mode == "acp":
+            # ACP: 经 session/request_permission 由 client 裁决; handler 缺失时拒绝,
+            # 绝不 fall through 到终端 input() (会读 JSON-RPC 流且 print 污染 stdout)
+            return self.permission_handler(message) if self.permission_handler else False
         return self._prompt_apply_input(message)
 
     def diff(self, old: str, new: str, context: int = 3, filename: str = "file.py"):
@@ -2332,13 +2334,6 @@ def acp_main() -> int:
         console.error("MANGO_KEY env var is required for ACP mode")
         return 1
     initialize_system()  # 确保 .mangocli/session 等目录存在
-    global provider
-    if MANGO_ROUTING == "on":
-        try:
-            provider = RoutedProvider.from_file(providers_file)
-        except Exception:  # noqa: BLE001 与 CLI 一致: 回退 high-tier
-            provider = RoutedProvider({"providers": [{"name": MANGO_MODEL, "url": MANGO_API_URL, "model": MANGO_MODEL,
-                                                      "tier": "high", "api_key": MANGO_KEY or ""}]})
     AcpServer().serve()
     return 0
 
