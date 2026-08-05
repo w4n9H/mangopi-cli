@@ -79,7 +79,7 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Instant startup speed
 * Local-first workflow design
 * Autonomous loop execution (multi-agent implement / verify / refine pipeline)
-* Sparse loop — MailBox collective memory for cross-session task persistence (`--sparse`)
+* ACP agent server (`--acp`) — Agent Client Protocol v1 over stdio, connectable from Zed / JetBrains etc.
 * Smart provider routing with tiered models (high/medium/low)
 * Multimodal support (image reading via `view_image`)
 * Web search via Bocha AI Search (`web_search` tool)
@@ -229,8 +229,7 @@ python mangopi_cli.py
 | `--dry-run` | Print pipeline topology and exit |
 | `--push` | Commit verified changes on PASS |
 | `--task-id <id>` | Assign a persistent task ID (for resume) |
-| `--sparse HANDLE` | Enable MailBox collective memory (e.g. `--sparse @agent-a`) |
-| `--output jsonl` | Emit structured events for web UI |
+| `--acp` | Run as ACP (Agent Client Protocol) v1 agent server over stdio (JSON-RPC) |
 
 ---
 
@@ -257,29 +256,15 @@ Loop Engineering replaces the legacy Goal Mode with a **configurable Step/Pipeli
 
 The pipeline runs up to 5 iterations, short-circuiting on the first `VERIFY: PASS`. All agents return structured results via `attempt_completion`.
 
-## Sparse Loop (MailBox Collective Memory)
+## ACP Agent Server (`--acp`)
 
-The `--sparse HANDLE` flag extends `loop` with **cross-session collective memory** via the MailBox system:
+Run mangopi as an **Agent Client Protocol v1** agent over stdio — a resident JSON-RPC server that ACP-capable editors (Zed, JetBrains, codecompanion.nvim, etc.) can launch as a subprocess:
 
 ```bash
-# Start a task with sparse mode
-/loop data cleaning pipeline --sparse @agent-a --task-id clean-v1
-
-# Resume the same task hours or days later — agents inherit full history
-/loop continue cleaning --sparse @agent-a --task-id clean-v1
+mangopi-cli --acp
 ```
 
-When `--sparse` is set:
-- Each task gets a MailBox group (`gid = task-id`)
-- All pipeline agents (DesignAgent, DevAgent, ReviewAgent, TestAgent) share the same group as persistent thread
-- Agents are prompted to:
-  1. **Start** → `mailbox_read` previous progress before acting
-  2. **Claim** → `mailbox_post` what they're about to do
-  3. **Update** → `mailbox_post` at key milestones ([State], decisions, blockers)
-  4. **Finish** → `mailbox_post [Result]` to mark completion for the next agent
-- Same `--task-id` across separate CLI invocations → agents automatically see the full history
-
-This turns `loop` from a stateless pipeline into a **collaborative engine** where agents and humans coordinate asynchronously across time.
+The client drives the conversation via `session/new` + `session/prompt` messages; mangopi executes tools locally, streams progress via `session/update` notifications, and asks for permission through `session/request_permission` (rendered as a client-side prompt). One `session/prompt` = one turn; `session/cancel` ends the current turn.
 
 # Built-in Tools
 
@@ -295,9 +280,6 @@ This turns `loop` from a stateless pipeline into a **collaborative engine** wher
 | `web_search`         | Search the live web via Bocha AI Search API                     |
 | `use_skill`          | Load an installed `SKILL.md` with its scripts/references        |
 | `loop_engine`       | Pipeline: design → dev → review → test (invoked via `/loop`) |
-| `mailbox_post`       | Post a message or [State]/[Result] to a MailBox group          |
-| `mailbox_read`       | Read thread history and member info from a MailBox group       |
-| `mailbox_check`      | Check all groups for unread messages                           |
 | `attempt_completion` | Final step — present the result to the user                     |
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
@@ -397,7 +379,7 @@ Core components:
 | `SystemPrompt`    | Layered runtime prompt assembly (base, safety, rules, tools, env)        |
 | `SkillManager`    | Discovers and loads `SKILL.md` + scripts/references                      |
 | `loop_engine`      | Multi-agent Step/Pipeline (Design → Dev → Review → Test → …) with persistent task sessions |
-| `MailBox`          | File-based async messaging system for agent/agent & agent/human collaboration |
+| `AcpServer`        | ACP (Agent Client Protocol) v1 server: stdio JSON-RPC dispatch, sessions, permissions |
 | `agent_loop`      | Drives the read → think → tool-call → verify loop until the model stops or calls `attempt_completion` |
 
 ---

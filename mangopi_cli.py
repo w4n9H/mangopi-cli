@@ -19,17 +19,17 @@ import shutil
 import mimetypes
 import argparse
 import uuid
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from contextlib import contextmanager
 
 try:
     import readline  # 解决 Unix-like 系统中 input 无法正常删除中文的问题
 except Exception:
     pass
 
-__version__ = "0.1.43"
+__version__ = "0.1.44"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -51,7 +51,6 @@ session_dir = os.path.join(base_persist_dir, "session")
 loops_dir = os.path.join(base_persist_dir, "loops")
 providers_file = os.path.join(base_persist_dir, "providers.json")
 traces_dir = os.path.join(base_persist_dir, "traces")
-mailbox_basic = os.path.expanduser("~/.mangocli/mail")
 
 # --- Catppuccin Mocha palette (24-bit, active roles only) ---
 MOCHA = {  # Ghostty theme: Catppuccin Mocha. https://github.com/catppuccin/catppuccin
@@ -120,7 +119,9 @@ class Printer:
     SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def __init__(self):
-        self.mode = "console"
+        self.mode = "console"            # console | acp (acp: 文本静默, 事件经 emitter 发射)
+        self.emitter = None              # ACP 事件发射器 (AcpServer 注册; 接收事件 dict)
+        self.permission_handler = None   # ACP 权限裁决回调 (acp 模式下 prompt_apply 调用)
         self._round = 0
         self._spinner_running = False
         self._spinner_thread = None
@@ -133,7 +134,7 @@ class Printer:
         sys.stdout.flush()
 
     def _write_line(self, text: str = ""):
-        if self.mode == "jsonl":
+        if self.mode == "acp":
             return
         with self._lock:
             was_running = self._spinner_running
@@ -153,15 +154,18 @@ class Printer:
         self._write_line(_c(f"• {title}", ACCENT))
 
     def tool_call(self, name: str, desc: str):
-        if self.mode == "jsonl":
-            _output_event({"type": "tool", "name": name, "args_preview": desc, "round": self._round})
+        if self.mode == "acp":
+            if self.emitter:
+                self.emitter({"type": "tool", "name": name, "args_preview": desc, "round": self._round})
             return
         self.section(_i18n("tool.call"))
         self._write_line(f"{_c('› ', GREY)}{_c(name, CYAN)}  {_c(desc, GREY)}")
 
     def tool_result(self, name: str, ok=True, snippet=""):
-        if self.mode == "jsonl":
-            _output_event({"type": "tool_result", "name": name, "ok": ok, "snippet": snippet[:200], "round": self._round})
+        if self.mode == "acp":
+            if self.emitter:
+                self.emitter({"type": "tool_result", "name": name, "ok": ok,
+                              "snippet": snippet[:200], "round": self._round})
             return
         icon = "✓" if ok else "✗"
         color = GREEN if ok else RED
@@ -182,25 +186,29 @@ class Printer:
         self._write_line(f"{DIM}{'─' * min(shutil.get_terminal_size().columns, 80)}{RESET}")
 
     def thinking(self, content: str):
-        if self.mode == "jsonl":
-            _output_event({"type": "thinking", "content": content})
+        if self.mode == "acp":
+            if self.emitter:
+                self.emitter({"type": "thinking", "content": content})
             return
         self.section(_i18n("llm.thinking"))
         for line in content.splitlines():
             self._write_line("  " + _c(line, GREY))
 
     def output(self, content: str):
-        if self.mode == "jsonl":
-            _output_event({"type": "output", "content": content})
+        if self.mode == "acp":
+            if self.emitter:
+                self.emitter({"type": "output", "content": content})
             return
         self.section(_i18n("llm.output"))
         for line in content.splitlines():
             self._write_line("  " + _c(line, SOFT))
 
     def token_usage(self, iteration: int, input_tokens: int, output_tokens: int, context_tokens: int, max_context: int):
-        if self.mode == "jsonl":
-            _output_event({"type": "usage", "prompt_tokens": input_tokens,
-                           "completion_tokens": output_tokens, "total": input_tokens + output_tokens})
+        if self.mode == "acp":
+            if self.emitter:
+                self.emitter({"type": "usage", "prompt_tokens": input_tokens,
+                              "completion_tokens": output_tokens, "total": input_tokens + output_tokens,
+                              "context_tokens": context_tokens, "max_context": max_context})
             return
 
         def fmt(n): return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
@@ -228,7 +236,7 @@ class Printer:
         self._write_line(f"  {_c('context', GREY)} {_c(f'{percent}%', color)}")
 
     @staticmethod
-    def prompt_apply(message: str) -> bool:
+    def _prompt_apply_input(message: str) -> bool:
         while True:
             resp = input(f"{YELLOW}{message} [y/n]: {RESET}").strip().lower()
             if resp in ("y", "yes"):
@@ -237,6 +245,11 @@ class Printer:
                 return False
             else:
                 print("input y or n")
+
+    def prompt_apply(self, message: str) -> bool:
+        if self.mode == "acp" and self.permission_handler:
+            return self.permission_handler(message)  # ACP: 经 session/request_permission 由 client 裁决
+        return self._prompt_apply_input(message)
 
     def diff(self, old: str, new: str, context: int = 3, filename: str = "file.py"):
         self.section("Code Diff")
@@ -255,7 +268,7 @@ class Printer:
                 self._write_line(_c(dl, GREY))
 
     def start_spinner(self, message: str = "Running..."):
-        if self.mode == "jsonl":
+        if self.mode == "acp":
             return
         if self._spinner_running:
             return
@@ -275,7 +288,7 @@ class Printer:
         self._spinner_thread.start()
 
     def end_spinner(self):
-        if self.mode == "jsonl":
+        if self.mode == "acp":
             return
         if not self._spinner_running:
             return
@@ -287,11 +300,6 @@ class Printer:
 
 
 console = Printer()
-
-
-def _output_event(d: dict) -> None:
-    if console.mode == "jsonl":
-        print(json.dumps(d, ensure_ascii=False), flush=True)
 
 
 # --- Init dir, Base data ---
@@ -566,169 +574,6 @@ class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 
 
 
 flash_thinking = FlashThinking()
-
-
-# --- Mailbox definitions: ---
-class MailBox:
-    def __init__(self, base: str = mailbox_basic, self_handle: str = "@mangopi"):
-        self.base = base
-        self.self_handle = self_handle
-
-    def _gid_dir(self, gid): return os.path.join(self.base, "groups", gid)
-
-    def _roster_path(self, gid): return os.path.join(self._gid_dir(gid), "roster.json")
-
-    def _thread_path(self, gid): return os.path.join(self._gid_dir(gid), "thread.jsonl")
-
-    def _inbox_path(self, handle): return os.path.join(self.base, "inbox", handle.lstrip("@") + ".jsonl")
-
-    @contextmanager
-    def _lock(self, path, timeout=5.0):  # POSIX 咨询锁（macOS/Linux），仅 append 那一瞬持锁
-        import fcntl
-        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            deadline = time.time() + timeout
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError:
-                    if time.time() > deadline:
-                        raise TimeoutError("mailbox lock timeout")
-                    time.sleep(0.02)
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
-
-    def _load_roster(self, gid):
-        if os.path.exists(self._roster_path(gid)):
-            with open(self._roster_path(gid), encoding="utf-8") as f:
-                return json.load(f)
-        return {"group_id": gid, "subject": "", "members": []}
-
-    def _save_roster(self, gid, r):
-        os.makedirs(self._gid_dir(gid), exist_ok=True)
-        with open(self._roster_path(gid), "w", encoding="utf-8") as f:
-            json.dump(r, f, ensure_ascii=False, indent=2)
-
-    def _member(self, r, handle): return next((m for m in r["members"] if m["handle"] == handle), None)
-
-    def _guess_kind(self, h):
-        return "human" if any(k in h for k in ("lead", "you", "human", "pm", "user", "reviewer", "boss")) else "agent"
-
-    def create_group(self, gid, subject="", creator=None):
-        creator = creator or self.self_handle
-        r = self._load_roster(gid)
-        r["subject"] = subject or gid
-        if not self._member(r, creator):
-            r["members"].append({"handle": creator, "kind": self._guess_kind(creator),
-                                 "role": "owner", "last_read_id": None})
-        self._save_roster(gid, r)
-        return r
-
-    def add_member(self, gid, handle, kind=None, role="member"):
-        r = self._load_roster(gid)
-        r["members"] = [m for m in r["members"] if m["handle"] != handle]
-        r["members"].append({"handle": handle, "kind": kind or self._guess_kind(handle),
-                             "role": role, "last_read_id": None})
-        self._save_roster(gid, r)
-
-    def remove_member(self, gid, handle):
-        r = self._load_roster(gid)
-        r["members"] = [m for m in r["members"] if m["handle"] != handle]
-        self._save_roster(gid, r)
-
-    def group_info(self, gid):
-        r = self._load_roster(gid)
-        return {"group_id": gid, "subject": r["subject"],
-                "members": [{"handle": m["handle"], "kind": m["kind"], "role": m["role"],
-                             "unread": self.unread_for(gid, m["handle"])} for m in r["members"]]}
-
-    def post(self, gid, subject, body, frm=None, mtype="chat",
-             priority="normal", mentions=None, ask=None):
-        frm = frm or self.self_handle
-        if not os.path.exists(self._roster_path(gid)):
-            self.create_group(gid, subject)          # 不存在则自动建组
-        if ask:                                       # 请某人类回复：urgent+request+拉人
-            mentions = (mentions or []) + [ask]
-            if priority == "normal":
-                priority = "urgent"
-            if mtype == "chat":
-                mtype = "request"
-        for h in set(mentions or []):                 # 被 @ 的未知成员自动入组
-            if not self._member(self._load_roster(gid), h):
-                self.add_member(gid, h)
-        msg = {"msg_id": "m_" + uuid.uuid4().hex[:6], "from": frm, "gid": gid,
-               "subject": subject, "body": body, "type": mtype, "priority": priority,
-               "mentions": mentions or [], "ts": int(time.time())}
-        self._write_thread(gid, msg)
-        for h in (mentions or []):                    # @人类桥接：副本进其个人 inbox
-            mm = self._member(self._load_roster(gid), h)
-            if mm and mm["kind"] == "human":
-                self._bridge_to_inbox(h, gid, subject, body)
-        return msg
-
-    def _write_thread(self, gid, msg):
-        os.makedirs(self._gid_dir(gid), exist_ok=True)
-        with self._lock(self._thread_path(gid)):
-            with open(self._thread_path(gid), "a", encoding="utf-8") as f:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-                f.flush()
-
-    def _bridge_to_inbox(self, handle, gid, subject, body):
-        os.makedirs(os.path.join(self.base, "inbox"), exist_ok=True)
-        with open(self._inbox_path(handle), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"from": "@group/" + gid,
-                                "subject": f"[{gid}] {subject}", "body": body,
-                                "ts": int(time.time())}, ensure_ascii=False) + "\n")
-
-    def read(self, gid, depth="summary", for_handle=None, mark_read=False):
-        msgs = self._load_thread(gid)
-        out = msgs if depth == "full" else msgs[-10:]
-        if mark_read:
-            self.mark_read(gid, for_handle or self.self_handle)
-        return out
-
-    def _load_thread(self, gid):
-        if not os.path.exists(self._thread_path(gid)):
-            return []
-        with open(self._thread_path(gid), encoding="utf-8") as f:
-            return [json.loads(ln) for ln in f if ln.strip()]
-
-    def unread_for(self, gid, handle):
-        msgs = self._load_thread(gid)
-        m = self._member(self._load_roster(gid), handle)
-        if not m:
-            return 0
-        if m["last_read_id"] is None:
-            return len(msgs)
-        idx = next((i for i, x in enumerate(msgs) if x["msg_id"] == m["last_read_id"]), -1)
-        return len(msgs) - (idx + 1)
-
-    def mark_read(self, gid, handle):
-        msgs = self._load_thread(gid)
-        last = msgs[-1]["msg_id"] if msgs else None
-        r = self._load_roster(gid)
-        for m in r["members"]:
-            if m["handle"] == handle:
-                m["last_read_id"] = last
-        self._save_roster(gid, r)
-
-    def check(self, handle=None):
-        """返回 handle 所在、有待读更新的组（默认 self_handle）。run 边界入口。"""
-        handle = handle or self.self_handle
-        out = []
-        gdir = os.path.join(self.base, "groups")
-        if os.path.isdir(gdir):
-            for gid in sorted(os.listdir(gdir)):
-                if self.unread_for(gid, handle) > 0:
-                    out.append({"gid": gid, "subject": self._load_roster(gid)["subject"],
-                                "unread_for_me": self.unread_for(gid, handle)})
-        return {"attention": bool(out), "groups": out}
-
-
-mailbox = MailBox()
 
 
 # --- Tool definitions: (description, schema, function) ---
@@ -1094,64 +939,10 @@ class AttemptCompletionTool(ToolBase):
         return self.ok(args["result"])
 
 
-class MailBoxPostTool(ToolBase):
-    name = "mailbox_post"
-    description = "Post a message or record task progress to a group. " \
-                  "If gid doesn't exist it will be auto-created. Use @to to mention someone (auto-joins them). " \
-                  "Convention: subject='[State] <phase> | <progress>%' for checkpoint, free text for chat."
-    params = {"gid": {"type": "string", "description": "Group/task ID"},
-              "subject": {"type": "string", "description": "Message subject."},
-              "body": {"type": "string?", "description": "Detailed content."},
-              "to": {"type": "string?", "description": "@mention someone, e.g. '@human-pm'."},
-              "priority": {"type": "string?", "description": "'urgent' or 'normal' (default)."}}
-
-    def preview(self, args): return f"{args.get('gid','')} | {args.get('subject','')}"[:80]
-
-    def run(self, args):
-        msg = mailbox.post(gid=args["gid"], subject=args["subject"], body=args.get("body", ""),
-                           mentions=[args["to"]] if args.get("to") else None,
-                           priority=args.get("priority", "normal"))
-        return self.ok(f"[{msg['msg_id']}] posted to {args['gid']}")
-
-
-class MailBoxReadTool(ToolBase):
-    name = "mailbox_read"
-    description = "Read messages and member info from a group.Returns members overview + message history (newest last)."
-    params = {"gid": {"type": "string", "description": "Group/task ID"},
-              "depth": {"type": "string?", "description": "'summary'(default, last 10) or 'full'(entire thread)"},
-              "mark_read": {"type": "boolean?", "description": "Mark all as read for you (default false)."}}
-
-    def preview(self, args): return args.get("gid", "")[:80]
-
-    def run(self, args):
-        gid = args["gid"]
-        info = mailbox.group_info(gid)
-        msgs = mailbox.read(gid, depth=args.get("depth", "summary"), mark_read=args.get("mark_read", False))
-        header = f"Group: {gid}  |  {info['subject']}\nMembers: " + \
-                 ", ".join(f"{m['handle']}({m['kind']},{m['role']},unread={m['unread']})" for m in info["members"])
-        if not msgs:
-            return self.ok(header + "\n(no messages)")
-        lines = [f"[{m['ts']}] {m['from']}: {m['subject']}" for m in msgs]
-        return self.ok(header + f"\n─ {len(msgs)} messages ─\n" + "\n".join(lines))
-
-
-class MailBoxCheckTool(ToolBase):
-    name = "mailbox_check"
-    description = "Check all groups for unread messages. Returns which groups have updates waiting for you."
-    params = {}
-
-    def run(self, args):
-        r = mailbox.check()
-        if not r["attention"]:
-            return self.ok("(no unread updates)")
-        return self.ok("\n".join(f"{g['gid']}: {g['subject']} ({g['unread_for_me']} unread)" for g in r["groups"]))
-
-
 TOOLS = {
     t.name: t for t in [
         ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        WebSearchTool(), ViewImageTool(), AttemptCompletionTool(),
-        MailBoxPostTool(), MailBoxReadTool(), MailBoxCheckTool()]}
+        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
 
 
 def tool_schema():
@@ -1931,44 +1722,19 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
         ctx.save_trace()
 
 
-def _emit_iter(n: int, max_iter: int, agent: str, phase: str = ""):
-    _output_event({"type": "iter", "n": n, "max_iter": max_iter, "agent": agent, "phase": phase})
-
-
-def _mailbox_guidance(gid: str) -> str:
-    if not gid:
-        return ""
-    return (
-        f"\n\n## MailBox Collaboration (group: {gid})\n"
-        f"All agents in this pipeline share this group as collective memory.\n"
-        f"\n"
-        f"### Workflow\n"
-        f"1. **Start** — `mailbox_read` to review previous progress before acting\n"
-        f"2. **Claim** — `mailbox_post` to announce what you're about to do\n"
-        f"3. **Update** — `mailbox_post` at key milestones: decisions, blockers, [State] changes\n"
-        f"4. **Finish** — `mailbox_post` with `[Result]` to mark completion for the next agent\n"
-        f"\n"
-        f"### Tools\n"
-        f"- `mailbox_read` — read full thread\n"
-        f"- `mailbox_post` — record progress, decisions, [State] checkpoints\n")
-
-
 def _design_prompt(ctx) -> str:
     research = ctx.get("research", "")
     research_section = f"\nResearch summary:\n{research}\n" if research else ""
-    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
         f"[Design iter {ctx['iteration']}/{ctx['max_iter']}]\n"
         f"GOAL: {ctx['goal']}{research_section}\n"
         f"You are the DESIGNER. Plan before coding.\n"
         f"1. Read relevant code (read/grep).\n"
         f"2. Plan your design.\n"
-        f"3. Call `attempt_completion` when done.\n"
-        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
+        f"3. Call `attempt_completion` when done.\n")
 
 
 def _dev_prompt(ctx) -> str:
-    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
         f"[Dev iter {ctx['iteration']}/{ctx['max_iter']}]\n"
         f"GOAL: {ctx['goal']}\n\n"
@@ -1978,12 +1744,10 @@ def _dev_prompt(ctx) -> str:
         f"3. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
         f"4. When calling edit/write, briefly explain WHY in your thinking.\n"
         f"5. Call `attempt_completion` tool when done.\n\n"
-        f"DO NOT run tests or verify your own code. That's the Reviewer and Tester's job.\n"
-        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
+        f"DO NOT run tests or verify your own code. That's the Reviewer and Tester's job.\n")
 
 
 def _research_prompt(ctx) -> str:
-    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
         f"[Research]\n"
         f"GOAL: {ctx['goal']}\n\n"
@@ -1994,12 +1758,10 @@ def _research_prompt(ctx) -> str:
         f"   - Best practices and common patterns\n"
         f"   - Example implementations\n"
         f"3. Synthesize findings into a concise summary.\n"
-        f"4. Call `attempt_completion` to return the summary.\n"
-        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
+        f"4. Call `attempt_completion` to return the summary.\n")
 
 
 def _review_prompt(ctx) -> str:
-    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
         f"[Review iter {ctx['iteration']}]\n"
         f"GOAL: {ctx['goal']}\n"
@@ -2011,12 +1773,10 @@ def _review_prompt(ctx) -> str:
         f"   - 'VERIFY: PASS' if the changes look reasonable\n"
         f"   - 'VERIFY: FAIL: <reason>' if you spot issues\n\n"
         f"Evaluate at architecture-level (module/flow, logic correctness),\n"
-        f"not function-level (naming, formatting).\n"
-        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
+        f"not function-level (naming, formatting).\n")
 
 
 def _test_prompt(ctx) -> str:
-    sparse, gid = ctx.get("sparse", False), ctx.get("gid", "")
     return (
         f"[Test iter {ctx['iteration']}]\n"
         f"GOAL: {ctx['goal']}\n"
@@ -2028,8 +1788,7 @@ def _test_prompt(ctx) -> str:
         f"4. Call `attempt_completion` with one line:\n"
         f"   - 'VERIFY: PASS'\n"
         f"   - 'VERIFY: FAIL: <reason>'\n"
-        f"Explain at architecture-level (module/flow), not function-level.\n"
-        f"{_mailbox_guidance(gid) if sparse else ''}\n\n")
+        f"Explain at architecture-level (module/flow), not function-level.\n")
 
 
 def _updater_prompt(ctx) -> str:  # Updater: 失败时 refine user prompt
@@ -2168,12 +1927,10 @@ def _route_verify(r, ctx):  # Review:识别 'VERIFY: PASS' 决定 pass/fail 路�
     if r and "VERIFY: PASS" in r:
         return "pass"
     ctx["verify_result"] = r or "FAIL: review rejected"
-    _output_event({"type": "verdict", "verdict": ctx["verify_result"], "reason": "", "round": ctx["iteration"]})
     return "fail"
 
 
 def _route_test(r, ctx):  # Test:与 verify 类似,但无论 pass/fail 都输出 verdict
-    _output_event({"type": "verdict", "verdict": r or "FAIL: no result", "reason": "", "round": ctx["iteration"]})
     if r and "VERIFY: PASS" in r:
         return "pass"
     ctx["verify_result"] = r
@@ -2186,11 +1943,8 @@ def _route_updater(r, ctx):  # Updater:把 refined prompt 追加到 impl_ctx 触
     return "refine"
 
 
-def _route_succeed(r, ctx):  # Push/Succeed:标记 succeeded,发 complete 事件
+def _route_succeed(r, ctx):  # Push/Succeed:标记 succeeded
     ctx["succeeded"] = True
-    _output_event({"type": "complete",
-                   "result": f"All rounds completed: {ctx['goal']}",
-                   "iters": ctx["iteration"]})
     return None
 
 
@@ -2221,7 +1975,6 @@ class Agent(Step):  # 声明式 LLM 节点:prompt 构建、子会话来源、结
         self.route = route or _route_noop
 
     def prep(self, ctx):
-        _emit_iter(ctx["iteration"], ctx["max_iter"], self.role, self.phase)
         if self.fresh_role:
             sub_ctx, sub_file = _get_loop_ctx(ctx["task_dir"], self.fresh_role)
             sub_ctx.append_system(ctx["prompt_runtime"])
@@ -2239,13 +1992,10 @@ class Agent(Step):  # 声明式 LLM 节点:prompt 构建、子会话来源、结
 
 def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False,
                 dry_run: bool = False, fast: bool = False, wish: bool = False,
-                only_dev: bool = False, sparse: str = ""):
+                only_dev: bool = False):
     """Pipeline 版本 loop_engine。"""
     if task_id is None:
         task_id = uuid.uuid4().hex[:8]
-
-    if sparse:
-        mailbox.create_group(task_id, subject=goal)
 
     if wish and not fast:
         if not os.environ.get("MANGO_SEARCH_API_KEY"):
@@ -2300,32 +2050,297 @@ def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_
     os.makedirs(task_dir, exist_ok=True)
     console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
 
-    _output_event({"type": "start", "task_id": task_id, "goal": goal, "started_at": time.time()})
-
     loop_prompt_runtime = SystemPrompt()
     prompt_text = loop_prompt_runtime.assemble()
     impl_ctx, impl_ctx_file = _get_loop_ctx(task_dir, "implementer")
     impl_ctx.append_system(prompt_text)
 
-    shared = {
-        "goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
-        "impl_ctx_file": impl_ctx_file, "prompt_runtime": prompt_text,
-        "sparse": sparse, "gid": task_id}
+    shared = {"goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
+              "impl_ctx_file": impl_ctx_file, "prompt_runtime": prompt_text}
 
     console._round = 1
     try:
         p.run(shared)
     except Exception as e:
-        _output_event({"type": "complete", "result": None, "iters": shared["iteration"]})
         console.error(f"Loop error: {e}")
         return False
 
     if shared.get("succeeded"):
         return True
-
     console.error(f"Loop failed after {max_iter} iterations")
-    _output_event({"type": "complete", "result": None, "iters": max_iter})
     return False
+
+
+class AcpError(Exception):
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+def _prompt_text(prompt: Any) -> str:
+    """提取 session/prompt 文本: 兼容 string 与 text ContentBlock 数组.
+    声明的 promptCapabilities 仅 text; 收到非 text block (image/resource/audio 等)即报错, 禁止静默丢弃导致 context 丢失.
+    """
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list):
+        parts = []
+        for b in prompt:
+            if not isinstance(b, dict) or not isinstance(b.get("type"), str):
+                raise AcpError(-32602, "Malformed prompt content block: %r" % (b,))
+            if b.get("type") != "text":
+                raise AcpError(-32602, "Unsupported prompt content type: %s" % b.get("type"))
+            parts.append(b.get("text", ""))
+        return "".join(parts)
+    return str(prompt)
+
+
+class AcpServer:
+    def __init__(self):
+        self.sessions: Dict[str, ContextManager] = {}     # sessionId -> ctx
+        self.cancel_flags: Dict[str, threading.Event] = {}   # sessionId -> cancel 事件
+        self._perm: Dict[str, Dict[str, Any]] = {}           # requestId -> {event, decision}
+        self._lock = threading.RLock()
+        self._local = threading.local()  # prompt 线程本地状态: sid / msg_id / tool_id (并发隔离)
+        self._seq = 0
+
+    # --- 线程本地状态访问 (每个 session/prompt 在独立线程处理, 事件发射必属本线程的会话) ---
+    @property
+    def _cur_sid(self) -> Optional[str]: return getattr(self._local, "sid", None)
+
+    @_cur_sid.setter
+    def _cur_sid(self, value: Optional[str]) -> None: self._local.sid = value
+
+    @property
+    def _msg_id(self) -> Optional[str]: return getattr(self._local, "msg_id", None)
+
+    @_msg_id.setter
+    def _msg_id(self, value: Optional[str]) -> None: self._local.msg_id = value
+
+    def _tool_id(self) -> Optional[str]: return getattr(self._local, "tool_id", None)
+
+    def _set_tool_id(self, value: Optional[str]) -> None: self._local.tool_id = value
+
+    # ---------- JSON-RPC 底层 ----------
+    def _send(self, obj: dict) -> None:
+        with self._lock:
+            print(json.dumps(obj, ensure_ascii=False), flush=True)
+
+    def _respond(self, msg_id: Any, result: Any) -> None: self._send({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
+    def _error(self, msg_id: Any, code: int, message: str) -> None:
+        self._send({"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}})
+
+    def _notify(self, method: str, params: dict) -> None:
+        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def _emit(self, sid: str, update: dict) -> None:
+        self._notify("session/update", {"sessionId": sid, "update": update})
+
+    def _next_id(self) -> str:
+        self._seq += 1
+        return str(self._seq)
+
+    # ---------- 方法分发 ----------
+    def dispatch(self, msg: dict) -> None:
+        method, msg_id = msg.get("method"), msg.get("id")
+        if not isinstance(method, str):  # JSON-RPC 响应 (无 method): 匹配 pending 权限请求 (id 关联)
+            if "result" in msg or "error" in msg:
+                self._on_response(msg_id, msg.get("result"))
+                return
+            if msg_id is not None:
+                self._error(msg_id, -32600, "Invalid Request")
+            return
+        handler = getattr(self, "_m_" + method.replace("/", "_"), None)
+        if handler is None:
+            if msg_id is not None:
+                self._error(msg_id, -32601, "Method not found: %s" % method)
+            return
+        try:
+            result = handler(msg.get("params") or {})
+            if msg_id is not None:
+                self._respond(msg_id, result)
+        except AcpError as e:
+            self._error(msg_id, e.code, e.message)
+        except Exception as e:  # noqa: BLE001 协议边界兜底
+            traceback.print_exc()  # 完整堆栈落 stderr, 主循环不可见但可诊断
+            self._error(msg_id, -32603, "Internal error: %s" % e)
+
+    def _on_response(self, msg_id: Any, result: Any) -> None:  # 处理client对session/request_permission的响应(同id关联).
+        if msg_id is None:
+            return
+        with self._lock:
+            rec = self._perm.get(str(msg_id))
+            if rec is None:
+                return  # 未知/过期响应, 忽略
+            outcome = ((result or {}).get("outcome") or {})
+            option_id = outcome.get("optionId", "")
+            rec["decision"] = "allow" if outcome.get("outcome") == "selected" and option_id == "allow-once" else "deny"
+            rec["event"].set()
+
+    # ---------- 协议方法 ----------
+    def _m_initialize(self, p: dict) -> dict:
+        version = p.get("protocolVersion")
+        if version is not None and int(version) != 1:
+            raise AcpError(-32602, "Unsupported protocol version: %s" % version)
+        return {
+            "protocolVersion": 1,
+            "agentCapabilities": {  # 官方 v1 结构: 不支持 session/load、MCP, prompt 仅纯文本
+                "loadSession": False,
+                "promptCapabilities": {"image": False, "audio": False, "embeddedContext": False},
+                "mcpCapabilities": {"http": False, "sse": False}},
+            "agentInfo": {"name": "mangopi-cli", "title": "Mangopi CLI", "version": __version__},
+            "authMethods": []}
+
+    def _m_session_new(self, p: dict) -> dict:  # NewSessionRequest required: ["cwd", "mcpServers"]
+        cwd = p.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            raise AcpError(-32602, "Missing required field: cwd")
+        if not isinstance(p.get("mcpServers"), list):
+            raise AcpError(-32602, "Missing required field: mcpServers")
+        # 官方 params: {cwd, mcpServers?}; sessionId 由 agent 生成并返回, 无 id 字段
+        sid = "sess_" + os.urandom(4).hex()
+        ctx = ContextManager()
+        ctx.load(self._ctx_file(sid))
+        self.sessions[sid] = ctx
+        self.cancel_flags[sid] = threading.Event()
+        return {"sessionId": sid}
+
+    def _m_session_prompt(self, p: dict) -> Optional[dict]:  # PromptRequest required: ["prompt", "sessionId"]
+        sid = p.get("sessionId")
+        ctx = self.sessions.get(sid)
+        if ctx is None:
+            raise AcpError(-32602, "Unknown session: %s" % sid)
+        if p.get("prompt") is None:
+            raise AcpError(-32602, "Missing required field: prompt")
+        cancel = self.cancel_flags[sid]
+        cancel.clear()
+        text = _prompt_text(p.get("prompt"))
+        self._cur_sid = sid
+        self._msg_id = None  # 新 turn: 重置消息身份, 本 turn 所有 chunk 聚合为一条消息
+        try:
+            agent_loop(ctx, self._ctx_file(sid), text)
+        finally:
+            if self._cur_sid == sid:
+                self._cur_sid = None
+        return {"stopReason": "cancelled" if cancel.is_set() else "end_turn"}
+
+    def _m_session_cancel(self, p: dict) -> None:
+        sid = p.get("sessionId")
+        ev = self.cancel_flags.get(sid)
+        if ev is not None:
+            ev.set()  # 软取消: 当前 LLM 调用返回后结束本轮
+        # 协议要求 abort 进行中的工具调用: 解除本 session 所有 pending 权限请求,
+        # 否则 client 取消后不再裁决, prompt 线程会卡满权限超时
+        with self._lock:
+            for rid, rec in list(self._perm.items()):
+                if rec.get("sid") == sid:
+                    rec["decision"] = "deny"  # 取消 => 工具不执行
+                    rec["event"].set()
+        return None
+
+    # ---------- Printer.emitter 回调 ----------
+    def emit(self, d: dict) -> None:
+        """Printer.emitter 回调: 事件 dict → session/update 通知 (tool/tool_result/thinking/output/usage)."""
+        sid = self._cur_sid
+        if sid is None:
+            return
+        t = d.get("type")
+        if t == "tool":
+            tid = "%s:%s" % (d.get("name", "tool"), self._next_id())
+            self._set_tool_id(tid)
+            self._emit(sid, {"sessionUpdate": "tool_call", "toolCallId": tid,
+                             "title": "%s %s" % (d.get("name", "tool"), str(d.get("args_preview", ""))[:80]),
+                             "status": "pending"})
+        elif t == "tool_result":
+            tid = self._tool_id() or ("%s:0" % d.get("name", "tool"))
+            self._set_tool_id(None)  # 配对消费
+            self._emit(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tid,
+                             "status": "completed" if d.get("ok") else "failed"})
+        elif t == "thinking":
+            if self._msg_id is None:
+                self._msg_id = "msg_" + self._next_id()
+            self._emit(sid, {"sessionUpdate": "agent_thought_chunk", "messageId": self._msg_id,
+                             "content": {"type": "text", "text": str(d.get("content", ""))}})
+        elif t == "output":
+            if self._msg_id is None:
+                self._msg_id = "msg_" + self._next_id()  # turn 内首个 chunk 时生成, 后续复用
+            self._emit(sid, {"sessionUpdate": "agent_message_chunk", "messageId": self._msg_id,
+                             "content": {"type": "text", "text": str(d.get("content", ""))}})
+        elif t == "usage":
+            self._emit(sid, {"sessionUpdate": "usage_update",
+                             "used": d.get("context_tokens", 0), "size": d.get("max_context", 0)})
+
+    def _h_permission(self, message: str) -> bool:
+        sid = self._cur_sid
+        if sid is None:
+            return False
+        req_id = "perm_" + self._next_id()
+        ev = threading.Event()
+        with self._lock:
+            self._perm[req_id] = {"event": ev, "decision": "", "sid": sid}
+        self._send({"jsonrpc": "2.0", "id": req_id, "method": "session/request_permission",
+                    "params": {"sessionId": sid,
+                               "toolCall": {"toolCallId": self._tool_id() or "", "title": message[:120]},
+                               "options": [
+                                   {"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
+                                   {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]}})
+        ev.wait(timeout=300)
+        with self._lock:
+            decision = self._perm.pop(req_id, {}).get("decision", "")
+        return decision == "allow"
+
+    # ---------- 会话文件与主循环 ----------
+    def _ctx_file(self, sid: str) -> str:
+        return os.path.join(session_dir, f"acp_{sid}.json")
+
+    # ---------- 主循环 ----------
+    def serve(self) -> None:
+        # 原生注册 (Printer 扩展点): acp 模式文本静默, 事件经 emitter, 权限经 handler
+        console.mode = "acp"
+        console.emitter = self.emit
+        console.permission_handler = self._h_permission
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("method") == "session/prompt":  # prompt 在独立线程处理, 主循环继续读 stdin 以接收 cancel 通知
+                threading.Thread(target=self._run_prompt_thread, args=(msg,), daemon=True, name="acp-prompt").start()
+            else:
+                self.dispatch(msg)
+
+    def _run_prompt_thread(self, msg: dict) -> None:
+        """prompt 线程边界兜底: 线程内未捕获异常(含 _error 自身失败, 如 client 断连的BrokenPipeError)不会传播到主循环, 必须打印 traceback 并尽力回执, 避免静默吞掉."""
+        try:
+            self.dispatch(msg)
+        except Exception:  # noqa: BLE001 线程边界
+            traceback.print_exc()
+            try:
+                self._error(msg.get("id"), -32603, "Internal error: %s" % sys.exc_info()[1])
+            except Exception:  # noqa: BLE001 回执也失败(client 已断连), 放弃
+                pass
+
+
+def acp_main() -> int:
+    if not MANGO_KEY:
+        console.error("MANGO_KEY env var is required for ACP mode")
+        return 1
+    initialize_system()  # 确保 .mangocli/session 等目录存在
+    global provider
+    if MANGO_ROUTING == "on":
+        try:
+            provider = RoutedProvider.from_file(providers_file)
+        except Exception:  # noqa: BLE001 与 CLI 一致: 回退 high-tier
+            provider = RoutedProvider({"providers": [{"name": MANGO_MODEL, "url": MANGO_API_URL, "model": MANGO_MODEL,
+                                                      "tier": "high", "api_key": MANGO_KEY or ""}]})
+    AcpServer().serve()
+    return 0
 
 
 def _parse_args(args=None):
@@ -2333,21 +2348,19 @@ def _parse_args(args=None):
     parser.add_argument("--version", action="version", version=f"mangopi-cli v{__version__}")
     parser.add_argument("--doctor", action="store_true", help="Run environment diagnostics and exit")
     parser.add_argument("--yolo", action="store_true", help="Skip edit/bash confirmations (overrides MANGO_YOLO)")
+    parser.add_argument("--acp", action="store_true",
+                        help="Run as ACP (Agent Client Protocol) v1 agent server over stdio (JSON-RPC)")
     sub = parser.add_subparsers(dest="command")
     loop = sub.add_parser("loop", help="Run Loop Engineering (3-agent pipeline) with a goal query and exit")
     loop.add_argument("query", nargs="+", help="Goal for loop iteration")
     loop.add_argument("--max-iter", type=int, default=5, help="Max iterations (default: 5)")
     loop.add_argument("--task-id", type=str, default=None,
                       help="Task identifier; auto-generated as 8-char hex if omitted")
-    loop.add_argument("--output", choices=["console", "jsonl"], default="console",
-                      help="Output mode (default: console)")
     loop.add_argument("--push", action="store_true", help="Commit verified changes on PASS")
     loop.add_argument("--dry-run", action="store_true", help="Print pipeline topology and exit")
     loop.add_argument("--fast", action="store_true", help="Skip design/review, only dev → test → push")
     loop.add_argument("--only-dev", action="store_true", help="Dev only: no test, no review, dev → push/succeed")
     loop.add_argument("--wish", action="store_true", help="Prepend research before normal pipeline")
-    loop.add_argument("--sparse", type=str, metavar="HANDLE",
-                      help="Sparse mode: collaborate via MailBox with this handle (e.g. @agent-a)")
     return parser.parse_args(args)
 
 
@@ -2358,17 +2371,15 @@ def main():
     MANGO_YOLO = args.yolo or MANGO_YOLO
     if args.doctor:
         sys.exit(doctor())
+    if args.acp:
+        sys.exit(acp_main())
     if args.command == "loop":
         if not MANGO_KEY:
             console.error("MANGO_KEY env var is required for loop mode")
             sys.exit(1)
-        console.mode = args.output
-        if args.sparse:
-            global mailbox
-            mailbox = MailBox(self_handle=args.sparse)
         success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id,
                               is_push=args.push, dry_run=args.dry_run, fast=args.fast, wish=args.wish,
-                              only_dev=args.only_dev, sparse=args.sparse)
+                              only_dev=args.only_dev)
         sys.exit(0 if success else 1)
 
     global provider

@@ -404,8 +404,8 @@ class TestToolSchemaIncludesViewImage(unittest.TestCase):
         self.assertIn("view_image", names)
 
     def test_schema_count(self):
-        # 13 tools total (web_search added)
-        self.assertEqual(len(m.tool_schema()), 13)
+        # 10 tools total (mailbox_* removed)
+        self.assertEqual(len(m.tool_schema()), 10)
 
 
 if __name__ == "__main__":

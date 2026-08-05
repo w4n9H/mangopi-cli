@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.44] - 2026-08-05
+
+### Added
+- **ACP (Agent Client Protocol) v1 server** — `--acp` runs mangopi as a stdio JSON-RPC agent, connectable from Zed / JetBrains / codecompanion.nvim etc.: `initialize` (capability negotiation), `session/new` / `session/prompt` / `session/cancel`, `session/update` notifications (`agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `usage_update`), and the `session/request_permission` approval flow; tools still execute locally, one `session/prompt` = one turn; 15 tests in `test/test_acp.py`
+
+### Removed
+- **`--output jsonl`** — structured event output mode for `loop` (Printer jsonl branches, `_output_event` event chain)
+- **Sparse Loop / MailBox collective memory** — `--sparse`, `MailBox` class, `mailbox_post`/`mailbox_read`/`mailbox_check` tools, `_mailbox_guidance` prompt injection; `test/test_mailbox.py` removed
+
+### Changed
+- **Printer native extension points** — `mode` ("acp"), `emitter`, `permission_handler` replace the previous runtime monkey-patching of console methods
+- **Docs synced** — README / ROADMAP / index.html updated for the ACP server and removed features
+
+---
+
 ## [0.1.43] - 2026-08-03
 
 ### Changed

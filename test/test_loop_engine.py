@@ -29,16 +29,12 @@ def _make_agent(agent_cls, name=""):
 
 
 class LoopEngineTestBase(unittest.TestCase):
-    """Base class: mock agent_loop, _get_completion_result, _get_loop_ctx, _output_event."""
+    """Base class: mock agent_loop, _get_completion_result, _get_loop_ctx."""
 
     def setUp(self):
-        # Suppress console output and JSONL events
+        # Suppress console output
         self.console_patcher = mock.patch.object(m.console, "text")
         self.console_patcher.start()
-        self.output_patcher = mock.patch("mangopi_cli._output_event")
-        self.output_patcher.start()
-        self.emit_patcher = mock.patch("mangopi_cli._emit_iter")
-        self.emit_patcher.start()
 
         # Mock agent_loop (does nothing)
         self.agent_patcher = mock.patch("mangopi_cli.agent_loop")
@@ -63,8 +59,6 @@ class LoopEngineTestBase(unittest.TestCase):
 
     def tearDown(self):
         self.console_patcher.stop()
-        self.output_patcher.stop()
-        self.emit_patcher.stop()
         self.agent_patcher.stop()
         self.extract_patcher.stop()
         self.ctx_patcher.stop()
@@ -114,7 +108,6 @@ class TestSuccessPath(LoopEngineTestBase):
             ]
             m.loop_engine("test goal", max_iter=3, wish=True)
         # _get_completion_result was called, research was stored shared dict
-        # Verify _output_event was called with start event
         self.mock_get_ctx.assert_called()
 
 

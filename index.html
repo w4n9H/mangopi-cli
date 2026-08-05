@@ -748,7 +748,6 @@
         </div>
         <nav>
             <a href="#loop"><span class="lang-en">loop</span><span class="lang-zh">循环工程</span></a>
-            <a href="#sparse"><span class="lang-en">sparse</span><span class="lang-zh">稀疏模式</span></a>
             <a href="#routing"><span class="lang-en">routing</span><span class="lang-zh">路由</span></a>
             <a href="#features"><span class="lang-en">features</span><span class="lang-zh">特性</span></a>
             <a href="#install"><span class="lang-en">install</span><span class="lang-zh">安装</span></a>
@@ -930,62 +929,6 @@
 </section>
 
 <!-- ═══════════════════════ SPARSE LOOP ═══════════════════════ -->
-<section id="sparse">
-    <div class="wrap">
-        <div class="sec-head">
-            <div class="sec-num">— 02.5</div>
-            <h2 class="sec-title"><span class="lang-en">Sparse <em>Loop.</em></span><span class="lang-zh">稀疏<em>循环</em></span></h2>
-        </div>
-        <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
-            <span class="lang-en"><strong>MailBox</strong> is a file-based async messaging system — designed for long-running sparse tasks, multi-agent coordination, and human-in-the-loop collaboration. All pipeline agents share a MailBox group as <strong>collective memory</strong>, enabling cross-session collaboration across days or weeks.</span>
-            <span class="lang-zh"><strong>MailBox</strong> 是一个基于文件的异步消息系统——为长程稀疏任务、多智能体协作以及人类参与而设计。所有流水线智能体共享一个 MailBox 组作为<strong>集体记忆</strong>，实现跨天跨周的异步协作。</span>
-        </p>
-
-        <div class="feat-list" style="margin-top: 48px;">
-            <div class="feat">
-                <div class="feat-tag">— 01</div>
-                <div>
-                    <h3><span class="lang-en">Start</span><span class="lang-zh">开始</span></h3>
-                    <p><span class="lang-en"><code>mailbox_read</code> to review previous progress before acting — pick up where you left off.</span><span class="lang-zh">执行前先 <code>mailbox_read</code> 回顾历史进度——从上次中断处继续。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 02</div>
-                <div>
-                    <h3><span class="lang-en">Claim</span><span class="lang-zh">宣告</span></h3>
-                    <p><span class="lang-en"><code>mailbox_post</code> to announce what you're about to do — keep the team informed.</span><span class="lang-zh">通过 <code>mailbox_post</code> 宣告你要做什么——让团队知情。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 03</div>
-                <div>
-                    <h3><span class="lang-en">Update</span><span class="lang-zh">更新</span></h3>
-                    <p><span class="lang-en"><code>mailbox_post</code> at key milestones — decisions, blockers, <code>[State]</code> changes.</span><span class="lang-zh">关键节点通过 <code>mailbox_post</code> 更新——决策、阻塞、<code>[State]</code> 变更。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 04</div>
-                <div>
-                    <h3><span class="lang-en">Finish</span><span class="lang-zh">完成</span></h3>
-                    <p><span class="lang-en"><code>mailbox_post</code> with <code>[Result]</code> to mark completion for the next agent or human.</span><span class="lang-zh">用 <code>[Result]</code> 标记完成，交接给下一个智能体或人类。</span></p>
-                </div>
-            </div>
-        </div>
-
-        <div class="callout">
-            <div class="callout-text">
-                <h3><span class="lang-en">Cross-day task persistence</span><span class="lang-zh">跨天任务持久化</span></h3>
-                <p>
-                    <span class="lang-en">Add <code>--sparse @agent-a</code> to any <code>/loop</code> command. Same <code>--task-id</code> across separate days — agents inherit full history via MailBox.</span>
-                    <span class="lang-zh">在任何 <code>/loop</code> 命令后添加 <code>--sparse @agent-a</code>。不同日期使用相同 <code>--task-id</code>——智能体通过 MailBox 继承完整历史。</span>
-                </p>
-            </div>
-            <pre class="callout-code"><span class="cmd-c">❯</span> /loop <span class="str">"data cleaning"</span> --sparse @agent-a --task-id clean-v1
-<span class="muted"># Agents → mailbox_read history → mailbox_post [State] → mailbox_post [Result]</span></pre>
-        </div>
-    </div>
-</section>
-
 <!-- ═══════════════════════ ROUTING ═══════════════════════ -->
 <section id="routing">
     <div class="wrap">
@@ -1213,9 +1156,6 @@
             <div class="tool"><code>view_image</code><p><span class="lang-en">Load local image into vision context</span><span class="lang-zh">加载本地图片至视觉上下文</span></p></div>
             <div class="tool"><code>web_search</code><p><span class="lang-en">Bocha AI Search live web</span><span class="lang-zh">Bocha AI 实时搜索</span></p></div>
             <div class="tool"><code>use_skill</code><p><span class="lang-en">Load installed SKILL.md</span><span class="lang-zh">加载已安装技能</span></p></div>
-            <div class="tool"><code>mailbox_post</code><p><span class="lang-en">Post messages &amp; [State]/[Result] to a group</span><span class="lang-zh">发布消息与进度至任务组</span></p></div>
-            <div class="tool"><code>mailbox_read</code><p><span class="lang-en">Read thread history &amp; member info</span><span class="lang-zh">读取线程历史与成员信息</span></p></div>
-            <div class="tool"><code>mailbox_check</code><p><span class="lang-en">Check for unread updates across groups</span><span class="lang-zh">检查各组的未读更新</span></p></div>
             <div class="tool"><code>attempt_completion</code><p><span class="lang-en">Task completion signal</span><span class="lang-zh">任务完成信号</span></p></div>
         </div>
 
@@ -1223,7 +1163,7 @@
             <div class="cmd"><code>/q</code><p><span class="lang-en">Quit</span><span class="lang-zh">退出</span></p></div>
             <div class="cmd"><code>/n</code><p><span class="lang-en">New session</span><span class="lang-zh">新会话</span></p></div>
             <div class="cmd"><code>/c</code><p><span class="lang-en">Compact</span><span class="lang-zh">手动压缩</span></p></div>
-            <div class="cmd"><code>/l &lt;goal&gt;</code><p><span class="lang-en">Loop engineering (--sparse for MailBox memory)</span><span class="lang-zh">循环工程（--sparse 启用 MailBox 记忆）</span></p></div>
+            <div class="cmd"><code>/l &lt;goal&gt;</code><p><span class="lang-en">Loop engineering pipeline</span><span class="lang-zh">循环工程流水线</span></p></div>
             <div class="cmd"><code>/h</code><p><span class="lang-en">Help</span><span class="lang-zh">帮助</span></p></div>
         </div>
     </div>
