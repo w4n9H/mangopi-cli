@@ -7,7 +7,8 @@ Covers:
       → message → usage), stopReason
     * tool lifecycle: tool_call pending → request_permission → allow/deny/cancelled →
       tool_call_update (toolCallId pairing)
-    * session/cancel: cancels pending permission requests, stopReason=cancelled
+    * session/cancel: releases pending permissions, agent_loop stops early
+      (no further LLM/tool calls), stopReason=cancelled
     * messageId aggregation: shared within a turn, new across turns
     * usage_update: official structure (used/size)
     * _prompt_text: rejects non-text ContentBlocks instead of silently dropping
@@ -288,15 +289,29 @@ class TestPermission(AcpTestBase):
     def test_reject_once_skips_tool(self):
         self._deny_flow({"outcome": "selected", "optionId": "reject-once"})
 
-    def test_cancelled_outcome_skips_tool(self):
-        self._deny_flow({"outcome": "cancelled"})
+    def test_cancelled_outcome_terminates_turn(self):
+        """RequestPermissionOutcome::Cancelled 裁决 → 工具跳过, 且 turn 终止 (stopReason=cancelled, 无第二轮 LLM)."""
+        with open("x.py", "w") as f:
+            f.write("a")
+        self.set_provider([_tool_resp("edit", {"path": "x.py", "old": "a", "new": "b"}),
+                           _stop_resp("done")])
+        sid = self.new_session()
+        self.send("session/prompt", {"sessionId": sid, "prompt": "edit"}, 3)
+        pm = self.wait_permission()
+        self.send_response(pm["id"], {"outcome": {"outcome": "cancelled"}})
+        r = self.wait_for(lambda x: x.get("id") == 3)
+        self.assertEqual(r["result"]["stopReason"], "cancelled")
+        self.assertEqual(m.provider.calls, 1, "cancelled 裁决应终止 turn, 不再发起新 LLM 调用")
+        with open("x.py") as f:
+            self.assertEqual(f.read(), "a")
 
 
 # ── session/cancel ────────────────────────────────────────────────────
 
 class TestCancel(AcpTestBase):
     def test_cancel_releases_pending_permission(self):
-        """cancel 后 prompt 快速返回 cancelled, 不卡权限超时, 工具不执行."""
+        """cancel 后 prompt 快速返回 cancelled: 不卡权限超时, 工具不执行,
+        agent_loop 提前终止 (不再发起新的 LLM 调用, calls==1)."""
         with open("x.py", "w") as f:
             f.write("a")
         self.set_provider([_tool_resp("edit", {"path": "x.py", "old": "a", "new": "b"}),
@@ -310,6 +325,7 @@ class TestCancel(AcpTestBase):
         r = self.wait_for(lambda x: x.get("id") == 3, timeout=8)
         self.assertLess(time.time() - t0, 5)  # 未卡权限超时
         self.assertEqual(r["result"]["stopReason"], "cancelled")
+        self.assertEqual(m.provider.calls, 1, "cancel 后 agent_loop 不应再发起新的 LLM 调用")
         with open("x.py") as f:
             self.assertEqual(f.read(), "a")
 

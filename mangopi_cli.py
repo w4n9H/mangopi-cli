@@ -19,6 +19,7 @@ import shutil
 import mimetypes
 import argparse
 import uuid
+import importlib.util
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -29,7 +30,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.44"
+__version__ = "0.1.45"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -48,6 +49,11 @@ MANGO_TRACE = os.environ.get("MANGO_TRACE", "off").lower() in ("1", "true", "yes
 project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
+extensions_dir = os.path.expanduser("~/.mangocli/extensions")  # 扩展工具目录: *.py 自动发现
+
+# 直接运行 (python mangopi_cli.py) 时模块名为 __main__, 此处注入别名使扩展文件可
+# `from mangopi_cli import ...` (import / -m / pip 入口下天然存在, setdefault 无副作用)
+sys.modules.setdefault("mangopi_cli", sys.modules[__name__])
 loops_dir = os.path.join(base_persist_dir, "loops")
 providers_file = os.path.join(base_persist_dir, "providers.json")
 traces_dir = os.path.join(base_persist_dir, "traces")
@@ -441,6 +447,23 @@ def _bocha_search_api(query: str = None, freshness: str = "noLimit",  summary: b
     return [{"date": m.get("dateLastCrawled", ""), "title": m.get("name", ""),
              "link": m.get("url", ""), "summary": m.get("summary", ""), "content": m.get("content", "")}
             for m in pages.get("value", [])] if isinstance(pages, dict) else []
+
+
+def _load_extensions():  # -> List[ToolBase] (注解延迟求值会 NameError, ToolBase 定义在后)
+    """加载 ~/.mangocli/extensions/*.py, 收集各扩展导出的 tools 列表 (ToolBase 实例) 返回.
+    约定: 扩展文件导出 `tools` 变量; 同名工具由调用方合并 TOOLS 时覆盖 (扩展优先). 单个扩展失败只记录诊断, 不影响其他扩展."""
+    result = []
+    if not os.path.isdir(extensions_dir):
+        return result
+    for py in sorted(globlib.glob(os.path.join(extensions_dir, "*.py"))):
+        try:
+            spec = importlib.util.spec_from_file_location("mango_ext_" + os.path.basename(py), py)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            result.extend(getattr(mod, "tools", []) or [])
+        except Exception as err:  # noqa: BLE001 扩展失败不拖垮主程序
+            console.error(f"load extension {py} err: {err}")
+    return result
 
 
 class SkillManager:
@@ -942,9 +965,8 @@ class AttemptCompletionTool(ToolBase):
 
 
 TOOLS = {
-    t.name: t for t in [
-        ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()]}
+    t.name: t for t in [ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
+                        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()] + _load_extensions()}
 
 
 def tool_schema():
@@ -1639,12 +1661,16 @@ class SystemPrompt:
                 f"- Shell: {os.environ.get('SHELL', 'unknown')}\n")
 
     @staticmethod
-    def _build_user_rules() -> str:
-        memory_path = os.path.join(project_root, ".mangocli", "MANGO.md")
-        if not os.path.exists(memory_path) or os.path.getsize(memory_path) == 0:
+    def _build_user_rules() -> str:  # 优先级: .mangocli/AGENT.md (行业通用约定, 为主) > .mangocli/MANGO.md (mangopi 私有);
+        parts = []
+        for p in (os.path.join(project_root, ".mangocli", "AGENT.md"),
+                  os.path.join(project_root, ".mangocli", "MANGO.md")):
+            if os.path.exists(p) and os.path.getsize(p) > 0:
+                with open(p, "r", encoding="utf-8") as f:
+                    parts.append(f.read().strip())
+        if not parts:
             return "## User Rules\n\nNo user-defined rules.\n"
-        with open(memory_path, "r", encoding="utf-8") as f:
-            return "## User Rules\n\n" + f.read()
+        return "## User Rules\n\n" + "\n\n".join(parts)
 
     @staticmethod
     def _build_safety() -> str:
@@ -1664,7 +1690,9 @@ class SystemPrompt:
     def assemble(self) -> str: return "\n\n".join(content for _, content in self.sections)
 
 
-def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
+def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_event: Optional[threading.Event] = None):
+    """主 agent 循环. cancel_event 由 AcpServer 传入 (ACP session/cancel): 置位后不再发起
+    新的 LLM 调用/工具执行 (软取消), 当前阻塞调用返回后立即终止."""
     agent_mode = 'loop' if "/loops/" in ctx_file_path else 'chat'
     ctx.trace_meta.update(session_file=ctx_file_path, goal=user_input, mode=f"{agent_mode}")
 
@@ -1673,6 +1701,8 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
 
     iteration = 0
     while True:
+        if cancel_event is not None and cancel_event.is_set():
+            break  # ACP: session/cancel 已收到, 不再发起新的 LLM 调用
         console.start_spinner("Request...")
         response = provider.parse_response(chat_completion(ctx.prepare_for_api()))
         console.end_spinner()
@@ -1703,6 +1733,8 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str):
         if response["has_tool_calls"]:
             completed = False
             for tool in response["tool_calls"]:
+                if cancel_event is not None and cancel_event.is_set():
+                    break  # ACP: 已取消, 不再执行后续工具调用
                 tool_name, tool_args = tool["name"], tool["arguments"]
                 ctx.append_trace("tool_call", name=tool_name, args_preview=str(tool_args)[:150])
                 result = run_tool(tool_name, tool_args)
@@ -2176,8 +2208,13 @@ class AcpServer:
             if rec is None:
                 return  # 未知/过期响应, 忽略
             outcome = ((result or {}).get("outcome") or {})
-            option_id = outcome.get("optionId", "")
-            rec["decision"] = "allow" if outcome.get("outcome") == "selected" and option_id == "allow-once" else "deny"
+            oc = outcome.get("outcome", "")
+            if oc == "selected" and outcome.get("optionId", "") == "allow-once":
+                rec["decision"] = "allow"
+            elif oc == "cancelled":
+                rec["decision"] = "cancelled"  # RequestPermissionOutcome::Cancelled: client 已取消 turn
+            else:
+                rec["decision"] = "deny"
             rec["event"].set()
 
     # ---------- 协议方法 ----------
@@ -2221,7 +2258,7 @@ class AcpServer:
         self._cur_sid = sid
         self._msg_id = None  # 新 turn: 重置消息身份, 本 turn 所有 chunk 聚合为一条消息
         try:
-            agent_loop(ctx, self._ctx_file(sid), text)
+            agent_loop(ctx, self._ctx_file(sid), text, cancel_event=cancel)
         finally:
             if self._cur_sid == sid:
                 self._cur_sid = None
@@ -2290,6 +2327,11 @@ class AcpServer:
         ev.wait(timeout=300)
         with self._lock:
             decision = self._perm.pop(req_id, {}).get("decision", "")
+        if decision == "cancelled":
+            ev2 = self.cancel_flags.get(sid)
+            if ev2 is not None:
+                ev2.set()  # 协议: client 取消 turn 时以 Cancelled 裁决权限 => 同步终止本轮
+            return False
         return decision == "allow"
 
     # ---------- 会话文件与主循环 ----------

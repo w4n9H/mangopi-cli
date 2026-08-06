@@ -89,6 +89,7 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Built-in file and shell tools
 * Persistent local sessions
 * Skill system support (`SKILL.md`)
+* Extension system — auto-discovered custom tools via `~/.mangocli/extensions/*.py`
 * Safe shell execution checks
 * Fully hackable and easy to extend
 * Large-context optimized runtime
@@ -313,6 +314,36 @@ Prefer small functions.
 ```
 
 The model can automatically discover and load relevant skills during execution.
+
+---
+
+# Extension System
+
+Mangopi CLI supports custom tools via auto-discovered extensions: drop a Python file into `~/.mangocli/extensions/` and its tools join the built-in registry on startup — visible in the LLM tool schema, dispatched through `run_tool`, and available in ACP mode.
+
+Example extension:
+
+```python
+# ~/.mangocli/extensions/hello.py
+from mangopi_cli import ToolBase
+
+class HelloTool(ToolBase):
+    name = "hello"
+    description = "Say hello"
+    params = {"name": {"type": "string", "description": "Who to greet"}}
+
+    def run(self, args):
+        return self.ok("Hello, %s!" % args.get("name", "world"))
+
+tools = [HelloTool()]
+```
+
+Conventions:
+
+- An extension file exports a `tools` list of `ToolBase` instances
+- Same-name tools override built-ins (extension wins)
+- Extensions run arbitrary Python code — only install from trusted sources
+- A runnable example lives at `examples/extensions/hello.py`
 
 ---
 

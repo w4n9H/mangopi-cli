@@ -1041,6 +1041,13 @@
                     <p><span class="lang-en">Reusable workflow bundles via <code>SKILL.md</code>. Install in ~/.mangocli/skills/, invoke via <code>use_skill</code>.</span><span class="lang-zh">通过 <code>SKILL.md</code> 复用工作流。安装至 ~/.mangocli/skills/，通过 <code>use_skill</code> 调用。</span></p>
                 </div>
             </div>
+            <div class="feat">
+                <div class="feat-tag">— 09</div>
+                <div>
+                    <h3><span class="lang-en">Extension System</span><span class="lang-zh">扩展系统</span></h3>
+                    <p><span class="lang-en">Custom tools via auto-discovered Python files in ~/.mangocli/extensions/. Join the LLM tool registry on startup.</span><span class="lang-zh">将 Python 文件放入 ~/.mangocli/extensions/ 自动注册自定义工具，启动即进入 LLM 工具列表。</span></p>
+                </div>
+            </div>
         </div>
     </div>
 </section>
@@ -1144,7 +1151,7 @@
     <div class="wrap">
         <div class="sec-head">
             <div class="sec-num">— 08</div>
-            <h2 class="sec-title"><span class="lang-en"><em>13</em> tools.</span><span class="lang-zh"><em>13</em> 个工具</span></h2>
+            <h2 class="sec-title"><span class="lang-en"><em>13</em> built-in tools, <em>∞</em> extendable.</span><span class="lang-zh"><em>13</em> 个内置工具，<em>∞</em> 无限扩展</span></h2>
         </div>
         <div class="tools">
             <div class="tool"><code>read</code><p><span class="lang-en">File or image (png/jpg/gif/webp auto-routes to vision)</span><span class="lang-zh">文件或图片（png/jpg/gif/webp 自动路由至视觉）</span></p></div>
@@ -1157,6 +1164,7 @@
             <div class="tool"><code>web_search</code><p><span class="lang-en">Bocha AI Search live web</span><span class="lang-zh">Bocha AI 实时搜索</span></p></div>
             <div class="tool"><code>use_skill</code><p><span class="lang-en">Load installed SKILL.md</span><span class="lang-zh">加载已安装技能</span></p></div>
             <div class="tool"><code>attempt_completion</code><p><span class="lang-en">Task completion signal</span><span class="lang-zh">任务完成信号</span></p></div>
+            <div class="tool"><code>+ yours</code><p><span class="lang-en">Drop a .py into ~/.mangocli/extensions/ — auto-registered at startup</span><span class="lang-zh">放入 .py 至 ~/.mangocli/extensions/ 启动自动注册</span></p></div>
         </div>
 
         <div class="commands">

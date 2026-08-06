@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.45] - 2026-08-06
+
+### Added
+- **Extension system** — custom tools via `~/.mangocli/extensions/*.py`, auto-merged into `TOOLS` (extension wins on name conflict), broken extensions isolated; example in `examples/extensions/hello.py`
+- **AGENT.md support** — user rules read `.mangocli/AGENT.md` (takes precedence) alongside `.mangocli/MANGO.md`
+
+### Fixed
+- **ACP stop button** — `session/cancel` now actually stops the turn (agent_loop checks the cancel flag between LLM calls / tools); `RequestPermissionOutcome::Cancelled` handled correctly
+
+---
+
 ## [0.1.44] - 2026-08-05
 
 ### Added

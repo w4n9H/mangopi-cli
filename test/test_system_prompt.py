@@ -301,6 +301,57 @@ class TestMemorySectionBranches(unittest.TestCase):
             self.assertIn("Always use type hints", content)
             self.assertNotIn(self.UNAVAILABLE_MARKER, content)
 
+    def test_43_agent_md_only_injected(self):
+        """仅存在 .mangocli/AGENT.md 时, memory 节必须注入其内容."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mangocli = os.path.join(tmp, ".mangocli")
+            os.makedirs(mangocli)
+            with open(os.path.join(mangocli, "AGENT.md"), "w", encoding="utf-8") as f:
+                f.write("- Follow repo conventions from AGENT.md\n")
+            with patch("mangopi_cli.project_root", tmp):
+                sp = SystemPrompt()
+                memory = next(c for n, c in sp.sections if n == "memory")
+                content = "".join(memory)
+            self.assertIn(self.HEADER, content)
+            self.assertIn("Follow repo conventions from AGENT.md", content)
+            self.assertNotIn(self.UNAVAILABLE_MARKER, content)
+
+    def test_44_agent_md_takes_precedence_over_mango_md(self):
+        """两者并存时合并注入, 且 AGENT.md 内容在前 (为主)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mangocli = os.path.join(tmp, ".mangocli")
+            os.makedirs(mangocli)
+            agent_text = "- AGENT rule: tabs\n"
+            mango_text = "- MANGO rule: type hints\n"
+            with open(os.path.join(mangocli, "AGENT.md"), "w", encoding="utf-8") as f:
+                f.write(agent_text)
+            with open(os.path.join(mangocli, "MANGO.md"), "w", encoding="utf-8") as f:
+                f.write(mango_text)
+            with patch("mangopi_cli.project_root", tmp):
+                sp = SystemPrompt()
+                memory = next(c for n, c in sp.sections if n == "memory")
+                content = "".join(memory)
+            self.assertIn(self.HEADER, content)
+            self.assertLess(content.find("AGENT rule"), content.find("MANGO rule"),
+                            "AGENT.md 内容必须排在 MANGO.md 之前")
+            self.assertNotIn(self.UNAVAILABLE_MARKER, content)
+
+    def test_45_empty_agent_md_falls_back_to_mango_md(self):
+        """AGENT.md 存在但为空时, 回退到 MANGO.md 内容."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mangocli = os.path.join(tmp, ".mangocli")
+            os.makedirs(mangocli)
+            open(os.path.join(mangocli, "AGENT.md"), "w", encoding="utf-8").close()
+            with open(os.path.join(mangocli, "MANGO.md"), "w", encoding="utf-8") as f:
+                f.write("- Only MANGO rule\n")
+            with patch("mangopi_cli.project_root", tmp):
+                sp = SystemPrompt()
+                memory = next(c for n, c in sp.sections if n == "memory")
+                content = "".join(memory)
+            self.assertIn(self.HEADER, content)
+            self.assertIn("Only MANGO rule", content)
+            self.assertNotIn(self.UNAVAILABLE_MARKER, content)
+
 
 if __name__ == "__main__":
     # Run with verbose output
