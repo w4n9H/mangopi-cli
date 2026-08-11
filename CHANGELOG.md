@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.46] - 2026-08-11
+
+### Added
+- **Session switching (CLI)** — `/s` lists sessions, `/s <name>` switches or creates; current session persisted in `.current` and auto-restored on restart (`session.json` default unchanged, zero migration)
+- **Session switching (ACP)** — `session/list` + `session/load` with full history replay (`session/update` notifications), `loadSession: true` capability; deterministic sid naming (`sess_acp_*`) survives agent restarts; ACP only exposes its own `acp_*` sessions
+
+---
+
 ## [0.1.45] - 2026-08-06
 
 ### Added

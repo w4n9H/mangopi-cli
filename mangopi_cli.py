@@ -30,7 +30,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.45"
+__version__ = "0.1.46"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -108,6 +108,7 @@ HELP_COMMANDS = {
     "/q or /quit":          {"zh": "退出程序", "en": "Quit"},
     "/c or /compact":       {"zh": "手动压缩当前会话（释放上下文空间）", "en": "Manually compact current session"},
     "/n or /new":           {"zh": "结束当前会话并创建一个全新的会话", "en": "End current session and start a new one"},
+    "/s or /session":       {"zh": "列出会话; /s <name> 切换或新建会话", "en": "List sessions; /s <name> switch or create"},
     "/h or /help":          {"zh": "显示本帮助信息", "en": "Show this help info"},
     "/g or /goal":          {"zh": "[已废弃] GoalTool 在 v0.1.31 移除，请用 /loop",
                              "en": "[deprecated] GoalTool removed in v0.1.31; use /loop"},
@@ -2224,8 +2225,9 @@ class AcpServer:
             raise AcpError(-32602, "Unsupported protocol version: %s" % version)
         return {
             "protocolVersion": 1,
-            "agentCapabilities": {  # 官方 v1 结构: 不支持 session/load、MCP, prompt 仅纯文本
-                "loadSession": False,
+            "agentCapabilities": {  # 官方 v1 结构: 支持 session/load + session/list, 不支持 MCP, prompt 仅纯文本
+                "loadSession": True,
+                "sessionCapabilities": {"list": {}},
                 "promptCapabilities": {"image": False, "audio": False, "embeddedContext": False},
                 "mcpCapabilities": {"http": False, "sse": False}},
             "agentInfo": {"name": "mangopi-cli", "title": "Mangopi CLI", "version": __version__},
@@ -2238,7 +2240,10 @@ class AcpServer:
         if not isinstance(p.get("mcpServers"), list):
             raise AcpError(-32602, "Missing required field: mcpServers")
         # 官方 params: {cwd, mcpServers?}; sessionId 由 agent 生成并返回, 无 id 字段
-        sid = "sess_" + os.urandom(4).hex()
+        # 确定性命名: name = acp_<epoch>_<hex> => 文件 session_dir/<name>.json, sid = sess_<name>,
+        # 重启后 session/list 仍可发现并恢复 (旧随机 sid 无法跨进程恢复)
+        name = "acp_" + str(int(time.time())) + "_" + os.urandom(4).hex()
+        sid = "sess_" + name
         ctx = ContextManager()
         ctx.load(self._ctx_file(sid))
         self.sessions[sid] = ctx
@@ -2276,6 +2281,68 @@ class AcpServer:
                 if rec.get("sid") == sid:
                     rec["decision"] = "deny"  # 取消 => 工具不执行
                     rec["event"].set()
+        return None
+
+    def _m_session_list(self, p: dict) -> dict:  # session/list: 客户端据此展示会话历史并切换.
+        try:
+            names = os.listdir(session_dir)
+        except OSError:
+            names = []
+        sessions = []
+        for f in sorted(names):
+            if not f.endswith(".json") or not f.startswith("acp_"):  # 只关注 ACP 会话, CLI 会话不混入
+                continue
+            fpath = os.path.join(session_dir, f)
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    msgs = json.load(fh)
+            except (json.JSONDecodeError, IOError):
+                msgs = []
+            title = next((m.get("content", "")[:80] for m in msgs if m.get("role") == "user"), None)
+            sessions.append({
+                "sessionId": "sess_" + f[:-5], "cwd": project_root, "title": title,
+                "updatedAt": datetime.fromtimestamp(os.path.getmtime(fpath)).isoformat(),
+                "_meta": {"messageCount": len(msgs)}})
+        return {"sessions": sessions}
+
+    def _m_session_load(self, p: dict) -> None:  # session/load: 恢复指定会话并回放历史 (session/update 通知) 后响应 null."""
+        sid = p.get("sessionId")
+        if not isinstance(sid, str) or not sid.startswith("sess_"):
+            raise AcpError(-32602, "Invalid session id")
+        name = sid[5:]  # 与 session/list 同一判断: 按 name 前缀过滤 CLI 会话
+        if not name.startswith("acp_"):
+            raise AcpError(-32602, "Invalid session id")
+        fpath = self._ctx_file(sid)
+        if not os.path.isfile(fpath):
+            raise AcpError(-32602, "Unknown session: %s" % sid)
+        ctx = ContextManager()
+        ctx.load(fpath)
+        self.sessions[sid] = ctx
+        self.cancel_flags[sid] = threading.Event()
+        for i, msg in enumerate(ctx.messages):
+            mid = "mr_" + str(i)
+            role = msg.get("role")
+            if role == "user":
+                self._emit(sid, {"sessionUpdate": "user_message_chunk", "messageId": mid,
+                                 "content": {"type": "text", "text": msg.get("content", "")}})
+            elif role == "assistant":
+                text = msg.get("content") or ""
+                if text:
+                    self._emit(sid, {"sessionUpdate": "agent_message_chunk", "messageId": mid,
+                                     "content": {"type": "text", "text": text}})
+                for tc in msg.get("tool_calls") or []:
+                    tid = tc.get("id", "")
+                    self._emit(sid, {"sessionUpdate": "tool_call", "toolCallId": tid,
+                                     "title": tc.get("function", {}).get("name", ""), "status": "pending"})
+                    self._emit(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tid,
+                                     "status": "completed"})
+                reasoning = msg.get("reasoning_content") or ""
+                if reasoning:
+                    self._emit(sid, {"sessionUpdate": "agent_thought_chunk", "messageId": mid,
+                                     "content": {"type": "text", "text": reasoning}})
+            elif role == "tool":
+                self._emit(sid, {"sessionUpdate": "tool_call_update",
+                                 "toolCallId": msg.get("tool_call_id", ""), "status": "completed"})
         return None
 
     # ---------- Printer.emitter 回调 ----------
@@ -2336,7 +2403,11 @@ class AcpServer:
 
     # ---------- 会话文件与主循环 ----------
     def _ctx_file(self, sid: str) -> str:
-        return os.path.join(session_dir, f"acp_{sid}.json")
+        # sid 与文件名确定性映射: sid = "sess_<name>" => session_dir/<name>.json
+        name = sid[5:] if sid.startswith("sess_") else sid
+        if not name or ".." in name or "/" in name:
+            raise AcpError(-32602, "Invalid session id")
+        return os.path.join(session_dir, name + ".json")
 
     # ---------- 主循环 ----------
     def serve(self) -> None:
@@ -2401,6 +2472,28 @@ def _parse_args(args=None):
     return parser.parse_args(args)
 
 
+def _current_session_name() -> str:
+    """读取上次会话名 (.current); 无效或对应文件缺失时回退默认 "session"."""
+    try:
+        with open(os.path.join(session_dir, ".current"), "r", encoding="utf-8") as f:
+            name = f.read().strip()
+    except OSError:
+        return "session"
+    if not name or ".." in name or "/" in name:
+        return "session"  # 防御: 磁盘内容不可信
+    if not os.path.isfile(os.path.join(session_dir, name + ".json")):
+        return "session"  # 会话文件被删 → 回退
+    return name
+
+
+def _save_current_session(name: str):
+    try:
+        with open(os.path.join(session_dir, ".current"), "w", encoding="utf-8") as f:
+            f.write(name)
+    except OSError:
+        pass
+
+
 def main():
     initialize_system()
     args = _parse_args()
@@ -2433,9 +2526,11 @@ def main():
     yolo_tag = f" | {BOLD}YOLO{RESET}{DIM}" if MANGO_YOLO else ""
     print(f"{BOLD}Mango Cli v{__version__}{RESET} | {DIM}{mode}{yolo_tag} | {project_root}{RESET}\n")
 
-    ctx_file_path = os.path.join(session_dir, "session.json")
+    session_name = _current_session_name()  # 恢复上次会话; 无记录回退默认 "session" (零迁移)
+    ctx_file_path = os.path.join(session_dir, session_name + ".json")
     ctx = ContextManager()
     ctx.load(ctx_file_path)
+    console.text(f"Session: {session_name}")
 
     prompt_runtime = SystemPrompt()
     system_prompt = prompt_runtime.assemble()
@@ -2459,6 +2554,42 @@ def main():
                 ctx.clear()
                 ctx.append_system(system_prompt)
                 console.success("New session created.")
+                continue
+            if user_input.strip() in ("/s", "/session"):  # 列出所有会话 (mtime 倒序, 当前会话标记 *)
+                try:
+                    files = os.listdir(session_dir)
+                except OSError:
+                    files = []
+                files = sorted([f for f in files if f.endswith(".json")],
+                               key=lambda f: os.path.getmtime(os.path.join(session_dir, f)), reverse=True)
+                console.text("Sessions:")
+                for f in files:
+                    fpath = os.path.join(session_dir, f)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as fh:
+                            n = len(json.load(fh))
+                    except (json.JSONDecodeError, IOError):
+                        n = 0
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%m-%d %H:%M")
+                    mark = "*" if f[:-5] == session_name else " "
+                    console.text(f" {mark} {f[:-5]:<20} {n:>4} msgs  {mtime}")
+                continue
+            if user_input.strip().startswith("/s ") or user_input.strip().startswith("/session "):  # 切换会话
+                parts = user_input.strip().split(maxsplit=1)
+                name = parts[1].strip()
+                if not name or ".." in name or "/" in name:
+                    console.error("Invalid session name")
+                    continue
+                ctx.save(ctx_file_path)  # 先保存当前会话
+                session_name = name
+                ctx_file_path = os.path.join(session_dir, name + ".json")
+                ctx.clear()
+                ctx.load(ctx_file_path)
+                if len(ctx) == 0:  # 新会话才需要 system prompt
+                    ctx.append_system(system_prompt)
+                ctx.save(ctx_file_path)  # 立即落盘: 保证 .current 指向的文件存在, 重启后可靠恢复
+                _save_current_session(name)  # 持久化当前会话, 重启后自动恢复
+                console.success(f"Switched to session '{name}'")
                 continue
             if user_input.strip() in ("/h", "/help"):
                 helper()

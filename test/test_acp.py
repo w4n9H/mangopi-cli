@@ -188,7 +188,8 @@ class TestInitialize(AcpTestBase):
     def test_agent_capabilities_structure(self):
         self.send("initialize", {"protocolVersion": 1}, 1)
         caps = self.wait_for(lambda x: x.get("id") == 1)["result"]["agentCapabilities"]
-        self.assertEqual(caps, {"loadSession": False,
+        self.assertEqual(caps, {"loadSession": True,
+                                "sessionCapabilities": {"list": {}},
                                 "promptCapabilities": {"image": False, "audio": False,
                                                        "embeddedContext": False},
                                 "mcpCapabilities": {"http": False, "sse": False}})
@@ -412,6 +413,96 @@ class TestConcurrency(AcpTestBase):
         mid_b = [u["params"]["update"]["messageId"] for u in by_sid[sid_b]
                  if u["params"]["update"].get("sessionUpdate") == "agent_message_chunk"][0]
         self.assertNotEqual(mid_a, mid_b)
+
+
+# ── session/list & session/load ───────────────────────────────────────
+
+def _write_session(name, msgs):
+    with open(os.path.join(m.session_dir, name + ".json"), "w", encoding="utf-8") as f:
+        f.write(json.dumps(msgs, ensure_ascii=False))
+
+
+class TestSessionList(AcpTestBase):
+    def test_list_returns_all_sessions(self):
+        _write_session("acp_1_ab", [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hello world", "ts": 1}])
+        _write_session("acp_2_cd", [])
+        _write_session("feature-x", [{"role": "user", "content": "cli session", "ts": 1}])  # CLI 会话不混入
+        # backup 真实命名: <name>.json.<ts>.backup, 不以 .json 结尾 => 排除
+        with open(os.path.join(m.session_dir, "skip.json.123.backup"), "w", encoding="utf-8") as f:
+            f.write(json.dumps([{"role": "user", "content": "x", "ts": 1}], ensure_ascii=False))
+
+        self.send("session/list", {}, 1)
+        r = self.wait_for(lambda x: x.get("id") == 1)["result"]
+        sids = [s["sessionId"] for s in r["sessions"]]
+        self.assertEqual(sids, ["sess_acp_1_ab", "sess_acp_2_cd"])  # CLI 会话与 backup 文件排除
+        s1 = next(s for s in r["sessions"] if s["sessionId"] == "sess_acp_1_ab")
+        self.assertEqual(s1["title"], "hello world")
+        self.assertEqual(s1["_meta"]["messageCount"], 2)
+        self.assertEqual(s1["cwd"], m.project_root)
+        self.assertIn("T", s1["updatedAt"])  # ISO 8601
+
+
+class TestSessionLoad(AcpTestBase):
+    def _msgs(self):
+        return [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hello", "ts": 1},
+            {"role": "assistant", "content": "hi there", "reasoning_content": "think", "ts": 2},
+            {"role": "assistant", "content": None, "ts": 3,
+             "tool_calls": [{"id": "c1", "type": "function",
+                             "function": {"name": "read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "file content", "ts": 4}]
+
+    def test_load_restores_ctx_and_replays(self):
+        _write_session("acp_9_ef", self._msgs())
+        self.send("session/load", {"sessionId": "sess_acp_9_ef"}, 1)
+        r = self.wait_for(lambda x: x.get("id") == 1)
+        self.assertEqual(r["result"], None)  # 官方: 回放后响应 null
+        # ctx 已恢复并可继续 prompt
+        self.assertEqual(len(self.server.sessions["sess_acp_9_ef"]), 5)
+        # 回放序列: user → assistant(text+reasoning) → tool_call → tool_call_update → tool result
+        updates = self.updates()
+        seq = [u.get("sessionUpdate") for u in updates]
+        self.assertIn("user_message_chunk", seq)
+        self.assertIn("agent_message_chunk", seq)
+        self.assertIn("agent_thought_chunk", seq)
+        self.assertIn("tool_call", seq)
+        self.assertIn("tool_call_update", seq)
+        # 回放消息均发往目标 sid
+        self.assertTrue(all(u.get("params", {}).get("sessionId") == "sess_acp_9_ef"
+                            for u in self.out if u.get("method") == "session/update"))
+        # tool_call 与 tool_call_update 配对 (toolCallId 一致)
+        by_type = {u["sessionUpdate"]: u for u in updates}
+        self.assertEqual(by_type["tool_call"]["toolCallId"], "c1")
+        self.assertEqual(by_type["tool_call_update"]["toolCallId"], "c1")
+        # 回放 messageId 与 live turn 不同命名空间 (mr_ 前缀), 避免与运行时 msg_ 冲突
+        mids = [u["messageId"] for u in updates if u.get("messageId")]
+        self.assertTrue(all(m.startswith("mr_") for m in mids))
+
+    def test_load_unknown_session_rejected(self):
+        self.send("session/load", {"sessionId": "sess_acp_nonexistent"}, 1)
+        r = self.wait_for(lambda x: x.get("id") == 1)
+        self.assertEqual(r["error"]["code"], -32602)
+        self.assertIn("Unknown session", r["error"]["message"])
+
+    def test_load_invalid_sid_rejected(self):
+        for bad in ["sess_..%2F..", "sess_..", "abc", "sess_", None, "sess_feature-x"]:  # 含 CLI 命名空间
+            self.send("session/load", {"sessionId": bad}, 1)
+            r = self.wait_for(lambda x: x.get("id") == 1)
+            self.assertEqual(r["error"]["code"], -32602)
+
+
+class TestSessionNewNaming(AcpTestBase):
+    def test_sid_maps_to_session_file(self):
+        sid = self.new_session(101)
+        self.assertTrue(sid.startswith("sess_acp_"))  # 确定性前缀: 文件名可推导
+        name = sid[5:]
+        fpath = os.path.join(m.session_dir, name + ".json")
+        # session/new 尚不写盘 (首次 turn 后落盘), 但 sid 必须能推导出合法路径
+        self.assertNotIn("..", name)
+        self.assertNotIn("/", name)
 
 
 if __name__ == "__main__":
