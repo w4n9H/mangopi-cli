@@ -78,7 +78,6 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Python standard library only
 * Instant startup speed
 * Local-first workflow design
-* Autonomous loop execution (multi-agent implement / verify / refine pipeline)
 * ACP agent server (`--acp`) — Agent Client Protocol v1 over stdio, connectable from Zed / JetBrains etc.
 * Smart provider routing with tiered models (high/medium/low)
 * Multimodal support (image reading via `view_image`)
@@ -218,44 +217,12 @@ python mangopi_cli.py
 | `/n`        | `/new`          | Start a new session (old session is auto-backed-up)      |
 | `/c`        | `/compact`      | Manually trigger full conversation compact               |
 | `/h`        | `/help`         | Show built-in command help                               |
-| `/l <goal>` | `/loop <query>` | Start Loop Engineering — configurable pipeline with optional modes |
-
-`/loop` runs up to 5 iterations; the pipeline short-circuits on the first `VERIFY: PASS`.
 
 | Flag | Description |
 |------|-------------|
-| `--fast` | Skip design/review, only dev → test → push |
-| `--only-dev` | Dev only: no test/review, dev → push/succeed |
-| `--wish` | Prepend research (`web_search`) before the pipeline |
-| `--dry-run` | Print pipeline topology and exit |
-| `--push` | Commit verified changes on PASS |
-| `--task-id <id>` | Assign a persistent task ID (for resume) |
 | `--acp` | Run as ACP (Agent Client Protocol) v1 agent server over stdio (JSON-RPC) |
 
 ---
-
-# Loop Engineering
-
-Loop Engineering replaces the legacy Goal Mode with a **configurable Step/Pipeline**:
-
-| Agent | Role |
-|-------|------|
-| **ResearchAgent** | Optional (`--wish`). Gathers information via `web_search`; independent ctx. |
-| **DesignAgent** | Reads code, plans the design; shares `impl_ctx` with DevAgent. |
-| **DevAgent** | Implements progressively, extracts changed files for downstream agents. |
-| **ReviewAgent** | Inspects `git diff`, returns `VERIFY: PASS/FAIL`; independent ctx. |
-| **TestAgent** | Runs tests, judges PASS/FAIL; independent ctx. |
-| **UpdaterAgent** | On failure, refines the prompt for the next iteration; read/grep only. |
-
-**Modes:**
-
-| Mode | Pipeline | Command |
-|------|----------|---------|
-| Normal | `DesignAgent → DevAgent → ReviewAgent → TestAgent → SucceedStep / UpdaterAgent` | `/loop <goal>` |
-| Fast | `DevAgent → TestAgent → PushAgent / UpdaterAgent` | `/loop <goal> --fast` |
-| Wish | `ResearchAgent → DesignAgent → DevAgent → ReviewAgent → TestAgent → …` | `/loop <goal> --wish` |
-
-The pipeline runs up to 5 iterations, short-circuiting on the first `VERIFY: PASS`. All agents return structured results via `attempt_completion`.
 
 ## ACP Agent Server (`--acp`)
 
@@ -280,7 +247,6 @@ The client drives the conversation via `session/new` + `session/prompt` messages
 | `view_image`         | Load a local image into the model's vision context              |
 | `web_search`         | Search the live web via Bocha AI Search API                     |
 | `use_skill`          | Load an installed `SKILL.md` with its scripts/references        |
-| `loop_engine`       | Pipeline: design → dev → review → test (invoked via `/loop`) |
 | `attempt_completion` | Final step — present the result to the user                     |
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
@@ -409,7 +375,6 @@ Core components:
 | `Provider`        | API abstraction (`OpenAIProvider`, `DeepSeekProvider`, `MiniMaxProvider`) |
 | `SystemPrompt`    | Layered runtime prompt assembly (base, safety, rules, tools, env)        |
 | `SkillManager`    | Discovers and loads `SKILL.md` + scripts/references                      |
-| `loop_engine`      | Multi-agent Step/Pipeline (Design → Dev → Review → Test → …) with persistent task sessions |
 | `AcpServer`        | ACP (Agent Client Protocol) v1 server: stdio JSON-RPC dispatch, sessions, permissions |
 | `agent_loop`      | Drives the read → think → tool-call → verify loop until the model stops or calls `attempt_completion` |
 
@@ -420,13 +385,6 @@ Core components:
 Apache License 2.0
 
 ---
-
-## ✨ Contributors
-
-
-|                 Contributor                  |                              Role                               |
-|:--------------------------------------------:|:---------------------------------------------------------------:|
-| [@BeWater799](https://github.com/BeWater799) | 💡 Inspiration for the Loop Engineering user prompt constraints |
 
 ---
 

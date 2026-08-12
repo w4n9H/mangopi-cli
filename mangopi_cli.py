@@ -30,7 +30,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.46"
+__version__ = "0.1.47"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -50,11 +50,9 @@ project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
 extensions_dir = os.path.expanduser("~/.mangocli/extensions")  # 扩展工具目录: *.py 自动发现
-
 # 直接运行 (python mangopi_cli.py) 时模块名为 __main__, 此处注入别名使扩展文件可
 # `from mangopi_cli import ...` (import / -m / pip 入口下天然存在, setdefault 无副作用)
 sys.modules.setdefault("mangopi_cli", sys.modules[__name__])
-loops_dir = os.path.join(base_persist_dir, "loops")
 providers_file = os.path.join(base_persist_dir, "providers.json")
 traces_dir = os.path.join(base_persist_dir, "traces")
 
@@ -109,10 +107,7 @@ HELP_COMMANDS = {
     "/c or /compact":       {"zh": "手动压缩当前会话（释放上下文空间）", "en": "Manually compact current session"},
     "/n or /new":           {"zh": "结束当前会话并创建一个全新的会话", "en": "End current session and start a new one"},
     "/s or /session":       {"zh": "列出会话; /s <name> 切换或新建会话", "en": "List sessions; /s <name> switch or create"},
-    "/h or /help":          {"zh": "显示本帮助信息", "en": "Show this help info"},
-    "/g or /goal":          {"zh": "[已废弃] GoalTool 在 v0.1.31 移除，请用 /loop",
-                             "en": "[deprecated] GoalTool removed in v0.1.31; use /loop"},
-    "/l or /loop":          {"zh": "启动循环工程完成你的目标", "en": "Start Loop Engineering to complete your goal"}}
+    "/h or /help":          {"zh": "显示本帮助信息", "en": "Show this help info"}}
 
 
 def _c(text, color): return f"{color}{text}{RESET}"
@@ -314,7 +309,6 @@ console = Printer()
 # --- Init dir, Base data ---
 def initialize_system():
     os.makedirs(session_dir, exist_ok=True)  # auto create .mangocli
-    os.makedirs(loops_dir, exist_ok=True)
     os.makedirs(traces_dir, exist_ok=True)
 
 
@@ -1694,11 +1688,10 @@ class SystemPrompt:
 def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_event: Optional[threading.Event] = None):
     """主 agent 循环. cancel_event 由 AcpServer 传入 (ACP session/cancel): 置位后不再发起
     新的 LLM 调用/工具执行 (软取消), 当前阻塞调用返回后立即终止."""
-    agent_mode = 'loop' if "/loops/" in ctx_file_path else 'chat'
-    ctx.trace_meta.update(session_file=ctx_file_path, goal=user_input, mode=f"{agent_mode}")
+    ctx.trace_meta.update(session_file=ctx_file_path, goal=user_input, mode="chat")
 
     ctx.append_user(user_input)
-    ctx.append_trace("user_input", mode=agent_mode, goal=user_input, length=len(user_input), session_file=ctx_file_path)
+    ctx.append_trace("user_input", mode="chat", goal=user_input, length=len(user_input), session_file=ctx_file_path)
 
     iteration = 0
     while True:
@@ -1755,355 +1748,6 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_
     if MANGO_TRACE and ctx.trace_list:  # ── trace: close ──
         ctx.append_trace("end", total_rounds=iteration)
         ctx.save_trace()
-
-
-def _design_prompt(ctx) -> str:
-    research = ctx.get("research", "")
-    research_section = f"\nResearch summary:\n{research}\n" if research else ""
-    return (
-        f"[Design iter {ctx['iteration']}/{ctx['max_iter']}]\n"
-        f"GOAL: {ctx['goal']}{research_section}\n"
-        f"You are the DESIGNER. Plan before coding.\n"
-        f"1. Read relevant code (read/grep).\n"
-        f"2. Plan your design.\n"
-        f"3. Call `attempt_completion` when done.\n")
-
-
-def _dev_prompt(ctx) -> str:
-    return (
-        f"[Dev iter {ctx['iteration']}/{ctx['max_iter']}]\n"
-        f"GOAL: {ctx['goal']}\n\n"
-        f"You are the DEVELOPER. Implement the plan.\n"
-        f"1. Implement progressively: smallest working change first.\n"
-        f"2. Self-review: read back your changes, verify no logic errors.\n"
-        f"3. Design for extensibility: clear abstractions, hooks, avoid hard-coding.\n"
-        f"4. When calling edit/write, briefly explain WHY in your thinking.\n"
-        f"5. Call `attempt_completion` tool when done.\n\n"
-        f"DO NOT run tests or verify your own code. That's the Reviewer and Tester's job.\n")
-
-
-def _research_prompt(ctx) -> str:
-    return (
-        f"[Research]\n"
-        f"GOAL: {ctx['goal']}\n\n"
-        f"You are a RESEARCHER. Gather information before implementation.\n"
-        f"1. Break the goal into 2-3 research questions.\n"
-        f"2. Use `web_search` for each question to find:\n"
-        f"   - Relevant documentation or API references\n"
-        f"   - Best practices and common patterns\n"
-        f"   - Example implementations\n"
-        f"3. Synthesize findings into a concise summary.\n"
-        f"4. Call `attempt_completion` to return the summary.\n")
-
-
-def _review_prompt(ctx) -> str:
-    return (
-        f"[Review iter {ctx['iteration']}]\n"
-        f"GOAL: {ctx['goal']}\n"
-        f"Files changed: \n{ctx['impl_files']}\n\n"
-        f"You are a REVIEWER. Inspect the changes.\n"
-        f"1. Use `git diff` to see what changed.\n"
-        f"2. Read individual files as needed (`read` tool).\n"
-        f"3. Call `attempt_completion` with one line:\n"
-        f"   - 'VERIFY: PASS' if the changes look reasonable\n"
-        f"   - 'VERIFY: FAIL: <reason>' if you spot issues\n\n"
-        f"Evaluate at architecture-level (module/flow, logic correctness),\n"
-        f"not function-level (naming, formatting).\n")
-
-
-def _test_prompt(ctx) -> str:
-    return (
-        f"[Test iter {ctx['iteration']}]\n"
-        f"GOAL: {ctx['goal']}\n"
-        f"Files changed: \n{ctx['impl_files']}\n\n"
-        f"You are a TESTER. Run tests and judge PASS/FAIL.\n"
-        f"1. Determine the right test command (inspect project: package.json/pyproject.toml/go.mod).\n"
-        f"2. Run tests with bash tool.\n"
-        f"3. Judge PASS/FAIL based on exit code (non-zero = FAIL).\n"
-        f"4. Call `attempt_completion` with one line:\n"
-        f"   - 'VERIFY: PASS'\n"
-        f"   - 'VERIFY: FAIL: <reason>'\n"
-        f"Explain at architecture-level (module/flow), not function-level.\n")
-
-
-def _updater_prompt(ctx) -> str:  # Updater: 失败时 refine user prompt
-    return (
-        f"[Updater iter {ctx['iteration']}]\n"
-        f"GOAL: {ctx['goal']}\n"
-        f"Failed at: {ctx.get('verify_result', '')}\n\n"
-        f"You are an UPDATER.\n"
-        f"Refine the user's prompt for the next implementer iteration.\n"
-        f"You MUST NOT write code or call write/edit/bash. Only read/grep for context.\n\n"
-        f"Read the failure analysis above.\n"
-        f"Identify what's missing or unclear in the original goal.\n\n"
-        f"Output: a single prompt, 50-200 words, specific constraints.\n"
-        f"Call `attempt_completion` tool to return the refined prompt.")
-
-
-def _push_prompt(ctx) -> str:
-    return (
-        f"[Push iter {ctx['iteration']}]\n"
-        f"GOAL: {ctx['goal']}\n\n"
-        f"All changes are verified. Commit them now.\n"
-        f"1. Use `git diff` to see uncommitted changes, then stage them.\n"
-        f"2. Write a short conventional commit message (e.g. `feat: ...` or `fix: ...`).\n"
-        f"3. Commit with `git commit -m \"<msg>\"`.\n"
-        f"4. Call `attempt_completion` when done.\n"
-        f"The commit message must be a short English sentence following conventional commits.")
-
-
-# --- PocketFlow Lite: 图调度核 (内化自 The-Pocket/PocketFlow) ---
-
-class _Edge:  # 带 action 的连边中间对象，配合 DSL 使用
-    __slots__ = ("src", "action")
-
-    def __init__(self, src, action): self.src, self.action = src, action
-
-    def __rshift__(self, tgt): return self.src.connect(tgt, self.action)
-
-
-class Step:  # 图节点：状态保存在 ctx 里，三段式钩子（按需 override）在引擎中被自动调用
-    def __init__(self, name=""):
-        self.name = name or self.__class__.__name__
-        self.next = {}                            # action -> Step
-
-    def __repr__(self):
-        return f"<Step {self.name}>"
-
-    def connect(self, other, action="default"):
-        self.next[action] = other
-        return other               # 允许链式：a >> b >> c
-
-    def __rshift__(self, other): return self.connect(other, "default")
-
-    def __sub__(self, action):
-        if not isinstance(action, str):
-            raise TypeError("action must be a string")
-        return _Edge(self, action)
-
-    def prep(self, ctx): return None               # 读 ctx，拿上下文
-
-    def execute(self, prep_res): raise NotImplementedError  # 干脏活
-
-    def post(self, ctx, prep_res, exec_res): return None    # 写回 ctx，返回 action 字符串
-
-    def run(self, ctx):  # 引擎调用
-        p = self.prep(ctx)
-        e = self.execute(p)
-        return self.post(ctx, p, e)
-
-
-class Pipeline:  # Flow：一个 dispatch 表 + while 循环
-    def __init__(self, start: Step):
-        self.start = start
-
-    def run(self, ctx):  # ctx 跨节点共享。各 Step 通过 post 返回值决定路由
-        curr = self.start
-        while curr is not None:
-            action = curr.run(ctx)
-            curr = curr.next.get(action or "default")
-        return ctx
-
-    def trace(self):
-        """Print full pipeline topology (DFS)。"""
-        seen = set()
-
-        def _dfs(step, indent=""):
-            if not step or id(step) in seen:
-                return
-            seen.add(id(step))
-            for action, nxt in step.next.items():
-                if not isinstance(nxt, Step):
-                    continue
-                arrow = " → " if action == "default" else f" ──{action}──→ "
-                print(f"  {DIM}{indent}{step.name}{arrow}{nxt.name}{RESET}")
-                _dfs(nxt, indent=indent)
-        _dfs(self.start)
-
-
-def _extract_changed_files(ctx: ContextManager) -> str:
-    files = set()
-    for m in ctx.messages:
-        if m.get("role") == "tool" and m.get("tool_name") in ("edit", "write"):
-            files.add(f"{m.get('content')}")
-    return ",\n ".join(files) if files else "(unknown — Verifier inspect project to find)"
-
-
-def _get_completion_result(ctx: ContextManager) -> str:
-    for m in reversed(ctx.messages):
-        if m.get("role") == "tool" and m.get("tool_name") == "attempt_completion":
-            return m.get('content', '')
-    return ''
-
-
-def _get_loop_ctx(task_dir: str, role: str):
-    _loop_id = f"loop_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-    _loop_file = os.path.join(task_dir, f"{role}_{_loop_id}.json")
-    _ctx = ContextManager()
-    _ctx.load(_loop_file)
-    return _ctx, _loop_file
-
-
-def _route_noop(r, ctx):  # 默认路由:不写 ctx,返回 None(走 default 边)
-    return None
-
-
-def _route_research(r, ctx):  # Research:把 research 摘要写回 ctx,继续 pipeline
-    ctx["research"] = r
-    return None
-
-
-def _route_files(r, ctx):  # Dev:把 changed files 写回 ctx['impl_files']
-    ctx["impl_files"] = r
-    return None
-
-
-def _route_verify(r, ctx):  # Review:识别 'VERIFY: PASS' 决定 pass/fail 路由,只在 fail 时输出 verdict
-    if r and "VERIFY: PASS" in r:
-        return "pass"
-    ctx["verify_result"] = r or "FAIL: review rejected"
-    return "fail"
-
-
-def _route_test(r, ctx):  # Test:与 verify 类似,但无论 pass/fail 都输出 verdict
-    if r and "VERIFY: PASS" in r:
-        return "pass"
-    ctx["verify_result"] = r
-    return "fail"
-
-
-def _route_updater(r, ctx):  # Updater:把 refined prompt 追加到 impl_ctx 触发下一轮
-    if r:
-        ctx["impl_ctx"].append_user(f"[Refined prompt from updater iter {ctx['iteration']}]\n{r}")
-    return "refine"
-
-
-def _route_succeed(r, ctx):  # Push/Succeed:标记 succeeded
-    ctx["succeeded"] = True
-    return None
-
-
-class SucceedStep(Step):
-    def execute(self, data): pass
-
-    def post(self, ctx, p, e): return _route_succeed(None, ctx)
-
-
-class IncrIter(Step):
-    def execute(self, data): pass
-
-    def post(self, ctx, p, e):
-        ctx["iteration"] += 1
-        console._round = ctx["iteration"]
-        if ctx["iteration"] > ctx["max_iter"]:
-            return None
-        return "ok"
-
-
-class Agent(Step):  # 声明式 LLM 节点:prompt 构建、子会话来源、结果提取、路由全部由构造参数决定
-    def __init__(self, role, phase, prompt_fn, *, fresh_role=None, extract=None, route=None, name=None):
-        super().__init__(name=name or f"{role}:{phase}")
-        self.role, self.phase = role, phase
-        self.prompt_fn = prompt_fn          # (ctx) -> str
-        self.fresh_role = fresh_role        # None=共享 impl_ctx; str=该角色的独立子会话
-        self.extract = extract              # None=不提取子会话结果 (execute 返回 None)
-        self.route = route or _route_noop
-
-    def prep(self, ctx):
-        if self.fresh_role:
-            sub_ctx, sub_file = _get_loop_ctx(ctx["task_dir"], self.fresh_role)
-            sub_ctx.append_system(ctx["prompt_runtime"])
-        else:
-            sub_ctx, sub_file = ctx["impl_ctx"], ctx["impl_ctx_file"]
-        return {"impl_ctx": sub_ctx, "impl_ctx_file": sub_file, "prompt": self.prompt_fn(ctx)}
-
-    def execute(self, data):
-        agent_loop(data["impl_ctx"], data["impl_ctx_file"], data["prompt"])
-        return self.extract(data["impl_ctx"]) if self.extract else None
-
-    def post(self, ctx, prep_res, exec_res):
-        return self.route(exec_res, ctx)
-
-
-def loop_engine(goal: str, max_iter: int = 5, task_id: Optional[str] = None, is_push: bool = False,
-                dry_run: bool = False, fast: bool = False, wish: bool = False,
-                only_dev: bool = False):
-    """Pipeline 版本 loop_engine。"""
-    if task_id is None:
-        task_id = uuid.uuid4().hex[:8]
-
-    if wish and not fast:
-        if not os.environ.get("MANGO_SEARCH_API_KEY"):
-            raise RuntimeError("MANGO_SEARCH_API_KEY is required for research mode")
-        research = Agent("researcher", "research", _research_prompt,
-                         fresh_role="researcher", extract=_get_completion_result, route=_route_research)
-    else:
-        research = None
-    dev = Agent("implementer", "develop", _dev_prompt, route=_route_files, extract=_extract_changed_files)
-    review = Agent("verifier", "review", _review_prompt,
-                   fresh_role="reviewer", extract=_get_completion_result, route=_route_verify)
-    test = Agent("verifier", "test", _test_prompt,
-                 fresh_role="tester", extract=_get_completion_result, route=_route_test)
-    updater = Agent("updater", "push", _updater_prompt,
-                    fresh_role="updater", extract=_get_completion_result, route=_route_updater)
-    push = Agent("implementer", "push", _push_prompt, route=_route_succeed)
-    incr, succeed = IncrIter(), SucceedStep()
-
-    if only_dev:
-        start = dev
-        dev >> (push if is_push else succeed)
-    elif fast:
-        start = dev
-        dev >> test
-        test - "pass" >> (push if is_push else succeed)
-        test - "fail" >> updater
-    else:
-        design = Agent("implementer", "plan", _design_prompt)
-        start = design
-        design >> dev >> review
-        review - "pass" >> test
-        review - "fail" >> updater
-        if is_push:
-            test - "pass" >> push
-        else:
-            test - "pass" >> succeed
-        test - "fail" >> updater
-        updater - "refine" >> incr
-        incr - "ok" >> design
-
-    updater - "refine" >> incr
-    incr - "ok" >> start
-    if wish and not fast:
-        research >> start
-        start = research
-    p = Pipeline(start)
-    if dry_run:
-        p.trace()
-        return True
-
-    task_dir = os.path.join(loops_dir, task_id)
-    os.makedirs(task_dir, exist_ok=True)
-    console.text(f"Task ID: {task_id}  (files stored under {task_dir})")
-
-    loop_prompt_runtime = SystemPrompt()
-    prompt_text = loop_prompt_runtime.assemble()
-    impl_ctx, impl_ctx_file = _get_loop_ctx(task_dir, "implementer")
-    impl_ctx.append_system(prompt_text)
-
-    shared = {"goal": goal, "max_iter": max_iter, "task_dir": task_dir, "iteration": 1, "impl_ctx": impl_ctx,
-              "impl_ctx_file": impl_ctx_file, "prompt_runtime": prompt_text}
-
-    console._round = 1
-    try:
-        p.run(shared)
-    except Exception as e:
-        console.error(f"Loop error: {e}")
-        return False
-
-    if shared.get("succeeded"):
-        return True
-    console.error(f"Loop failed after {max_iter} iterations")
-    return False
 
 
 class AcpError(Exception):
@@ -2458,17 +2102,6 @@ def _parse_args(args=None):
     parser.add_argument("--yolo", action="store_true", help="Skip edit/bash confirmations (overrides MANGO_YOLO)")
     parser.add_argument("--acp", action="store_true",
                         help="Run as ACP (Agent Client Protocol) v1 agent server over stdio (JSON-RPC)")
-    sub = parser.add_subparsers(dest="command")
-    loop = sub.add_parser("loop", help="Run Loop Engineering (3-agent pipeline) with a goal query and exit")
-    loop.add_argument("query", nargs="+", help="Goal for loop iteration")
-    loop.add_argument("--max-iter", type=int, default=5, help="Max iterations (default: 5)")
-    loop.add_argument("--task-id", type=str, default=None,
-                      help="Task identifier; auto-generated as 8-char hex if omitted")
-    loop.add_argument("--push", action="store_true", help="Commit verified changes on PASS")
-    loop.add_argument("--dry-run", action="store_true", help="Print pipeline topology and exit")
-    loop.add_argument("--fast", action="store_true", help="Skip design/review, only dev → test → push")
-    loop.add_argument("--only-dev", action="store_true", help="Dev only: no test, no review, dev → push/succeed")
-    loop.add_argument("--wish", action="store_true", help="Prepend research before normal pipeline")
     return parser.parse_args(args)
 
 
@@ -2503,14 +2136,6 @@ def main():
         sys.exit(doctor())
     if args.acp:
         sys.exit(acp_main())
-    if args.command == "loop":
-        if not MANGO_KEY:
-            console.error("MANGO_KEY env var is required for loop mode")
-            sys.exit(1)
-        success = loop_engine(" ".join(args.query), max_iter=args.max_iter, task_id=args.task_id,
-                              is_push=args.push, dry_run=args.dry_run, fast=args.fast, wish=args.wish,
-                              only_dev=args.only_dev)
-        sys.exit(0 if success else 1)
 
     global provider
     if MANGO_ROUTING == "on":
@@ -2595,21 +2220,6 @@ def main():
                 helper()
                 continue
 
-            if user_input.strip().startswith("/g") or user_input.strip().startswith("/goal"):
-                console.warning("/goal is deprecated since v0.1.31. Use /loop <goal> instead.")
-                continue
-            if user_input.strip().startswith("/l") or user_input.strip().startswith("/loop"):
-                parts = user_input.split(maxsplit=1)
-                if len(parts) != 2:
-                    console.error("Please input '/l or /loop <query>'")
-                    continue
-                goal_text = parts[1].strip()
-                if not goal_text:
-                    console.error("Please input '/l or /loop <query>'")
-                    continue
-                console.success(f"🎯 Loop: {goal_text}")
-                loop_engine(goal_text)
-                continue
             normal_message = f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             if MANGO_ROUTING == "on":
                 try:

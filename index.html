@@ -744,11 +744,9 @@
 <header>
     <div class="wrap header-row">
         <div>
-            <span class="brand">MANGOPI CLI<span class="brand-version">v0.1.40</span></span>
+            <span class="brand">MANGOPI CLI<span class="brand-version">v0.1.47</span></span>
         </div>
         <nav>
-            <a href="#loop"><span class="lang-en">loop</span><span class="lang-zh">循环工程</span></a>
-            <a href="#routing"><span class="lang-en">routing</span><span class="lang-zh">路由</span></a>
             <a href="#features"><span class="lang-en">features</span><span class="lang-zh">特性</span></a>
             <a href="#install"><span class="lang-en">install</span><span class="lang-zh">安装</span></a>
             <a href="#config"><span class="lang-en">config</span><span class="lang-zh">配置</span></a>
@@ -831,7 +829,7 @@
                 <div class="stat-label"><span class="lang-en">dependencies</span><span class="lang-zh">依赖</span></div>
             </div>
             <div class="stat">
-                <div class="stat-num">13</div>
+                <div class="stat-num">10</div>
                 <div class="stat-label"><span class="lang-en">built-in tools</span><span class="lang-zh">内置工具</span></div>
             </div>
             <div class="stat">
@@ -850,138 +848,11 @@
     </div>
 </section>
 
-<!-- ═══════════════════════ LOOP ENGINEERING ═══════════════════════ -->
-<section id="loop">
-    <div class="wrap">
-        <div class="sec-head">
-            <div class="sec-num">— 02</div>
-            <h2 class="sec-title"><span class="lang-en">Loop <em>Engineering.</em></span><span class="lang-zh">循环<em>工程</em></span></h2>
-        </div>
-        <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
-            <span class="lang-en">A <em>configurable Step/Pipeline</em> that designs, implements, reviews, and tests — replacing the legacy flat goal-state machine with a CI/CD-like loop.</span>
-            <span class="lang-zh"><em>可配置的 Step/Pipeline</em>，集设计、实现、审查与测试于一体——用类 CI/CD 循环取代了旧版扁平目标状态机。</span>
-        </p>
-
-        <div class="feat-list" style="margin-top: 48px;">
-            <div class="feat">
-                <div class="feat-tag">— 01</div>
-                <div>
-                    <h3><span class="lang-en">ResearchAgent</span><span class="lang-zh">研究员</span></h3>
-                    <p><span class="lang-en">Optional (<code>--wish</code>). Gathers information via <code>web_search</code> before design.</span><span class="lang-zh">可选（<code>--wish</code>）。在设计前通过 <code>web_search</code> 收集信息。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 02</div>
-                <div>
-                    <h3><span class="lang-en">DesignAgent</span><span class="lang-zh">设计师</span></h3>
-                    <p><span class="lang-en">Reads code, plans the design. Shares <code>impl_ctx</code> with DevAgent.</span><span class="lang-zh">阅读代码并设计方案，与 DevAgent 共享上下文。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 03</div>
-                <div>
-                    <h3><span class="lang-en">DevAgent</span><span class="lang-zh">开发者</span></h3>
-                    <p><span class="lang-en">Implements progressively, extracts changed files for downstream agents.</span><span class="lang-zh">逐步实现并提取改动文件供下游使用。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 04</div>
-                <div>
-                    <h3><span class="lang-en">ReviewAgent</span><span class="lang-zh">审查者</span></h3>
-                    <p><span class="lang-en">Inspects <code>git diff</code>, returns <code>VERIFY: PASS/FAIL</code>. Independent ctx.</span><span class="lang-zh">审查 git diff，返回 <code>VERIFY: PASS/FAIL</code>。独立上下文。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 05</div>
-                <div>
-                    <h3><span class="lang-en">TestAgent</span><span class="lang-zh">测试者</span></h3>
-                    <p><span class="lang-en">Runs tests, judges PASS/FAIL. Independent ctx.</span><span class="lang-zh">执行测试并判定 PASS/FAIL。独立上下文。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 06</div>
-                <div>
-                    <h3><span class="lang-en">UpdaterAgent</span><span class="lang-zh">修正者</span></h3>
-                    <p><span class="lang-en">On failure, analyzes the report and refines the prompt for the next iteration.</span><span class="lang-zh">失败时分析报告并精炼 prompt 进入下一轮迭代。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 07</div>
-                <div>
-                    <h3><span class="lang-en">Modes</span><span class="lang-zh">运行模式</span></h3>
-                    <p><span class="lang-en">Normal, <code>--fast</code> (skip design/review), <code>--wish</code> (prepend research).</span><span class="lang-zh">正常模式、<code>--fast</code>（跳过设计/审查）、<code>--wish</code>（前置调研）。</span></p>
-                </div>
-            </div>
-        </div>
-
-        <div class="callout">
-            <div class="callout-text">
-                <h3><span class="lang-en">One command to iterate</span><span class="lang-zh">一条命令启动迭代</span></h3>
-                <p>
-                    <span class="lang-en">Start with <code>/loop</code> followed by your goal.</span>
-                    <span class="lang-zh">输入 <code>/loop</code> 加目标描述即可启动。</span>
-                </p>
-            </div>
-            <pre class="callout-code"><span class="cmd-c">❯</span> /loop <span class="str">"refactor utils.py to use dataclasses"</span>
-<span class="muted"># Design → Dev → Review → Test → PASS / Updater → …</span></pre>
-        </div>
-    </div>
-</section>
-
-<!-- ═══════════════════════ SPARSE LOOP ═══════════════════════ -->
-<!-- ═══════════════════════ ROUTING ═══════════════════════ -->
-<section id="routing">
-    <div class="wrap">
-        <div class="sec-head">
-            <div class="sec-num">— 03</div>
-            <h2 class="sec-title"><span class="lang-en">Smart Provider <em>Routing.</em></span><span class="lang-zh">智能模型<em>路由</em></span></h2>
-        </div>
-        <p style="color: var(--muted); max-width: 640px; font-size: 17px; line-height: 1.6; margin-bottom: 32px;">
-            <span class="lang-en">Three tiers, auto-selected per turn. Cheap models handle reads; the heavyweight only shows up when the task is genuinely complex. No mid-loop switching.</span>
-            <span class="lang-zh">三档模型，按回合自动选择。轻量模型负责读取；只有真正复杂的任务才调用重模型。中间不切换。</span>
-        </p>
-
-        <div class="tiers">
-            <div class="tier">
-                <div class="tier-name">tier / low</div>
-                <div class="tier-value">flash</div>
-                <p class="tier-desc"><span class="lang-en">Read / search / list. The default for trivial tasks.</span><span class="lang-zh">读取 / 搜索 / 列表。轻量任务的默认档。</span></p>
-            </div>
-            <div class="tier">
-                <div class="tier-name">tier / medium</div>
-                <div class="tier-value">standard</div>
-                <p class="tier-desc"><span class="lang-en">Edit / fix / multi-file. Most turns land here.</span><span class="lang-zh">编辑 / 修复 / 多文件。多数回合在此档。</span></p>
-            </div>
-            <div class="tier">
-                <div class="tier-name">tier / high</div>
-                <div class="tier-value">reasoning</div>
-                <p class="tier-desc"><span class="lang-en">Design / refactor / complex debug. Triggered by LLM scoring.</span><span class="lang-zh">设计 / 重构 / 复杂调试。由 LLM 打分触发。</span></p>
-            </div>
-        </div>
-
-        <div class="callout">
-            <div class="callout-text">
-                <h3><span class="lang-en">Configure in <code>.mangocli/providers.json</code></span><span class="lang-zh">在 <code>.mangocli/providers.json</code> 配置</span></h3>
-                <p>
-                    <span class="lang-en">Each provider declares a tier (low / medium / high) and routing. Thresholds are tunable. Startup shows the model count; each turn prints the model that was picked.</span>
-                    <span class="lang-zh">每个 provider 声明档位（low / medium /high）和阈值。启动时显示模型数量，每回合打印所选模型。</span>
-                </p>
-            </div>
-            <pre class="callout-code"><span class="key">"providers"</span>: [
-  {<span class="key">"name"</span>: <span class="str">"low"</span>,    <span class="key">"model"</span>: <span class="str">"deepseek-v4-flash"</span>,    <span class="key">"tier"</span>: <span class="str">"low"</span>},
-  {<span class="key">"name"</span>: <span class="str">"medium"</span>, <span class="key">"model"</span>: <span class="str">"deepseek-v4"</span>,          <span class="key">"tier"</span>: <span class="str">"medium"</span>},
-  {<span class="key">"name"</span>: <span class="str">"high"</span>,   <span class="key">"model"</span>: <span class="str">"deepseek-v4-reasoning"</span>, <span class="key">"tier"</span>: <span class="str">"high"</span>}
-]</pre>
-        </div>
-    </div>
-</section>
-
-
 <!-- ═══════════════════════ FEATURES ═══════════════════════ -->
 <section id="features">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 04</div>
+            <div class="sec-num">— 02</div>
             <h2 class="sec-title"><span class="lang-en">All <em>features.</em></span><span class="lang-zh">全部<em>特性</em></span></h2>
         </div>
         <div class="feat-list">
@@ -1048,6 +919,20 @@
                     <p><span class="lang-en">Custom tools via auto-discovered Python files in ~/.mangocli/extensions/. Join the LLM tool registry on startup.</span><span class="lang-zh">将 Python 文件放入 ~/.mangocli/extensions/ 自动注册自定义工具，启动即进入 LLM 工具列表。</span></p>
                 </div>
             </div>
+            <div class="feat">
+                <div class="feat-tag">— 10</div>
+                <div>
+                    <h3><span class="lang-en">Smart Routing</span><span class="lang-zh">智能路由</span></h3>
+                    <p><span class="lang-en">Three model tiers (flash / standard / reasoning) auto-selected per turn via keyword + LLM scoring. Configure in .mangocli/providers.json.</span><span class="lang-zh">三档模型（flash / standard / reasoning）按回合经关键词 + LLM 打分自动选择。在 .mangocli/providers.json 配置。</span></p>
+                </div>
+            </div>
+            <div class="feat">
+                <div class="feat-tag">— 11</div>
+                <div>
+                    <h3><span class="lang-en">ACP Agent Server</span><span class="lang-zh">ACP Agent 服务</span></h3>
+                    <p><span class="lang-en">Agent Client Protocol v1 over stdio — run as an agent inside Zed / JetBrains with session switching and full history replay.</span><span class="lang-zh">基于 stdio 的 Agent Client Protocol v1 — 在 Zed / JetBrains 中以 agent 运行，支持会话切换与历史回放。</span></p>
+                </div>
+            </div>
         </div>
     </div>
 </section>
@@ -1056,7 +941,7 @@
 <section id="ideal">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 05</div>
+            <div class="sec-num">— 03</div>
             <h2 class="sec-title"><span class="lang-en">Ideal <em>for.</em></span><span class="lang-zh">适用<em>人群</em></span></h2>
         </div>
         <div class="ideal-grid">
@@ -1098,7 +983,7 @@
 <section id="philosophy">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 06</div>
+            <div class="sec-num">— 04</div>
             <h2 class="sec-title"><span class="lang-en">Design <em>philosophy.</em></span><span class="lang-zh">设计<em>哲学</em></span></h2>
         </div>
         <div class="philo-hero">
@@ -1121,7 +1006,7 @@
 <section id="providers">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 07</div>
+            <div class="sec-num">— 05</div>
             <h2 class="sec-title"><span class="lang-en"><em>Any</em> provider.</span><span class="lang-zh">任意<em>模型</em>接入</span></h2>
         </div>
         <div class="providers">
@@ -1150,8 +1035,8 @@
 <section id="tools">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 08</div>
-            <h2 class="sec-title"><span class="lang-en"><em>13</em> built-in tools, <em>∞</em> extendable.</span><span class="lang-zh"><em>13</em> 个内置工具，<em>∞</em> 无限扩展</span></h2>
+            <div class="sec-num">— 06</div>
+            <h2 class="sec-title"><span class="lang-en"><em>10</em> built-in tools, <em>∞</em> extendable.</span><span class="lang-zh"><em>10</em> 个内置工具，<em>∞</em> 无限扩展</span></h2>
         </div>
         <div class="tools">
             <div class="tool"><code>read</code><p><span class="lang-en">File or image (png/jpg/gif/webp auto-routes to vision)</span><span class="lang-zh">文件或图片（png/jpg/gif/webp 自动路由至视觉）</span></p></div>
@@ -1171,7 +1056,6 @@
             <div class="cmd"><code>/q</code><p><span class="lang-en">Quit</span><span class="lang-zh">退出</span></p></div>
             <div class="cmd"><code>/n</code><p><span class="lang-en">New session</span><span class="lang-zh">新会话</span></p></div>
             <div class="cmd"><code>/c</code><p><span class="lang-en">Compact</span><span class="lang-zh">手动压缩</span></p></div>
-            <div class="cmd"><code>/l &lt;goal&gt;</code><p><span class="lang-en">Loop engineering pipeline</span><span class="lang-zh">循环工程流水线</span></p></div>
             <div class="cmd"><code>/h</code><p><span class="lang-en">Help</span><span class="lang-zh">帮助</span></p></div>
         </div>
     </div>
@@ -1181,7 +1065,7 @@
 <section id="install">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 09</div>
+            <div class="sec-num">— 07</div>
             <h2 class="sec-title"><span class="lang-en"><em>Install.</em></span><span class="lang-zh"><em>安装</em></span></h2>
         </div>
         <div class="install-row">
@@ -1205,7 +1089,7 @@
 <section id="config">
     <div class="wrap">
         <div class="sec-head">
-            <div class="sec-num">— 10</div>
+            <div class="sec-num">— 08</div>
             <h2 class="sec-title"><span class="lang-en"><em>Config.</em></span><span class="lang-zh"><em>配置</em></span></h2>
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px;">

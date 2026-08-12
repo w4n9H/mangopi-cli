@@ -237,7 +237,7 @@ Every new feature follows these rules, in order of priority:
 
 ### 6. Loop Engineering
 
-**Status:** 🟢 Done (Experimental Feature)
+**Status:** ❌ **Removed & Archived (v0.1.47)** — the feature was removed from the codebase. Knowledge and core code are archived in `docs/loop-engineering.md` (pipeline) and `docs/pocketflow-lite.md` (Step/Pipeline framework); history below is kept for reference.
 
 **Problem:** Goal-mode execution was a flat state machine (plan → step → finish) with no built-in verification or self-correction. The agent could mark steps "done" without ever running tests, leading to silently broken deliverables. Additionally, agents have no cross-session memory — a task spanning days or weeks loses all context between invocations.
 

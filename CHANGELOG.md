@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.47] - 2026-08-12
+
+### Removed
+- **`loop_engine` + PocketFlow Lite** — Loop Engineering (CLI `loop` subcommand, `/loop` `/goal` REPL commands, `--max-iter`/`--task-id`/`--push`/`--dry-run`/`--fast`/`--wish`/`--only-dev` flags) removed along with the embedded Step/Pipeline framework and their tests; `agent_loop` trace `mode` fixed to `"chat"`, `loops_dir` dropped
+- **Docs archive** — knowledge and core code archived in `docs/loop-engineering.md` & `docs/pocketflow-lite.md` (bilingual); ROADMAP Loop Engineering section marked removed/archived; README and landing page (`index.html`) cleaned of loop references (routing merged into feature cards, version v0.1.47, tool count 13 → 10)
+
+---
+
 ## [0.1.46] - 2026-08-11
 
 ### Added
