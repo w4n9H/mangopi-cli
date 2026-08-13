@@ -24,7 +24,8 @@ import mangopi_cli as m  # noqa: E402
 
 # ── Load the shipped extension module ────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXT_PATH = os.path.join(PROJECT_ROOT, "examples", "extensions", "clipboard.py")
+EXT_DIR = os.path.join(PROJECT_ROOT, "examples", "extensions")
+EXT_PATH = os.path.join(EXT_DIR, "clipboard.py")
 _spec = importlib.util.spec_from_file_location("mango_clipboard_ext", EXT_PATH)
 clip = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(clip)
@@ -36,12 +37,24 @@ def _proc(stdout="", rc=0):
 
 
 class ClipboardTestBase(unittest.TestCase):
+    """隔离加载随仓库分发的扩展 (examples/extensions), 用完恢复:
+    测试不依赖环境变量, CI (无 MANGO_EXTENSIONS_DIR) 下同样自足."""
+
     def setUp(self):
+        self._orig = (m.extensions_dir, dict(m.TOOLS), list(m.extension_registry.tools))
+        m.extensions_dir = EXT_DIR
+        m.extension_registry.load()
+        for t in m.extension_registry.tools:
+            m.TOOLS[t.name] = t
         self._orig_apply = m.console.prompt_apply
         self._orig_yolo = m.MANGO_YOLO
         m.MANGO_YOLO = False
 
     def tearDown(self):
+        m.TOOLS.clear()
+        m.TOOLS.update(self._orig[1])
+        m.extension_registry.tools = self._orig[2]
+        m.extensions_dir = self._orig[0]
         m.console.prompt_apply = self._orig_apply
         m.MANGO_YOLO = self._orig_yolo
 

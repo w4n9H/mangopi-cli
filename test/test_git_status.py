@@ -23,7 +23,8 @@ import mangopi_cli as m  # noqa: E402
 
 # ── Load the shipped extension module ────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXT_PATH = os.path.join(PROJECT_ROOT, "examples", "extensions", "git_status.py")
+EXT_DIR = os.path.join(PROJECT_ROOT, "examples", "extensions")
+EXT_PATH = os.path.join(EXT_DIR, "git_status.py")
 _spec = importlib.util.spec_from_file_location("mango_git_status_ext", EXT_PATH)
 git = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(git)
@@ -31,7 +32,21 @@ GitStatusTool = git.GitStatusTool
 
 
 class TestGitStatus(unittest.TestCase):
-    """当前测试进程 cwd 即 git 仓库 (mangopi-cli), 真实 git 输出可用."""
+    """当前测试进程 cwd 即 git 仓库 (mangopi-cli), 真实 git 输出可用.
+    隔离加载随仓库分发的扩展: 测试不依赖环境变量, CI 下同样自足."""
+
+    def setUp(self):
+        self._orig = (m.extensions_dir, dict(m.TOOLS), list(m.extension_registry.tools))
+        m.extensions_dir = EXT_DIR
+        m.extension_registry.load()
+        for t in m.extension_registry.tools:
+            m.TOOLS[t.name] = t
+
+    def tearDown(self):
+        m.TOOLS.clear()
+        m.TOOLS.update(self._orig[1])
+        m.extension_registry.tools = self._orig[2]
+        m.extensions_dir = self._orig[0]
 
     def test_status_reports_branch_and_count(self):
         r = m.run_tool("git_status", {"action": "status"})
