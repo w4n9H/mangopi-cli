@@ -30,7 +30,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.47"
+__version__ = "0.1.48"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -49,9 +49,8 @@ MANGO_TRACE = os.environ.get("MANGO_TRACE", "off").lower() in ("1", "true", "yes
 project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
-extensions_dir = os.path.expanduser("~/.mangocli/extensions")  # 扩展工具目录: *.py 自动发现
-# 直接运行 (python mangopi_cli.py) 时模块名为 __main__, 此处注入别名使扩展文件可
-# `from mangopi_cli import ...` (import / -m / pip 入口下天然存在, setdefault 无副作用)
+extensions_dir = os.path.expanduser(os.environ.get("MANGO_EXTENSIONS_DIR") or "~/.mangocli/extensions")
+# 直接运行 (python mangopi_cli.py) 时模块名为 __main__, 此处注入别名使扩展文件可 `from mangopi_cli import ...`
 sys.modules.setdefault("mangopi_cli", sys.modules[__name__])
 providers_file = os.path.join(base_persist_dir, "providers.json")
 traces_dir = os.path.join(base_persist_dir, "traces")
@@ -444,21 +443,38 @@ def _bocha_search_api(query: str = None, freshness: str = "noLimit",  summary: b
             for m in pages.get("value", [])] if isinstance(pages, dict) else []
 
 
-def _load_extensions():  # -> List[ToolBase] (注解延迟求值会 NameError, ToolBase 定义在后)
-    """加载 ~/.mangocli/extensions/*.py, 收集各扩展导出的 tools 列表 (ToolBase 实例) 返回.
-    约定: 扩展文件导出 `tools` 变量; 同名工具由调用方合并 TOOLS 时覆盖 (扩展优先). 单个扩展失败只记录诊断, 不影响其他扩展."""
-    result = []
-    if not os.path.isdir(extensions_dir):
-        return result
-    for py in sorted(globlib.glob(os.path.join(extensions_dir, "*.py"))):
-        try:
-            spec = importlib.util.spec_from_file_location("mango_ext_" + os.path.basename(py), py)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            result.extend(getattr(mod, "tools", []) or [])
-        except Exception as err:  # noqa: BLE001 扩展失败不拖垮主程序
-            console.error(f"load extension {py} err: {err}")
-    return result
+class ExtensionRegistry:
+    """扩展注册表: 一次扫描, 三通道收获. 契约: 扩展文件顶层只允许 import, 禁止访问 mangopi_cli 属性 (导入期半初始化);
+    所需符号在函数体内延迟导入. 单个扩展失败只记录诊断, 不影响其他扩展."""
+
+    def __init__(self):
+        self.tools = []                    # 通道一: List[ToolBase], TOOLS 合并时扩展优先
+        self.prompt_sections = []          # 通道二: List[(name, content)], 同名覆盖/异名追加
+        self.entry_points = {}             # 通道三: name -> Callable[[], int] (如 {"acp": ...}), 同名首个生效
+
+    def load(self) -> "ExtensionRegistry":  # 全量重扫 extensions_dir (重载语义: 上次结果清空).
+        self.tools, self.prompt_sections, self.entry_points = [], [], {}
+        if not os.path.isdir(extensions_dir):
+            return self
+        for py in sorted(globlib.glob(os.path.join(extensions_dir, "*.py"))):
+            try:
+                mod = self._load_file(py)
+            except Exception as err:  # noqa: BLE001 扩展失败不拖垮主程序
+                console.error(f"load extension {py} err: {err}")
+                continue
+            self.tools.extend(getattr(mod, "tools", []) or [])
+            self.prompt_sections.extend(getattr(mod, "prompt_sections", []) or [])
+            for name, fn in (getattr(mod, "entry_points", {}) or {}).items():
+                if callable(fn) and name not in self.entry_points:
+                    self.entry_points[name] = fn   # 同名首个生效, 确定性
+        return self
+
+    @staticmethod
+    def _load_file(py: str) -> Any:
+        spec = importlib.util.spec_from_file_location("mango_ext_" + os.path.basename(py), py)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
 
 
 class SkillManager:
@@ -604,6 +620,7 @@ class ToolBase:
     preview_lines = 20
     preview_width = 100
     use_spinner = False
+    guidance = ""  # 工具使用指导, 注入 SystemPrompt tool_guidance 段 (随扩展加载动态拼接)
 
     def schema(self):
         properties = {}
@@ -691,6 +708,7 @@ class EditTool(ToolBase):
         "all": {"type": "boolean?", "description": "Replace all occurrences (default: false)"}}
 
     def preview(self, args): return (args.get("path") or "")[:self.preview_width]
+    guidance = "Use **edit** (not write) for small in-place changes; ensure `old` is unique or pass `all=true`."
 
     def before(self, args):
         if args.get("old") and args.get("new"):
@@ -770,6 +788,7 @@ class BashTool(ToolBase):
     preview_lines = 100
     preview_width = 150
     use_spinner = True
+    guidance = "Reach for **bash** only when no dedicated tool fits."
 
     def confirm(self, args):
         if MANGO_YOLO:
@@ -832,6 +851,10 @@ class WebSearchTool(ToolBase):
         "freshness": {"type": "string?",
                       "description": "Time filter for results: 'noLimit' (default), "
                                      "'oneDay', 'oneWeek', 'oneMonth', 'oneYear'."}}
+    guidance = (
+        "Use **web_search** for the latest docs, news, or anything that requires the live web "
+        "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var. "
+        "Use sparingly — at most 3 times per user query to avoid excessive API calls.")
     preview_lines = 0
     preview_width = 200
     use_spinner = True
@@ -907,6 +930,9 @@ class ViewImageTool(ToolBase):
     preview_width = 200
     use_spinner = True
     MAX_BYTES = 5 * 1024 * 1024  # 5 MB hard cap
+    guidance = ("Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
+                "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
+                "but call `view_image` directly when the path is computed or generated.")
 
     @staticmethod
     def _is_url(s: str) -> bool: return s.startswith("http://") or s.startswith("https://")
@@ -952,6 +978,7 @@ class AttemptCompletionTool(ToolBase):
     params = {"result": {"type": "string", "description": "The final result or summary of the completed task"}}
     preview_lines = 500
     preview_width = 500
+    guidance = "Always finish with **attempt_completion** to present the final result."
 
     def preview(self, args): return ''
 
@@ -959,9 +986,11 @@ class AttemptCompletionTool(ToolBase):
         return self.ok(args["result"])
 
 
+# 模块级单例, 导入期扫描一次. 必须置于 ToolBase 定义之后: 扩展顶层 `from mangopi_cli import ToolBase` 依赖此处已初始化.
+extension_registry = ExtensionRegistry().load()
 TOOLS = {
     t.name: t for t in [ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-                        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()] + _load_extensions()}
+                        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()] + extension_registry.tools}
 
 
 def tool_schema():
@@ -1614,6 +1643,13 @@ class SystemPrompt:
         self.sections.append(("skills_guidance", self._build_skills_guidance()))
         self.sections.append(("memory", self._build_user_rules()))
         self.sections.append(("environment", self._build_environment()))
+        # 扩展通道: 同名段覆盖默认内容 (强化), 异名段追加
+        defaults = {name for name, _ in self.sections}
+        for name, content in extension_registry.prompt_sections:
+            if name in defaults:
+                self.sections = [(n, c if n != name else content) for n, c in self.sections]
+            else:
+                self.sections.append((name, content))
 
     @staticmethod
     def _build_base_intro() -> str:
@@ -1625,17 +1661,15 @@ class SystemPrompt:
 
     @staticmethod
     def _build_tool_guidance() -> str:
-        return ("## Tool Selection\n\n"
-                "Use the dedicated tool when one exists (read/write/edit/search/grep/attempt_completion)."
-                "Reach for **bash** only when no dedicated tool fits.\n"
-                "Use **edit** (not write) for small in-place changes; ensure `old` is unique or pass `all=true`.\n"
-                "Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
-                "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
-                "but call `view_image` directly when the path is computed or generated.\n"
-                "Use **web_search** for the latest docs, news, or anything that requires the live web "
-                "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var. "
-                "Use sparingly — at most 3 times per user query to avoid excessive API calls.\n"
-                "Always finish with **attempt_completion** to present the final result.\n\n")
+        parts = [  # 总纲: 工具清单随注册变化, 保留为段引言 (不属于任何单一工具)
+            "## Tool Selection\n\n",
+            "Use the dedicated tool when one exists (read/write/edit/search/grep/attempt_completion)."]
+        # 单一数据源: 各工具自身 guidance 动态拼接 (内置 + 扩展统一机制).
+        # 收尾句 (attempt_completion) 稳定排序至最后; 其余保持 TOOLS 注册序, 扩展工具追加于内置之后 (覆盖语义不受影响).
+        guidance_tools = sorted((t for t in TOOLS.values() if t.guidance),
+                                key=lambda t: t.name == "attempt_completion")
+        parts.extend(t.guidance for t in guidance_tools)
+        return "\n".join(parts) + "\n\n"
 
     @staticmethod
     def _build_skills_guidance() -> str:
@@ -1750,351 +1784,6 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_
         ctx.save_trace()
 
 
-class AcpError(Exception):
-    def __init__(self, code: int, message: str):
-        super().__init__(message)
-        self.code, self.message = code, message
-
-
-def _prompt_text(prompt: Any) -> str:
-    """提取 session/prompt 文本: 兼容 string 与 text ContentBlock 数组.
-    声明的 promptCapabilities 仅 text; 收到非 text block (image/resource/audio 等)即报错, 禁止静默丢弃导致 context 丢失.
-    """
-    if isinstance(prompt, str):
-        return prompt
-    if isinstance(prompt, list):
-        parts = []
-        for b in prompt:
-            if not isinstance(b, dict) or not isinstance(b.get("type"), str):
-                raise AcpError(-32602, "Malformed prompt content block: %r" % (b,))
-            if b.get("type") != "text":
-                raise AcpError(-32602, "Unsupported prompt content type: %s" % b.get("type"))
-            parts.append(b.get("text", ""))
-        return "".join(parts)
-    return str(prompt)
-
-
-class AcpServer:
-    def __init__(self):
-        self.sessions: Dict[str, ContextManager] = {}     # sessionId -> ctx
-        self.cancel_flags: Dict[str, threading.Event] = {}   # sessionId -> cancel 事件
-        self._perm: Dict[str, Dict[str, Any]] = {}           # requestId -> {event, decision}
-        self._lock = threading.RLock()
-        self._local = threading.local()  # prompt 线程本地状态: sid / msg_id / tool_id (并发隔离)
-        self._seq = 0
-
-    # --- 线程本地状态访问 (每个 session/prompt 在独立线程处理, 事件发射必属本线程的会话) ---
-    @property
-    def _cur_sid(self) -> Optional[str]: return getattr(self._local, "sid", None)
-
-    @_cur_sid.setter
-    def _cur_sid(self, value: Optional[str]) -> None: self._local.sid = value
-
-    @property
-    def _msg_id(self) -> Optional[str]: return getattr(self._local, "msg_id", None)
-
-    @_msg_id.setter
-    def _msg_id(self, value: Optional[str]) -> None: self._local.msg_id = value
-
-    def _tool_id(self) -> Optional[str]: return getattr(self._local, "tool_id", None)
-
-    def _set_tool_id(self, value: Optional[str]) -> None: self._local.tool_id = value
-
-    # ---------- JSON-RPC 底层 ----------
-    def _send(self, obj: dict) -> None:
-        with self._lock:
-            print(json.dumps(obj, ensure_ascii=False), flush=True)
-
-    def _respond(self, msg_id: Any, result: Any) -> None: self._send({"jsonrpc": "2.0", "id": msg_id, "result": result})
-
-    def _error(self, msg_id: Any, code: int, message: str) -> None:
-        self._send({"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}})
-
-    def _notify(self, method: str, params: dict) -> None:
-        self._send({"jsonrpc": "2.0", "method": method, "params": params})
-
-    def _emit(self, sid: str, update: dict) -> None:
-        self._notify("session/update", {"sessionId": sid, "update": update})
-
-    def _next_id(self) -> str:
-        self._seq += 1
-        return str(self._seq)
-
-    # ---------- 方法分发 ----------
-    def dispatch(self, msg: dict) -> None:
-        method, msg_id = msg.get("method"), msg.get("id")
-        if not isinstance(method, str):  # JSON-RPC 响应 (无 method): 匹配 pending 权限请求 (id 关联)
-            if "result" in msg or "error" in msg:
-                self._on_response(msg_id, msg.get("result"))
-                return
-            if msg_id is not None:
-                self._error(msg_id, -32600, "Invalid Request")
-            return
-        handler = getattr(self, "_m_" + method.replace("/", "_"), None)
-        if handler is None:
-            if msg_id is not None:
-                self._error(msg_id, -32601, "Method not found: %s" % method)
-            return
-        try:
-            result = handler(msg.get("params") or {})
-            if msg_id is not None:
-                self._respond(msg_id, result)
-        except AcpError as e:
-            self._error(msg_id, e.code, e.message)
-        except Exception as e:  # noqa: BLE001 协议边界兜底
-            traceback.print_exc()  # 完整堆栈落 stderr, 主循环不可见但可诊断
-            self._error(msg_id, -32603, "Internal error: %s" % e)
-
-    def _on_response(self, msg_id: Any, result: Any) -> None:  # 处理client对session/request_permission的响应(同id关联).
-        if msg_id is None:
-            return
-        with self._lock:
-            rec = self._perm.get(str(msg_id))
-            if rec is None:
-                return  # 未知/过期响应, 忽略
-            outcome = ((result or {}).get("outcome") or {})
-            oc = outcome.get("outcome", "")
-            if oc == "selected" and outcome.get("optionId", "") == "allow-once":
-                rec["decision"] = "allow"
-            elif oc == "cancelled":
-                rec["decision"] = "cancelled"  # RequestPermissionOutcome::Cancelled: client 已取消 turn
-            else:
-                rec["decision"] = "deny"
-            rec["event"].set()
-
-    # ---------- 协议方法 ----------
-    def _m_initialize(self, p: dict) -> dict:
-        version = p.get("protocolVersion")
-        if version is not None and int(version) != 1:
-            raise AcpError(-32602, "Unsupported protocol version: %s" % version)
-        return {
-            "protocolVersion": 1,
-            "agentCapabilities": {  # 官方 v1 结构: 支持 session/load + session/list, 不支持 MCP, prompt 仅纯文本
-                "loadSession": True,
-                "sessionCapabilities": {"list": {}},
-                "promptCapabilities": {"image": False, "audio": False, "embeddedContext": False},
-                "mcpCapabilities": {"http": False, "sse": False}},
-            "agentInfo": {"name": "mangopi-cli", "title": "Mangopi CLI", "version": __version__},
-            "authMethods": []}
-
-    def _m_session_new(self, p: dict) -> dict:  # NewSessionRequest required: ["cwd", "mcpServers"]
-        cwd = p.get("cwd")
-        if not isinstance(cwd, str) or not cwd:
-            raise AcpError(-32602, "Missing required field: cwd")
-        if not isinstance(p.get("mcpServers"), list):
-            raise AcpError(-32602, "Missing required field: mcpServers")
-        # 官方 params: {cwd, mcpServers?}; sessionId 由 agent 生成并返回, 无 id 字段
-        # 确定性命名: name = acp_<epoch>_<hex> => 文件 session_dir/<name>.json, sid = sess_<name>,
-        # 重启后 session/list 仍可发现并恢复 (旧随机 sid 无法跨进程恢复)
-        name = "acp_" + str(int(time.time())) + "_" + os.urandom(4).hex()
-        sid = "sess_" + name
-        ctx = ContextManager()
-        ctx.load(self._ctx_file(sid))
-        self.sessions[sid] = ctx
-        self.cancel_flags[sid] = threading.Event()
-        return {"sessionId": sid}
-
-    def _m_session_prompt(self, p: dict) -> Optional[dict]:  # PromptRequest required: ["prompt", "sessionId"]
-        sid = p.get("sessionId")
-        ctx = self.sessions.get(sid)
-        if ctx is None:
-            raise AcpError(-32602, "Unknown session: %s" % sid)
-        if p.get("prompt") is None:
-            raise AcpError(-32602, "Missing required field: prompt")
-        cancel = self.cancel_flags[sid]
-        cancel.clear()
-        text = _prompt_text(p.get("prompt"))
-        self._cur_sid = sid
-        self._msg_id = None  # 新 turn: 重置消息身份, 本 turn 所有 chunk 聚合为一条消息
-        try:
-            agent_loop(ctx, self._ctx_file(sid), text, cancel_event=cancel)
-        finally:
-            if self._cur_sid == sid:
-                self._cur_sid = None
-        return {"stopReason": "cancelled" if cancel.is_set() else "end_turn"}
-
-    def _m_session_cancel(self, p: dict) -> None:
-        sid = p.get("sessionId")
-        ev = self.cancel_flags.get(sid)
-        if ev is not None:
-            ev.set()  # 软取消: 当前 LLM 调用返回后结束本轮
-        # 协议要求 abort 进行中的工具调用: 解除本 session 所有 pending 权限请求,
-        # 否则 client 取消后不再裁决, prompt 线程会卡满权限超时
-        with self._lock:
-            for rid, rec in list(self._perm.items()):
-                if rec.get("sid") == sid:
-                    rec["decision"] = "deny"  # 取消 => 工具不执行
-                    rec["event"].set()
-        return None
-
-    def _m_session_list(self, p: dict) -> dict:  # session/list: 客户端据此展示会话历史并切换.
-        try:
-            names = os.listdir(session_dir)
-        except OSError:
-            names = []
-        sessions = []
-        for f in sorted(names):
-            if not f.endswith(".json") or not f.startswith("acp_"):  # 只关注 ACP 会话, CLI 会话不混入
-                continue
-            fpath = os.path.join(session_dir, f)
-            try:
-                with open(fpath, "r", encoding="utf-8") as fh:
-                    msgs = json.load(fh)
-            except (json.JSONDecodeError, IOError):
-                msgs = []
-            title = next((m.get("content", "")[:80] for m in msgs if m.get("role") == "user"), None)
-            sessions.append({
-                "sessionId": "sess_" + f[:-5], "cwd": project_root, "title": title,
-                "updatedAt": datetime.fromtimestamp(os.path.getmtime(fpath)).isoformat(),
-                "_meta": {"messageCount": len(msgs)}})
-        return {"sessions": sessions}
-
-    def _m_session_load(self, p: dict) -> None:  # session/load: 恢复指定会话并回放历史 (session/update 通知) 后响应 null."""
-        sid = p.get("sessionId")
-        if not isinstance(sid, str) or not sid.startswith("sess_"):
-            raise AcpError(-32602, "Invalid session id")
-        name = sid[5:]  # 与 session/list 同一判断: 按 name 前缀过滤 CLI 会话
-        if not name.startswith("acp_"):
-            raise AcpError(-32602, "Invalid session id")
-        fpath = self._ctx_file(sid)
-        if not os.path.isfile(fpath):
-            raise AcpError(-32602, "Unknown session: %s" % sid)
-        ctx = ContextManager()
-        ctx.load(fpath)
-        self.sessions[sid] = ctx
-        self.cancel_flags[sid] = threading.Event()
-        for i, msg in enumerate(ctx.messages):
-            mid = "mr_" + str(i)
-            role = msg.get("role")
-            if role == "user":
-                self._emit(sid, {"sessionUpdate": "user_message_chunk", "messageId": mid,
-                                 "content": {"type": "text", "text": msg.get("content", "")}})
-            elif role == "assistant":
-                text = msg.get("content") or ""
-                if text:
-                    self._emit(sid, {"sessionUpdate": "agent_message_chunk", "messageId": mid,
-                                     "content": {"type": "text", "text": text}})
-                for tc in msg.get("tool_calls") or []:
-                    tid = tc.get("id", "")
-                    self._emit(sid, {"sessionUpdate": "tool_call", "toolCallId": tid,
-                                     "title": tc.get("function", {}).get("name", ""), "status": "pending"})
-                    self._emit(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tid,
-                                     "status": "completed"})
-                reasoning = msg.get("reasoning_content") or ""
-                if reasoning:
-                    self._emit(sid, {"sessionUpdate": "agent_thought_chunk", "messageId": mid,
-                                     "content": {"type": "text", "text": reasoning}})
-            elif role == "tool":
-                self._emit(sid, {"sessionUpdate": "tool_call_update",
-                                 "toolCallId": msg.get("tool_call_id", ""), "status": "completed"})
-        return None
-
-    # ---------- Printer.emitter 回调 ----------
-    def emit(self, d: dict) -> None:
-        """Printer.emitter 回调: 事件 dict → session/update 通知 (tool/tool_result/thinking/output/usage)."""
-        sid = self._cur_sid
-        if sid is None:
-            return
-        t = d.get("type")
-        if t == "tool":
-            tid = "%s:%s" % (d.get("name", "tool"), self._next_id())
-            self._set_tool_id(tid)
-            self._emit(sid, {"sessionUpdate": "tool_call", "toolCallId": tid,
-                             "title": "%s %s" % (d.get("name", "tool"), str(d.get("args_preview", ""))[:80]),
-                             "status": "pending"})
-        elif t == "tool_result":
-            tid = self._tool_id() or ("%s:0" % d.get("name", "tool"))
-            self._set_tool_id(None)  # 配对消费
-            self._emit(sid, {"sessionUpdate": "tool_call_update", "toolCallId": tid,
-                             "status": "completed" if d.get("ok") else "failed"})
-        elif t == "thinking":
-            if self._msg_id is None:
-                self._msg_id = "msg_" + self._next_id()
-            self._emit(sid, {"sessionUpdate": "agent_thought_chunk", "messageId": self._msg_id,
-                             "content": {"type": "text", "text": str(d.get("content", ""))}})
-        elif t == "output":
-            if self._msg_id is None:
-                self._msg_id = "msg_" + self._next_id()  # turn 内首个 chunk 时生成, 后续复用
-            self._emit(sid, {"sessionUpdate": "agent_message_chunk", "messageId": self._msg_id,
-                             "content": {"type": "text", "text": str(d.get("content", ""))}})
-        elif t == "usage":
-            self._emit(sid, {"sessionUpdate": "usage_update",
-                             "used": d.get("context_tokens", 0), "size": d.get("max_context", 0)})
-
-    def _h_permission(self, message: str) -> bool:
-        sid = self._cur_sid
-        if sid is None:
-            return False
-        req_id = "perm_" + self._next_id()
-        ev = threading.Event()
-        with self._lock:
-            self._perm[req_id] = {"event": ev, "decision": "", "sid": sid}
-        self._send({"jsonrpc": "2.0", "id": req_id, "method": "session/request_permission",
-                    "params": {"sessionId": sid,
-                               "toolCall": {"toolCallId": self._tool_id() or "", "title": message[:120]},
-                               "options": [
-                                   {"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
-                                   {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}]}})
-        ev.wait(timeout=300)
-        with self._lock:
-            decision = self._perm.pop(req_id, {}).get("decision", "")
-        if decision == "cancelled":
-            ev2 = self.cancel_flags.get(sid)
-            if ev2 is not None:
-                ev2.set()  # 协议: client 取消 turn 时以 Cancelled 裁决权限 => 同步终止本轮
-            return False
-        return decision == "allow"
-
-    # ---------- 会话文件与主循环 ----------
-    def _ctx_file(self, sid: str) -> str:
-        # sid 与文件名确定性映射: sid = "sess_<name>" => session_dir/<name>.json
-        name = sid[5:] if sid.startswith("sess_") else sid
-        if not name or ".." in name or "/" in name:
-            raise AcpError(-32602, "Invalid session id")
-        return os.path.join(session_dir, name + ".json")
-
-    # ---------- 主循环 ----------
-    def serve(self) -> None:
-        # 原生注册 (Printer 扩展点): acp 模式文本静默, 事件经 emitter, 权限经 handler
-        console.mode = "acp"
-        console.emitter = self.emit
-        console.permission_handler = self._h_permission
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            if msg.get("method") == "session/prompt":  # prompt 在独立线程处理, 主循环继续读 stdin 以接收 cancel 通知
-                threading.Thread(target=self._run_prompt_thread, args=(msg,), daemon=True, name="acp-prompt").start()
-            else:
-                self.dispatch(msg)
-
-    def _run_prompt_thread(self, msg: dict) -> None:
-        """prompt 线程边界兜底: 线程内未捕获异常(含 _error 自身失败, 如 client 断连的BrokenPipeError)不会传播到主循环, 必须打印 traceback 并尽力回执, 避免静默吞掉."""
-        try:
-            self.dispatch(msg)
-        except Exception:  # noqa: BLE001 线程边界
-            traceback.print_exc()
-            try:
-                self._error(msg.get("id"), -32603, "Internal error: %s" % sys.exc_info()[1])
-            except Exception:  # noqa: BLE001 回执也失败(client 已断连), 放弃
-                pass
-
-
-def acp_main() -> int:
-    if not MANGO_KEY:
-        console.error("MANGO_KEY env var is required for ACP mode")
-        return 1
-    initialize_system()  # 确保 .mangocli/session 等目录存在
-    AcpServer().serve()
-    return 0
-
-
 def _parse_args(args=None):
     parser = argparse.ArgumentParser(prog="mangopi-cli", description="Mangopi CLI — single-file AI coding agent")
     parser.add_argument("--version", action="version", version=f"mangopi-cli v{__version__}")
@@ -2135,7 +1824,12 @@ def main():
     if args.doctor:
         sys.exit(doctor())
     if args.acp:
-        sys.exit(acp_main())
+        acp_entry = extension_registry.entry_points.get("acp")  # 扩展优先 (entry_points 契约通道)
+        if acp_entry is not None:
+            sys.exit(acp_entry())
+        console.error(f"ACP server not installed: copy examples/extensions/acp.py to {extensions_dir} "
+                      f"(or point MANGO_EXTENSIONS_DIR at the repo examples/extensions/ dir)")
+        sys.exit(1)
 
     global provider
     if MANGO_ROUTING == "on":

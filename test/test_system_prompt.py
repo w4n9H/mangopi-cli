@@ -47,6 +47,14 @@ class _SystemPromptBase(unittest.TestCase):
 class TestSectionsStructure(unittest.TestCase):
     """The `sections` attribute must be a list of (name, [str]) tuples."""
 
+    def setUp(self):
+        # 隔离环境扩展: 默认结构断言 (7 段/顺序) 与用户 prompt_sections 无关
+        self.orig_sections = list(mangopi_cli.extension_registry.prompt_sections)
+        mangopi_cli.extension_registry.prompt_sections = []
+
+    def tearDown(self):
+        mangopi_cli.extension_registry.prompt_sections = self.orig_sections
+
     def test_01_sections_attribute_exists_and_nonempty(self):
         sp = SystemPrompt()
         self.assertTrue(hasattr(sp, "sections"))
@@ -351,6 +359,91 @@ class TestMemorySectionBranches(unittest.TestCase):
             self.assertIn(self.HEADER, content)
             self.assertIn("Only MANGO rule", content)
             self.assertNotIn(self.UNAVAILABLE_MARKER, content)
+
+
+# ── 5. Extension channel: extension_registry.prompt_sections ───────────────────────────────
+
+
+class TestExtensionPromptSections(unittest.TestCase):
+    """扩展通道: extension_registry.prompt_sections 由 ExtensionRegistry.load 收获, SystemPrompt
+    构造时同名段覆盖默认内容 (强化), 异名段追加于 environment 之后."""
+
+    def setUp(self):
+        self.orig = list(mangopi_cli.extension_registry.prompt_sections)
+        mangopi_cli.extension_registry.prompt_sections[:] = []
+
+    def tearDown(self):
+        mangopi_cli.extension_registry.prompt_sections[:] = self.orig
+
+    def test_50_no_extensions_keeps_seven_sections(self):
+        sp = SystemPrompt()
+        self.assertEqual(len(sp.sections), 7)
+
+    def test_51_override_default_section(self):
+        mangopi_cli.extension_registry.prompt_sections[:] = [("safety", "Extension safety policy.")]
+        sp = SystemPrompt()
+        self.assertEqual(next(c for n, c in sp.sections if n == "safety"),
+                         "Extension safety policy.")
+        self.assertEqual([n for n, _ in sp.sections].count("safety"), 1)  # 覆盖不产生重复段
+        self.assertEqual(len(sp.sections), 7)
+
+    def test_52_append_new_section(self):
+        mangopi_cli.extension_registry.prompt_sections[:] = [("project_note", "Pinned note.")]
+        sp = SystemPrompt()
+        names = [n for n, _ in sp.sections]
+        self.assertEqual(names[-1], "project_note")  # 异名段追加于末尾
+        self.assertEqual(len(sp.sections), 8)
+        self.assertIn("Pinned note.", sp.assemble())
+
+    def test_53_mixed_override_and_append(self):
+        mangopi_cli.extension_registry.prompt_sections[:] = [
+            ("builtin_rules", "Replaced rules."), ("extra_a", "A"), ("extra_b", "B")]
+        sp = SystemPrompt()
+        names = [n for n, _ in sp.sections]
+        self.assertEqual(names.count("builtin_rules"), 1)
+        self.assertIn("extra_a", names)
+        self.assertIn("extra_b", names)
+        self.assertEqual(len(sp.sections), 9)
+        self.assertEqual(next(c for n, c in sp.sections if n == "builtin_rules"),
+                         "Replaced rules.")
+
+
+class TestDynamicToolGuidance(unittest.TestCase):
+    """tool_guidance 段: 核心静态部分 + 已注册工具的 guidance 动态拼接
+    (web_search 等随扩展加载后自动进入提示词)."""
+
+    def setUp(self):
+        self._orig = dict(mangopi_cli.TOOLS)
+
+    def tearDown(self):
+        mangopi_cli.TOOLS.clear()
+        mangopi_cli.TOOLS.update(self._orig)
+
+    def _guidance(self):
+        sp = SystemPrompt()
+        return next(c for n, c in sp.sections if n == "tool_guidance")
+
+    def test_60_extension_tool_guidance_injected(self):
+        class FakeTool(mangopi_cli.ToolBase):
+            name = "fake"
+            description = "fake"
+            params = {}
+            guidance = "Use **fake** for testing."
+
+        mangopi_cli.TOOLS["fake"] = FakeTool()
+        content = self._guidance()
+        self.assertIn("Use **fake** for testing.", content)
+        self.assertIn("Always finish with **attempt_completion**", content)  # 收尾句仍在
+
+    def test_61_no_guidance_no_extra_lines(self):
+        class QuietTool(mangopi_cli.ToolBase):
+            name = "quiet"
+            description = "quiet"
+            params = {}
+
+        mangopi_cli.TOOLS["quiet"] = QuietTool()  # guidance 默认 "" → 不注入
+        content = self._guidance()
+        self.assertNotIn("quiet", content)
 
 
 if __name__ == "__main__":

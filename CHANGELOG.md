@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.48] - 2026-08-13
+
+### Changed
+- **Extension system upgrade (three-channel contract)** — `ExtensionRegistry` singleton (replaces `_load_extensions`) harvests `tools`, `prompt_sections` and `entry_points` from `~/.mangocli/extensions/*.py` in one scan; `MANGO_EXTENSIONS_DIR` env var overrides the extensions directory; `prompt_sections` inject into SystemPrompt (same-name sections override defaults, new names append after `environment`); `--acp` dispatches to `entry_points["acp"]` when present; reload semantics (re-scan clears previous state); import-time contract documented (top-level import only, lazy imports inside function bodies)
+- **Tool guidance** — `ToolBase.guidance` attribute; `tool_guidance` prompt section now assembled dynamically from registered tools (built-in + extension unified), closing sentence (`attempt_completion`) stably sorted last
+
+### Removed
+- **ACP server from core** — `AcpError`/`_prompt_text`/`AcpServer`/`acp_main` (~340 lines) moved out of the single file; core `--acp` now errors with an install hint when the extension is missing (Printer emitter/permission hooks kept)
+
+### Added
+- **Shipped extensions** (`examples/extensions/`, enabled by copy/symlink or `MANGO_EXTENSIONS_DIR`) — `acp.py` (ACP v1 agent server, ~380 lines), `clipboard.py` (read/write system clipboard, write requires confirmation; macOS/Linux), `git_status.py` (read-only git status/log/diff summaries); bilingual directory README with full three-channel contract
+- **Tests** — 398 total (was 370): extension registry channels (8), prompt-section injection & dynamic tool guidance (6), import-time loading via subprocess (2), clipboard (8), git_status (6); user-extension isolation hardening for schema/system-prompt count tests
+
+---
+
 ## [0.1.47] - 2026-08-12
 
 ### Removed

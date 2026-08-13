@@ -1,5 +1,8 @@
 """Tests for ACP (Agent Client Protocol) v1 server — stdio JSON-RPC agent endpoint.
 
+ACP 已从核心移出 (v0.1.48), 随仓库分发于 examples/extensions/acp.py:
+本文件从该路径加载扩展模块进行测试.
+
 Covers:
     * initialize: protocol version negotiation, capabilities structure, authMethods
     * session/new: required-field validation (cwd, mcpServers), session creation
@@ -14,6 +17,7 @@ Covers:
     * _prompt_text: rejects non-text ContentBlocks instead of silently dropping
     * concurrency: prompt threads emit events only to their own session
 """
+import importlib.util
 import json
 import os
 import sys
@@ -30,6 +34,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("MANGO_KEY", "test-key-not-used")
 
 import mangopi_cli as m  # noqa: E402
+
+# ── Load the shipped extension module (examples/extensions/acp.py) ───────────
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ACP_EXT_PATH = os.path.join(PROJECT_ROOT, "examples", "extensions", "acp.py")
+_acp_spec = importlib.util.spec_from_file_location("mango_acp_ext", ACP_EXT_PATH)
+acp_mod = importlib.util.module_from_spec(_acp_spec)
+_acp_spec.loader.exec_module(acp_mod)
 
 
 def _tool_resp(name, args, content="", reasoning=""):
@@ -96,7 +107,7 @@ class AcpTestBase(unittest.TestCase):
         self.reader = threading.Thread(target=self._read_loop, daemon=True)
         self.reader.start()
 
-        self.server = m.AcpServer()
+        self.server = acp_mod.AcpServer()
         # serve() 的前 3 行注册 (原生钩子), 不启动 stdin 主循环
         m.console.mode = "acp"
         m.console.emitter = self.server.emit

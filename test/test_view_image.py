@@ -9,7 +9,9 @@ Covers:
 import base64
 import io
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -398,13 +400,32 @@ class TestRunToolDisplayForImage(unittest.TestCase):
 class TestToolSchemaIncludesViewImage(unittest.TestCase):
     """The OpenAI-style tool schema sent to the model must include view_image."""
 
+    def setUp(self):
+        # 隔离用户扩展 (MANGO_EXTENSIONS_DIR / ~/.mangocli/extensions):
+        # schema 计数断言只针对 10 个内置工具, 与用户已装扩展无关
+        self.orig_dir = m.extensions_dir
+        self.orig_tools = dict(m.TOOLS)
+        self.orig_reg_tools = list(m.extension_registry.tools)
+        self.tmp = tempfile.mkdtemp()
+        m.extensions_dir = os.path.join(self.tmp, "ext")
+        m.extension_registry.load()
+        ext_instances = set(id(t) for t in self.orig_reg_tools)
+        m.TOOLS = {name: t for name, t in self.orig_tools.items() if id(t) not in ext_instances}
+
+    def tearDown(self):
+        m.TOOLS.clear()
+        m.TOOLS.update(self.orig_tools)
+        m.extension_registry.tools = self.orig_reg_tools
+        m.extensions_dir = self.orig_dir
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_view_image_in_tool_schema(self):
         schema = m.tool_schema()
         names = [s["function"]["name"] for s in schema]
         self.assertIn("view_image", names)
 
     def test_schema_count(self):
-        # 10 tools total (mailbox_* removed)
+        # 10 built-in tools
         self.assertEqual(len(m.tool_schema()), 10)
 
 

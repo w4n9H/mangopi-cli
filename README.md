@@ -285,9 +285,17 @@ The model can automatically discover and load relevant skills during execution.
 
 # Extension System
 
-Mangopi CLI supports custom tools via auto-discovered extensions: drop a Python file into `~/.mangocli/extensions/` and its tools join the built-in registry on startup — visible in the LLM tool schema, dispatched through `run_tool`, and available in ACP mode.
+Mangopi CLI is extensible via auto-discovered extension files: drop a Python file into `~/.mangocli/extensions/` — or point the `MANGO_EXTENSIONS_DIR` env var at any directory (e.g. a repo-local `extensions/` folder) — and it is loaded at startup. Extensions shipped with the repo live in `examples/extensions/`; enable them by copying/symlinking into `~/.mangocli/extensions/` or setting `MANGO_EXTENSIONS_DIR=examples/extensions`. Each file may export any combination of three channels (all optional):
 
-Example extension:
+| Channel | Export | Effect |
+|---|---|---|
+| Tools | `tools` | `ToolBase` instances join the built-in registry — visible in the LLM tool schema, dispatched through `run_tool`, available in ACP mode; same-name tools override built-ins (extension wins) |
+| Prompt sections | `prompt_sections` | `(name, content)` pairs injected into the system prompt: a name matching a default section (`base_intro` / `safety` / `builtin_rules` / `tool_guidance` / `skills_guidance` / `memory` / `environment`) overrides it (enhancement); a new name appends after `environment` |
+| Entry points | `entry_points` | `name -> Callable[[], int]` registry (same-name: first file in scan order wins); the built-in `--acp` flag dispatches to `entry_points["acp"]` when present |
+
+Contract: extension top-level code may `import` but must not access `mangopi_cli` attributes — the scan runs during module import, when the module is only half-initialized (importing `ToolBase` at top level is fine; everything else goes inside function bodies). Extensions run arbitrary Python code, so only install from trusted sources. A broken extension logs a diagnostic and is skipped without affecting others.
+
+### Tools channel
 
 ```python
 # ~/.mangocli/extensions/hello.py
@@ -304,12 +312,37 @@ class HelloTool(ToolBase):
 tools = [HelloTool()]
 ```
 
-Conventions:
+### Prompt sections channel
 
-- An extension file exports a `tools` list of `ToolBase` instances
-- Same-name tools override built-ins (extension wins)
-- Extensions run arbitrary Python code — only install from trusted sources
-- A runnable example lives at `examples/extensions/hello.py`
+```python
+# ~/.mangocli/extensions/prompt_sections.py
+prompt_sections = [
+    # Same name as a default section ("safety") → overrides it (enhancement)
+    ("safety",
+     "## Safety\n\n"
+     "Destructive commands and any access outside the project root require explicit user confirmation.\n"
+     "Never delete data without asking first.\n"),
+    # New name → appended after all default sections
+    ("project_note",
+     "## Project Note\n\n"
+     "This project is managed with mangopi-cli. Keep commits small and focused.\n"),
+]
+```
+
+### Entry points channel
+
+```python
+# ~/.mangocli/extensions/entry_points.py
+import mangopi_cli  # top-level: import only, no attribute access (import-time scan)
+
+def hello_serve() -> int:
+    # Lazy import: the module is fully initialized by the time this runs
+    from mangopi_cli import __version__
+    print(f"hello_serve: mangopi-cli v{__version__} entry point invoked")
+    return 0
+
+entry_points = {"hello": hello_serve}
+```
 
 ---
 
