@@ -59,8 +59,10 @@ class TestGitStatus(unittest.TestCase):
         r = m.run_tool("git_status", {"action": "log", "limit": 2})
         self.assertTrue(r["success"], r["content"])
         lines = r["content"].splitlines()
-        self.assertIn("Last 2 commit(s)", lines[0])
-        self.assertGreaterEqual(len(lines), 2)
+        # CI 浅克隆可能不足 limit 条: 只断言格式与上限, 不依赖具体数量
+        self.assertRegex(lines[0], r"^## Last \d+ commit\(s\)$")
+        self.assertLessEqual(len(lines) - 1, 2)   # 条目数 ≤ limit
+        self.assertGreaterEqual(len(lines), 2)    # 至少 1 条
 
     def test_diff_has_both_sections(self):
         r = m.run_tool("git_status", {"action": "diff"})
