@@ -1,8 +1,7 @@
 """Shipped extension — git_status: 只读 git 仓库状态 (status/log/diff 结构化摘要).
 
 按需启用:
-  * 复制/软链本文件到 ~/.mangocli/extensions/, 或
-  * MANGO_EXTENSIONS_DIR=examples/extensions
+  * 复制/软链本文件到 preset 扩展目录: ~/.mangocli/presets/<name>/extensions/ (需设 MANGO_PRESET=<name>)
 
 用途: agent 需要了解仓库状态时, 比裸 bash git 更结构化 (分支/变更计数/空态提示);
 全部为只读命令, 无需确认.

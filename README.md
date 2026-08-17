@@ -80,15 +80,15 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Local-first workflow design
 * ACP agent server (`--acp`) — Agent Client Protocol v1 over stdio, connectable from Zed / JetBrains etc.
 * Smart provider routing with tiered models (high/medium/low)
-* Multimodal support (image reading via `view_image`)
-* Web search via Bocha AI Search (`web_search` tool)
+* Multimodal support (image reading via `view_image` extension)
+* Web search via Bocha AI Search (`web_search` extension)
 * Context-aware conversation management
 * Automatic context compacting
 * OpenAI-compatible API support
 * Built-in file and shell tools
 * Persistent local sessions
 * Skill system support (`SKILL.md`)
-* Extension system — auto-discovered custom tools via `~/.mangocli/extensions/*.py`
+* Extension system — per-preset dirs: `~/.mangocli/presets/<name>/` (`conf.py` + `extensions/`), activated via `MANGO_PRESET`
 * Safe shell execution checks
 * Fully hackable and easy to extend
 * Large-context optimized runtime
@@ -238,16 +238,16 @@ The client drives the conversation via `session/new` + `session/prompt` messages
 
 | Tool                 | Description                                                       |
 |----------------------|-------------------------------------------------------------------|
-| `read`               | Read a file or image (png/jpg/gif/webp auto-routed to vision)  |
+| `read`               | Read a text file (use `view_image` extension for images)          |
 | `write`              | Write or overwrite a file                                       |
 | `edit`               | Replace an exact string in a file, with unified-diff preview    |
 | `search`             | Search files using glob patterns, sorted by mtime               |
 | `grep`               | Recursive regex content search                                  |
 | `bash`               | Execute a shell command (60s timeout, output filtered)          |
-| `view_image`         | Load a local image into the model's vision context              |
-| `web_search`         | Search the live web via Bocha AI Search API                     |
 | `use_skill`          | Load an installed `SKILL.md` with its scripts/references        |
 | `attempt_completion` | Final step — present the result to the user                     |
+
+`web_search` / `view_image` are shipped as optional extensions (`examples/extensions/`) since v0.1.49.
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
 
@@ -285,7 +285,7 @@ The model can automatically discover and load relevant skills during execution.
 
 # Extension System
 
-Mangopi CLI is extensible via auto-discovered extension files: drop a Python file into `~/.mangocli/extensions/` — or point the `MANGO_EXTENSIONS_DIR` env var at any directory (e.g. a repo-local `extensions/` folder) — and it is loaded at startup. Extensions shipped with the repo live in `examples/extensions/`; enable them by copying/symlinking into `~/.mangocli/extensions/` or setting `MANGO_EXTENSIONS_DIR=examples/extensions`. Each file may export any combination of three channels (all optional):
+Mangopi CLI is extensible via per-preset directories: each preset `<name>` lives at `~/.mangocli/presets/<name>/` with a `conf.py` (total config: `keep_tools` whitelist, `unload_sources`) and an `extensions/` folder holding extension files — set `MANGO_PRESET=<name>` to activate it. Without `MANGO_PRESET` the CLI runs pure built-in tools (no extensions). Extensions shipped with the repo live in `examples/extensions/`; enable them by copying/symlinking into `~/.mangocli/presets/<name>/extensions/`. Each file may export any combination of three channels (all optional):
 
 | Channel | Export | Effect |
 |---|---|---|
@@ -298,7 +298,7 @@ Contract: extension top-level code may `import` but must not access `mangopi_cli
 ### Tools channel
 
 ```python
-# ~/.mangocli/extensions/hello.py
+# ~/.mangocli/presets/<name>/extensions/hello.py
 from mangopi_cli import ToolBase
 
 class HelloTool(ToolBase):
@@ -315,7 +315,7 @@ tools = [HelloTool()]
 ### Prompt sections channel
 
 ```python
-# ~/.mangocli/extensions/prompt_sections.py
+# ~/.mangocli/presets/<name>/extensions/prompt_sections.py
 prompt_sections = [
     # Same name as a default section ("safety") → overrides it (enhancement)
     ("safety",
@@ -332,7 +332,7 @@ prompt_sections = [
 ### Entry points channel
 
 ```python
-# ~/.mangocli/extensions/entry_points.py
+# ~/.mangocli/presets/<name>/extensions/entry_points.py
 import mangopi_cli  # top-level: import only, no attribute access (import-time scan)
 
 def hello_serve() -> int:
@@ -343,6 +343,40 @@ def hello_serve() -> int:
 
 entry_points = {"hello": hello_serve}
 ```
+
+### Presets (total config)
+
+Each preset `<name>` is a directory `~/.mangocli/presets/<name>/` with an optional `conf.py` (total config applied at startup) and the `extensions/` folder above. Set `MANGO_PRESET=<name>` to activate; **without it the CLI runs pure built-in tools (no extensions)**. The banner shows the active preset and tool count, e.g. `... | minimal[8 tool]`.
+
+```python
+# ~/.mangocli/presets/minimal/conf.py
+preset = {
+    "name": "minimal",
+    "description": "Core 8 tools only: no network, no vision, no extensions",
+    "keep_tools": ["read", "write", "edit", "search", "grep", "bash", "use_skill", "attempt_completion"],
+    # optional: "unload_sources": ["clipboard.py", "git_status.py"],
+}
+```
+
+* `keep_tools` — whitelist: `TOOLS` keeps only the listed tools (built-in + extensions unified); the inverse is registered under the `__preset__` slot, `unload_source("__preset__")` restores
+* `unload_sources` — optional: reversibly unload extension registrations (three channels), combinable with `keep_tools`
+* Applying a preset emits the `preset:applied` event (extensions such as `audit.py` can listen)
+
+### Shipped extensions
+
+The repo ships 9 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable):
+
+| File | Function |
+|---|---|
+| `acp.py` | ACP v1 agent server over stdio (`mangopi-cli --acp` dispatches to `entry_points["acp"]`) |
+| `web_search.py` | Live web search via Bocha AI Search (`MANGO_SEARCH_API_KEY`) |
+| `view_image.py` | Local image into vision context |
+| `clipboard.py` | System clipboard read/write (macOS / Linux) |
+| `git_status.py` | Read-only git status/log/diff summaries |
+| `audit.py` | Tool-call audit to `~/.mangocli/tool_audit.jsonl` (event bus) |
+| `debug.py` | Per-call args/results debug prints (event bus) |
+| `ratelimit.py` | Sliding-window rate warning (event bus, warn only) |
+| `trace.py` | Session event stream to `~/.mangocli/traces/run_*.json` (replaces core MANGO_TRACE) |
 
 ---
 

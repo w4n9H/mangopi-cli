@@ -14,23 +14,19 @@ import urllib.error
 import urllib.request
 import glob as globlib
 import platform
-import base64
 import shutil
-import mimetypes
 import argparse
-import uuid
-import importlib.util
-import traceback
+import types
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 
 try:
     import readline  # 解决 Unix-like 系统中 input 无法正常删除中文的问题
 except Exception:
     pass
 
-__version__ = "0.1.48"
+__version__ = "0.1.49"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -43,17 +39,17 @@ MANGO_MAX_ITER = int(os.environ.get("MANGO_MAX_ITER", 100))
 LANGUAGE = os.environ.get("MANGO_LANG", "en").lower()
 MANGO_ROUTING = os.environ.get("MANGO_ROUTING", "off").lower()
 MANGO_YOLO = os.environ.get("MANGO_YOLO", "").lower() in ("1", "true", "yes")
-MANGO_TRACE = os.environ.get("MANGO_TRACE", "off").lower() in ("1", "true", "yes", "on")
+MANGO_PRESET = os.environ.get("MANGO_PRESET", "").strip()  # preset 名 (目录名, 大小写敏感)
+MANGO_PRESET_DIR = os.path.expanduser("~/.mangocli/presets")
 
 
 project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
-extensions_dir = os.path.expanduser(os.environ.get("MANGO_EXTENSIONS_DIR") or "~/.mangocli/extensions")
+extensions_dir = os.path.expanduser(f"~/.mangocli/presets/{MANGO_PRESET}/extensions") if MANGO_PRESET else ""
 # 直接运行 (python mangopi_cli.py) 时模块名为 __main__, 此处注入别名使扩展文件可 `from mangopi_cli import ...`
 sys.modules.setdefault("mangopi_cli", sys.modules[__name__])
 providers_file = os.path.join(base_persist_dir, "providers.json")
-traces_dir = os.path.join(base_persist_dir, "traces")
 
 # --- Catppuccin Mocha palette (24-bit, active roles only) ---
 MOCHA = {  # Ghostty theme: Catppuccin Mocha. https://github.com/catppuccin/catppuccin
@@ -308,7 +304,6 @@ console = Printer()
 # --- Init dir, Base data ---
 def initialize_system():
     os.makedirs(session_dir, exist_ok=True)  # auto create .mangocli
-    os.makedirs(traces_dir, exist_ok=True)
 
 
 def doctor():
@@ -339,7 +334,6 @@ def helper():
 FILTERED_DIRS = [
     ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", ".turbo", ".idea",
     ".vscode", ".mypy_cache", ".pytest_cache", ".cache", "target", "vendor"]
-IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
 def _is_directory_heavy(command: str) -> bool:  # 判断是否是目录遍历类命令
@@ -430,51 +424,142 @@ def _request(url: str, body: dict, headers: dict = None, timeout: int = 300, max
     raise last_exception
 
 
-def _bocha_search_api(query: str = None, freshness: str = "noLimit",  summary: bool = True,
-                      include: str = "",  exclude: str = "",  count: int = 10,
-                      bocha_key: str = None, bocha_url: str = "https://api.bocha.cn/v1/web-search"):
-    headers = {"Content-Type": "application/json", "Accept": "application/json", "Authorization": f"Bearer {bocha_key}"}
-    payload = {"query": query, "freshness": freshness, "summary": summary,
-               "include": include, "exclude": exclude, "count": count}
-    data = _request(bocha_url, payload, headers).get("data", {})
-    pages = data.get("webPages", {}) if isinstance(data, dict) else {}
-    return [{"date": m.get("dateLastCrawled", ""), "title": m.get("name", ""),
-             "link": m.get("url", ""), "summary": m.get("summary", ""), "content": m.get("content", "")}
-            for m in pages.get("value", [])] if isinstance(pages, dict) else []
+class _EventBus:
+    """run_tool 事件总线: on()/emit(). 事件: tool:before/tool:after/tool:error.只做emit,不做 bail/serial/waterfall."""
+
+    def __init__(self):
+        self._listeners = {}                      # event -> List[Callable]
+
+    def on(self, event: str, fn: Callable) -> Callable[[], bool]:
+        self._listeners.setdefault(event, []).append(fn)
+
+        def unsub():
+            try:
+                self._listeners[event].remove(fn)
+                return True
+            except (ValueError, KeyError):
+                return False
+
+        return unsub
+
+    def emit(self, event: str, *args) -> int:
+        for fn in list(self._listeners.get(event, [])):  # 复制: listener 可在循环内退订
+            try:
+                fn(*args)
+            except Exception as err:  # noqa: BLE001 单个 listener 失败不影响其余
+                console.error(f"event {event}: {err}")
+        return len(self._listeners.get(event, []))
+
+
+_mango_events = _EventBus()
+
+
+def on(event: str, fn: Callable) -> Callable[[], bool]:
+    """扩展订阅事件总线的入口: `from mangopi_cli import on` (顶层可用, 早于扫描点)."""
+    return _mango_events.on(event, fn)
 
 
 class ExtensionRegistry:
     """扩展注册表: 一次扫描, 三通道收获. 契约: 扩展文件顶层只允许 import, 禁止访问 mangopi_cli 属性 (导入期半初始化);
-    所需符号在函数体内延迟导入. 单个扩展失败只记录诊断, 不影响其他扩展."""
+    所需符号在函数体内延迟导入. 单个扩展失败只记录诊断, 不影响其他扩展.
+    每条注册按 source (扩展文件名) 记录 inverse, unload_source()/reload_source() 支持可逆卸载/单文件重载."""
 
     def __init__(self):
         self.tools = []                    # 通道一: List[ToolBase], TOOLS 合并时扩展优先
         self.prompt_sections = []          # 通道二: List[(name, content)], 同名覆盖/异名追加
         self.entry_points = {}             # 通道三: name -> Callable[[], int] (如 {"acp": ...}), 同名首个生效
+        self._per_source = {}              # source(扩展文件名) -> List[inverse Callable], 可逆卸载用
 
     def load(self) -> "ExtensionRegistry":  # 全量重扫 extensions_dir (重载语义: 上次结果清空).
-        self.tools, self.prompt_sections, self.entry_points = [], [], {}
+        self.tools, self.prompt_sections, self.entry_points, self._per_source = [], [], {}, {}
         if not os.path.isdir(extensions_dir):
             return self
+        off = {f.strip() for f in os.environ.get("MANGO_EXTENSIONS_OFF", "").split(",") if f.strip()}
         for py in sorted(globlib.glob(os.path.join(extensions_dir, "*.py"))):
+            source = os.path.basename(py)
+            if source in off:
+                continue                   # MANGO_EXTENSIONS_OFF: 静态禁用, 不加载不记录
             try:
-                mod = self._load_file(py)
+                mod = self.load_file(py)
             except Exception as err:  # noqa: BLE001 扩展失败不拖垮主程序
                 console.error(f"load extension {py} err: {err}")
                 continue
-            self.tools.extend(getattr(mod, "tools", []) or [])
-            self.prompt_sections.extend(getattr(mod, "prompt_sections", []) or [])
+            for tool in getattr(mod, "tools", []) or []:
+                self._register_tool(tool, source)
+            for section in getattr(mod, "prompt_sections", []) or []:
+                self._register_prompt_section(section, source)
             for name, fn in (getattr(mod, "entry_points", {}) or {}).items():
-                if callable(fn) and name not in self.entry_points:
-                    self.entry_points[name] = fn   # 同名首个生效, 确定性
+                self._register_entry_point(name, fn, source)
         return self
 
+    def unload_source(self, source: str) -> int:
+        """可逆卸载: 卸掉 source 贡献的所有注册并跑 inverse (同步清理 TOOLS). 返回卸载的注册数."""
+        inverses = self._per_source.pop(source, [])
+        for inverse in inverses:
+            try:
+                inverse()
+            except Exception as err:  # noqa: BLE001 单个 inverse 失败不影响其余
+                console.error(f"unload {source} err: {err}")
+        return len(inverses)
+
+    def reload_source(self, source: str) -> int:
+        """重载单个扩展: 先卸旧贡献再重加载该文件, 其他 source 不受影响. 返回新注册数."""
+        self.unload_source(source)
+        py = os.path.join(extensions_dir, source)
+        if not os.path.isfile(py):
+            return 0
+        mod = self.load_file(py)          # 加载失败向上抛, 由调用方决定 (旧贡献已卸)
+        for tool in getattr(mod, "tools", []) or []:
+            self._register_tool(tool, source)
+            TOOLS[tool.name] = tool        # 运行时重载: 新实例立即生效 (导入期由模块级 TOOLS 合并负责)
+        for section in getattr(mod, "prompt_sections", []) or []:
+            self._register_prompt_section(section, source)
+        for name, fn in (getattr(mod, "entry_points", {}) or {}).items():
+            self._register_entry_point(name, fn, source)
+        return len(self._per_source.get(source, []))
+
+    def _register_tool(self, tool, source):
+        self.tools.append(tool)
+
+        def inverse():
+            if tool in self.tools:
+                self.tools.remove(tool)
+            if TOOLS.get(tool.name) is tool:  # 同名覆盖时只删自己, 不误删后来者
+                del TOOLS[tool.name]
+
+        self._per_source.setdefault(source, []).append(inverse)
+
+    def _register_prompt_section(self, section, source):
+        self.prompt_sections.append(section)
+
+        def inverse():
+            if section in self.prompt_sections:
+                self.prompt_sections.remove(section)
+
+        self._per_source.setdefault(source, []).append(inverse)
+
+    def _register_entry_point(self, name, fn, source):
+        if callable(fn) and name not in self.entry_points:  # 同名首个生效, 确定性
+            self.entry_points[name] = fn
+
+            def inverse():
+                if self.entry_points.get(name) is fn:
+                    del self.entry_points[name]
+
+            self._per_source.setdefault(source, []).append(inverse)
+
     @staticmethod
-    def _load_file(py: str) -> Any:
-        spec = importlib.util.spec_from_file_location("mango_ext_" + os.path.basename(py), py)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+    def load_file(py: str) -> Any:
+        # 直接 compile+exec 而非 importlib: 绕开 SourceFileLoader 的 __pycache__ 字节码缓存
+        mod = types.ModuleType("mango_ext_" + os.path.basename(py))
+        mod.__file__ = py
+        with open(py, encoding="utf-8") as f:
+            code = compile(f.read(), py, "exec")
+        exec(code, mod.__dict__)
         return mod
+
+    def get_per_source(self):
+        return self._per_source
 
 
 class SkillManager:
@@ -660,9 +745,9 @@ class ToolBase:
 
 class ReadTool(ToolBase):
     name = "read"
-    description = "Read a file from the local filesystem (text or image; images are auto-routed to vision)"
+    description = "Read a file from the local filesystem (text only; use view_image for images)"
     params = {
-        "path": {"type": "string", "description": "Path to the file to read (text or image: png/jpg/jpeg/gif/webp)"},
+        "path": {"type": "string", "description": "Path to the file to read (text)"},
         "offset": {"type": "number?", "description": "Line number to start reading from (0-indexed, default 0)"},
         "limit": {"type": "number?", "description": "Maximum number of lines to read (default: all lines)"}}
 
@@ -670,9 +755,6 @@ class ReadTool(ToolBase):
 
     def run(self, args):
         path = args["path"]
-        ext = os.path.splitext(path)[1].lower()
-        if ext in IMAGE_EXTS and "offset" not in args and "limit" not in args:
-            return ViewImageTool().run({"path": path})
         with open(path) as f:
             lines = f.readlines()
         offset, limit = args.get("offset", 0), args.get("limit", len(lines))
@@ -838,140 +920,6 @@ class UseSkillTool(ToolBase):
         return self.ok("\n".join(result))
 
 
-class WebSearchTool(ToolBase):
-    name = "web_search"
-    description = (
-        "Search the live web via the Bocha (博查) AI Search API and return a list of results with "
-        "per-page AI summaries. Use this when the user asks for the latest docs, news, blog posts, "
-        "or any information that requires looking up something beyond the local filesystem. "
-        "Requires the MANGO_SEARCH_API_KEY env var to be set; returns a clear error otherwise.")
-    params = {
-        "query": {"type": "string", "description": "Natural-language search query, e.g. 'FastAPI vs Flask in 2026'."},
-        "top_k": {"type": "number?", "description": "How many results to return (1-50, default 10)."},
-        "freshness": {"type": "string?",
-                      "description": "Time filter for results: 'noLimit' (default), "
-                                     "'oneDay', 'oneWeek', 'oneMonth', 'oneYear'."}}
-    guidance = (
-        "Use **web_search** for the latest docs, news, or anything that requires the live web "
-        "beyond the local filesystem. Requires the `MANGO_SEARCH_API_KEY` env var. "
-        "Use sparingly — at most 3 times per user query to avoid excessive API calls.")
-    preview_lines = 0
-    preview_width = 200
-    use_spinner = True
-    _VALID_FRESHNESS = ("noLimit", "oneDay", "oneWeek", "oneMonth", "oneYear")
-
-    def preview(self, args): return (args.get("query") or "")[:self.preview_width]
-
-    def run(self, args):
-        query = (args.get("query") or "").strip()
-        if not query:
-            return self.fail("web_search error: 'query' is required")
-        api_key = os.environ.get("MANGO_SEARCH_API_KEY")
-        if not api_key:
-            return self.fail("web_search error: MANGO_SEARCH_API_KEY env var is not set")
-        raw_k = args.get("top_k")
-        try:
-            top_k = int(raw_k) if raw_k not in (None, "") else 10
-        except (TypeError, ValueError):
-            return self.fail(f"web_search error: 'top_k' must be an integer in [1, 50], got {raw_k!r}")
-        if not 1 <= top_k <= 50:
-            return self.fail(f"web_search error: 'top_k' must be in [1, 50], got {top_k}")
-        freshness = (args.get("freshness") or "noLimit").strip()
-        if freshness not in self._VALID_FRESHNESS:
-            return self.fail(f"web_search error: 'freshness' must be one of "
-                             f"{'/'.join(self._VALID_FRESHNESS)}, got {freshness!r}")
-
-        try:
-            results = _bocha_search_api(query=query, count=top_k, freshness=freshness, bocha_key=api_key)
-        except Exception as err:
-            return self.fail(f"web_search error: Bocha API call failed: {err}")
-        if not results:
-            return self.ok(f"(no results for query: {query})")
-
-        lines = [f"## Answer (Bocha · {len(results)} result(s) for: {query})", ""]
-        sources = []
-        for i, r in enumerate(results, 1):
-            title = (r.get("title") or "(untitled)").strip()
-            link = (r.get("link") or "").strip()
-            date = (r.get("date") or "").strip()
-            summary = (r.get("summary") or "").strip()
-            content = (r.get("content") or "").strip()
-
-            header = f"### {i}. [{title}]({link})" if link else f"### {i}. {title}"
-            lines.append(header)
-            if date:
-                lines.append(f"*Date: {date}*")
-            lines.append("")
-            if summary:
-                lines.append(f"> {summary}")
-                lines.append("")
-            if content and content != summary:
-                snippet = content if len(content) <= 500 else content[:500] + "..."
-                lines.append(snippet)
-                lines.append("")
-
-            sources.append(f"{i}. [{title}]({link})" if link else f"{i}. {title}")
-
-        lines.append("## Sources")
-        lines.extend(sources)
-        return self.ok("\n".join(lines).rstrip())
-
-
-class ViewImageTool(ToolBase):
-    name = "view_image"
-    description = (
-        "Load a local image (screenshot, UI mockup, error screen, diagram) into the model's vision context. "
-        "Accepts an absolute path to a file on disk; URLs are not supported. "
-        "Supported formats: png, jpg, jpeg, gif, webp.")
-    params = {"path": {"type": "string",
-                       "description": "Absolute path to a local image file (png/jpg/jpeg/gif/webp). "
-                                      "URL inputs are rejected."}}
-    preview_lines = 0
-    preview_width = 200
-    use_spinner = True
-    MAX_BYTES = 5 * 1024 * 1024  # 5 MB hard cap
-    guidance = ("Use **view_image** for screenshots, UI mockups, error screens, and diagrams. "
-                "The `read` tool auto-routes image files (.png/.jpg/.jpeg/.gif/.webp) to vision, "
-                "but call `view_image` directly when the path is computed or generated.")
-
-    @staticmethod
-    def _is_url(s: str) -> bool: return s.startswith("http://") or s.startswith("https://")
-
-    def preview(self, args): return (args.get("path") or "")[:self.preview_width]
-
-    def run(self, args):
-        path = (args.get("path") or "").strip()
-        if not path:
-            return self.fail("view_image error: 'path' is required")
-        if self._is_url(path):
-            return self.fail("view_image error: URL inputs are not supported. "
-                             "Download the image to a local file first, then pass the file path.")
-        err = _validate_file_path(path)
-        if err:
-            return self.fail(f"view_image error: {err}")
-        try:
-            size = os.path.getsize(path)
-        except OSError as e:
-            return self.fail(f"view_image error: cannot stat file: {e}")
-        if size == 0:
-            return self.fail("view_image error: image file is empty")
-        if size > self.MAX_BYTES:
-            return self.fail(f"view_image error: image too large ({size:,} bytes, max {self.MAX_BYTES})")
-        ext = os.path.splitext(path)[1].lower()
-        if ext not in IMAGE_EXTS:
-            return self.fail(f"view_image error: unsupported image format '{ext}' (supported: png,jpg,jpeg,gif,webp)")
-        try:
-            with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
-        except OSError as e:
-            return self.fail(f"view_image error: cannot read file: {e}")
-        mime, _ = mimetypes.guess_type(path)
-        if not mime:
-            mime = "image/png"
-        data_uri = f"data:{mime};base64,{b64}"
-        return self.ok({"type": "image", "text": f"Image: {path} ({size} bytes,{mime})", "image_url": data_uri})
-
-
 class AttemptCompletionTool(ToolBase):
     name = "attempt_completion"
     description = "Indicate that the task is complete and provide the final result/answer to the user"
@@ -990,7 +938,38 @@ class AttemptCompletionTool(ToolBase):
 extension_registry = ExtensionRegistry().load()
 TOOLS = {
     t.name: t for t in [ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
-                        WebSearchTool(), ViewImageTool(), AttemptCompletionTool()] + extension_registry.tools}
+                        AttemptCompletionTool()] + extension_registry.tools}
+
+
+def load_preset(name: str) -> Optional[int]:
+    """加载 preset 总配置 (~/.mangocli/presets/<name>/conf.py): unload_sources 逐个可逆卸载扩展 (PR 1),
+    keep_tools 白名单过滤 TOOLS (逆操作登记 _per_source["__preset__"], unload_source("__preset__") 可恢复),
+    完成后触发 preset:applied 事件 (PR 2). 返回卸载的 source 数; None = preset 不存在或未导出合法 preset dict."""
+    path = os.path.join(MANGO_PRESET_DIR, name, "conf.py")
+    if not os.path.isfile(path):
+        return None
+    mod = ExtensionRegistry.load_file(path)   # 与扩展同加载方式 (compile+exec, 无 pyc 缓存坑)
+    preset = getattr(mod, "preset", None)
+    if not isinstance(preset, dict):
+        return None
+    n = 0
+    for source in preset.get("unload_sources", []) or []:
+        if extension_registry.unload_source(source):
+            n += 1  # 按 source 计数 (文档语义: 卸掉的 source 数)
+    keep = preset.get("keep_tools")
+    if keep:
+        keep_set = set(keep)
+        removed = [(name, tool) for name, tool in list(TOOLS.items()) if name not in keep_set]
+        for name, _ in removed:
+            del TOOLS[name]
+
+        def inverse():
+            for name, tool in removed:
+                TOOLS[name] = tool
+
+        extension_registry.get_per_source().setdefault("__preset__", []).append(inverse)
+    _mango_events.emit("preset:applied", name, preset)
+    return n
 
 
 def tool_schema():
@@ -1007,8 +986,6 @@ COMPACT_RULES = {
 class ContextManager:
     def __init__(self):
         self.messages: List[Dict] = []
-        self.trace_list: List[Dict] = []
-        self.trace_meta: Dict = {}
         self.white_tool_list = ["attempt_completion"]
         self.auto_compact_threshold = int(MANGO_MAX_CONTEXT * 0.8)
         self.auto_compact_disabled = False
@@ -1028,18 +1005,6 @@ class ContextManager:
     def inject_user(self, content: str): self.runtime_injections.append({"role": "user", "content": content})
 
     def clear_runtime_injections(self): self.runtime_injections = []
-
-    def append_trace(self, kind, **fields):
-        MANGO_TRACE and self.trace_list.append({"ts": int(time.time() * 1000), "kind": kind, **fields})
-
-    def save_trace(self):
-        if not MANGO_TRACE or not self.trace_list:
-            return
-        fname = f"run_{self.trace_meta.get('mode','x')}_{int(time.time())}_{uuid.uuid4().hex[:6]}.json"
-        with open(os.path.join(traces_dir, fname), "w", encoding="utf-8") as f:
-            f.write(json.dumps(self.trace_list, indent=2, ensure_ascii=False))
-        self.trace_list.clear()
-        self.trace_meta.clear()
 
     def append_assistant(self, content: dict):
         content.update({"ts": int(time.time())})
@@ -1299,7 +1264,7 @@ class ContextManager:
         if before > after:  # Compatible with Python 3.6+
             console.compact_status(
                 before_tokens=before, after_tokens=after, max_context=MANGO_MAX_CONTEXT, strategy="auto")
-            self.append_trace("compact", tokens_before=before, tokens_after=after, saved=before - after)
+            _mango_events.emit("agent:compact", before, after, before - after)
         return self.messages + self.runtime_injections
 
 
@@ -1584,14 +1549,16 @@ def chat_completion(messages: List[Dict[str, str]]):
 
 def run_tool(tool_name, tool_args) -> dict:
     tool: ToolBase = TOOLS[tool_name]
+    _mango_events.emit("tool:before", tool_name, tool_args)  # 事件总线: 工具执行前 (TOOLS 查找失败不触发)
     try:
         console.tool_call(tool.name, tool.preview(tool_args))
         tool.before(tool_args)
         if not tool.confirm(tool_args):
-            return {"success": False, "content": "error: User denied action"}
+            return {"success": False, "content": "error: User denied action"}  # 拒绝路径不 emit
         if tool.use_spinner:
             console.start_spinner()
         result = tool.run(tool_args)
+        _mango_events.emit("tool:after", tool_name, result)  # 事件总线: 工具执行成功 (result 产生后立即)
         tool_status, tool_content = result["success"], result["content"]
         if tool.use_spinner:
             console.end_spinner()
@@ -1626,6 +1593,7 @@ def run_tool(tool_name, tool_args) -> dict:
         return result
     except Exception as err:
         console.end_spinner()
+        _mango_events.emit("tool:error", tool_name, err)  # 事件总线: 工具执行异常
         return {"success": False, "content": f"run tool {tool_name} error: {err}"}
 
 
@@ -1722,10 +1690,9 @@ class SystemPrompt:
 def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_event: Optional[threading.Event] = None):
     """主 agent 循环. cancel_event 由 AcpServer 传入 (ACP session/cancel): 置位后不再发起
     新的 LLM 调用/工具执行 (软取消), 当前阻塞调用返回后立即终止."""
-    ctx.trace_meta.update(session_file=ctx_file_path, goal=user_input, mode="chat")
+    _mango_events.emit("agent:user_input", "chat", user_input, ctx_file_path, len(user_input))
 
     ctx.append_user(user_input)
-    ctx.append_trace("user_input", mode="chat", goal=user_input, length=len(user_input), session_file=ctx_file_path)
 
     iteration = 0
     while True:
@@ -1742,13 +1709,12 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_
             output_tokens=response["usage"]["completion_tokens"], context_tokens=ctx.total_tokens(),
             max_context=MANGO_MAX_CONTEXT)
 
-        ctx.append_trace("assistant", round=iteration, finish_reason=response.get("finish_reason", ""),
-                         has_tool_calls=response["has_tool_calls"], tool_calls_count=len(response["tool_calls"]),
-                         has_reasoning=bool(response["reasoning_content"]),
-                         reasoning_len=len(response["reasoning_content"]),
-                         content_len=len(response["content"]), model=response["model"],
-                         prompt_tokens=(response.get("usage") or {}).get("prompt_tokens"),
-                         completion_tokens=(response.get("usage") or {}).get("completion_tokens"))
+        _mango_events.emit("agent:assistant", iteration, response.get("finish_reason", ""),
+                           response["has_tool_calls"], len(response["tool_calls"]),
+                           bool(response["reasoning_content"]), len(response["reasoning_content"]),
+                           len(response["content"]), response["model"],
+                           (response.get("usage") or {}).get("prompt_tokens"),
+                           (response.get("usage") or {}).get("completion_tokens"))
 
         if response["reasoning_content"]:
             console.thinking(response["reasoning_content"])
@@ -1764,11 +1730,8 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_
                 if cancel_event is not None and cancel_event.is_set():
                     break  # ACP: 已取消, 不再执行后续工具调用
                 tool_name, tool_args = tool["name"], tool["arguments"]
-                ctx.append_trace("tool_call", name=tool_name, args_preview=str(tool_args)[:150])
-                result = run_tool(tool_name, tool_args)
+                result = run_tool(tool_name, tool_args)  # tool:before/after 事件由 run_tool 触发
                 ctx.append_tool(tool["id"], tool_name, result["content"])
-                ctx.append_trace("tool_result", name=tool_name, success=result["success"],
-                                 content_size=len(result["content"]))
                 if tool_name == "attempt_completion":
                     completed = True
                     break  # 遇到完成工具就退出当前轮工具调用
@@ -1779,9 +1742,7 @@ def agent_loop(ctx: ContextManager, ctx_file_path: str, user_input: str, cancel_
         if iteration >= MANGO_MAX_ITER:
             break
     ctx.save(ctx_file_path)
-    if MANGO_TRACE and ctx.trace_list:  # ── trace: close ──
-        ctx.append_trace("end", total_rounds=iteration)
-        ctx.save_trace()
+    _mango_events.emit("agent:end", iteration)  # 会话级事件: trace 等扩展据此落盘
 
 
 def _parse_args(args=None):
@@ -1821,14 +1782,17 @@ def main():
     args = _parse_args()
     global MANGO_YOLO
     MANGO_YOLO = args.yolo or MANGO_YOLO
+    if MANGO_PRESET:
+        if load_preset(MANGO_PRESET) is None:
+            console.warning(f"preset {MANGO_PRESET!r} not found in {MANGO_PRESET_DIR}/")
     if args.doctor:
         sys.exit(doctor())
     if args.acp:
         acp_entry = extension_registry.entry_points.get("acp")  # 扩展优先 (entry_points 契约通道)
         if acp_entry is not None:
             sys.exit(acp_entry())
-        console.error(f"ACP server not installed: copy examples/extensions/acp.py to {extensions_dir} "
-                      f"(or point MANGO_EXTENSIONS_DIR at the repo examples/extensions/ dir)")
+        target = extensions_dir or "~/.mangocli/presets/<preset>/extensions/ (set MANGO_PRESET)"
+        console.error(f"ACP server not installed: copy examples/extensions/acp.py to {target}")
         sys.exit(1)
 
     global provider
@@ -1843,7 +1807,8 @@ def main():
 
     mode = f"smart-routing[{provider.total_providers}]" if MANGO_ROUTING == "on" else provider.model
     yolo_tag = f" | {BOLD}YOLO{RESET}{DIM}" if MANGO_YOLO else ""
-    print(f"{BOLD}Mango Cli v{__version__}{RESET} | {DIM}{mode}{yolo_tag} | {project_root}{RESET}\n")
+    preset_tag = f" | {DIM}{MANGO_PRESET}[{len(TOOLS)} tool]{RESET}" if MANGO_PRESET else ""
+    print(f"{BOLD}Mango Cli v{__version__}{RESET} | {DIM}{mode}{yolo_tag} | {project_root}{RESET}{preset_tag}\n")
 
     session_name = _current_session_name()  # 恢复上次会话; 无记录回退默认 "session" (零迁移)
     ctx_file_path = os.path.join(session_dir, session_name + ".json")

@@ -2,7 +2,6 @@
 
 Covers:
   * ViewImageTool.run for various inputs (URL, local file, errors)
-  * ReadTool auto-routing of image files
   * ContextManager.append_tool with multimodal (dict) content
   * run_tool terminal display for image content
 """
@@ -24,9 +23,14 @@ os.environ.setdefault("MANGO_KEY", "test-key-not-used")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import mangopi_cli as m  # noqa: E402
-from mangopi_cli import (  # noqa: E402
-    ViewImageTool, ReadTool, ContextManager, console, TOOLS,
-)
+
+# v0.1.49: view_image 插件化, 从扩展文件加载 (与 test_clipboard 同模式)
+_vmod = m.ExtensionRegistry.load_file(os.path.join("examples", "extensions", "view_image.py"))
+ViewImageTool = _vmod.ViewImageTool  # noqa: E402
+ReadTool = m.ReadTool  # noqa: E402
+ContextManager = m.ContextManager  # noqa: E402
+console = m.console  # noqa: E402
+TOOLS = m.TOOLS  # noqa: E402
 
 
 # 1x1 transparent PNG (67 bytes, valid PNG)
@@ -209,73 +213,12 @@ class TestViewImageTool(unittest.TestCase):
         self.assertIn("path", params["required"])
 
     def test_registered_in_tools_dict(self):
-        self.assertIn("view_image", TOOLS)
-        self.assertIsInstance(TOOLS["view_image"], ViewImageTool)
-
-
-class TestReadToolImageAutoRoute(unittest.TestCase):
-    """The existing `read` tool should auto-route image files to vision
-    when called WITHOUT offset/limit args (since those don't make sense
-    for binary content)."""
-
-    def setUp(self):
-        self.tmpdir = os.path.join(os.getcwd(), ".tmp_test_read_route")
-        os.makedirs(self.tmpdir, exist_ok=True)
-        self._orig_validate = m._validate_file_path
-        m._validate_file_path = lambda p: None
-
-    def tearDown(self):
-        m._validate_file_path = self._orig_validate
-        for f in os.listdir(self.tmpdir):
-            try:
-                os.remove(os.path.join(self.tmpdir, f))
-            except OSError:
-                pass
+        # v0.1.49: 插件化 — 扩展加载合并后进入 TOOLS (此处模拟合并语义)
+        m.TOOLS["view_image"] = ViewImageTool()
         try:
-            os.rmdir(self.tmpdir)
-        except OSError:
-            pass
-
-    def test_read_png_routes_to_view_image(self):
-        path = make_tmp_png(os.path.join(self.tmpdir, "shot.png"))
-        result = ReadTool().run({"path": path})
-        self.assertTrue(result["success"])
-        # The result content should be an image dict, not line-numbered text
-        self.assertIsInstance(result["content"], dict)
-        self.assertEqual(result["content"]["type"], "image")
-        self.assertTrue(result["content"]["image_url"].startswith("data:image/png;base64,"))
-
-    def test_read_text_file_unchanged(self):
-        path = os.path.join(self.tmpdir, "hello.txt")
-        with open(path, "w") as f:
-            f.write("hello\nworld\n")
-        result = ReadTool().run({"path": path})
-        self.assertTrue(result["success"])
-        self.assertIsInstance(result["content"], str)
-        self.assertIn("hello", result["content"])
-        self.assertIn("world", result["content"])
-
-    def test_read_with_offset_does_not_auto_route(self):
-        # When user explicitly passes offset/limit on an image file, the
-        # tool skips auto-routing to vision. The intent is "I want a
-        # specific slice of this file as text" — which for a PNG is
-        # nonsensical but is the caller's choice, not ours to override.
-        # We verify: the result is NOT an image dict.
-        path = make_tmp_png(os.path.join(self.tmpdir, "shot.png"))
-        # Read the same file as text — expect either a successful str
-        # read or a failure, but in EITHER case the result content
-        # should not be an image dict (which would mean auto-routing
-        # happened despite offset being given).
-        try:
-            result = ReadTool().run({"path": path, "offset": 0})
-            # If it didn't crash, content should be a plain string,
-            # not a multimodal dict.
-            self.assertNotIsInstance(result.get("content"), dict)
-        except (UnicodeDecodeError, ValueError):
-            # Reading binary as text raises UnicodeDecodeError — this
-            # also proves we did NOT auto-route (auto-routing would
-            # have returned a clean image dict).
-            pass
+            self.assertIsInstance(m.TOOLS["view_image"], ViewImageTool)
+        finally:
+            del m.TOOLS["view_image"]
 
 
 class TestContextManagerAppendTool(unittest.TestCase):
@@ -340,9 +283,12 @@ class TestRunToolDisplayForImage(unittest.TestCase):
         os.makedirs(self.tmpdir, exist_ok=True)
         self._orig_validate = m._validate_file_path
         m._validate_file_path = lambda p: None
+        # v0.1.49: 插件化 — 模拟扩展加载合并 (run_tool 需要 view_image 在 TOOLS)
+        m.TOOLS["view_image"] = ViewImageTool()
 
     def tearDown(self):
         m._validate_file_path = self._orig_validate
+        m.TOOLS.pop("view_image", None)
         for f in os.listdir(self.tmpdir):
             try:
                 os.remove(os.path.join(self.tmpdir, f))
@@ -401,8 +347,8 @@ class TestToolSchemaIncludesViewImage(unittest.TestCase):
     """The OpenAI-style tool schema sent to the model must include view_image."""
 
     def setUp(self):
-        # 隔离用户扩展 (MANGO_EXTENSIONS_DIR / ~/.mangocli/extensions):
-        # schema 计数断言只针对 10 个内置工具, 与用户已装扩展无关
+        # 隔离用户扩展 (~/.mangocli/extensions):
+        # schema 计数断言只针对 8 个内置工具, 与用户已装扩展无关
         self.orig_dir = m.extensions_dir
         self.orig_tools = dict(m.TOOLS)
         self.orig_reg_tools = list(m.extension_registry.tools)
@@ -420,13 +366,18 @@ class TestToolSchemaIncludesViewImage(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_view_image_in_tool_schema(self):
-        schema = m.tool_schema()
-        names = [s["function"]["name"] for s in schema]
-        self.assertIn("view_image", names)
+        # v0.1.49: 插件化 — 扩展合并进 TOOLS 后出现在 tool_schema (模拟合并语义)
+        m.TOOLS["view_image"] = ViewImageTool()
+        try:
+            schema = m.tool_schema()
+            names = [s["function"]["name"] for s in schema]
+            self.assertIn("view_image", names)
+        finally:
+            m.TOOLS.pop("view_image", None)
 
     def test_schema_count(self):
-        # 10 built-in tools
-        self.assertEqual(len(m.tool_schema()), 10)
+        # 8 built-in tools (web_search/view_image 已插件化)
+        self.assertEqual(len(m.tool_schema()), 8)
 
 
 if __name__ == "__main__":

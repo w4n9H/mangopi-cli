@@ -1,8 +1,7 @@
 """Shipped extension — ACP (Agent Client Protocol) v1 agent server over stdio.
 
 v0.1.48 从核心移出. 按需启用:
-  * 复制/软链本文件到 ~/.mangocli/extensions/, 或
-  * MANGO_EXTENSIONS_DIR=examples/extensions
+  * 复制/软链本文件到 preset 扩展目录: ~/.mangocli/presets/<name>/extensions/ (需设 MANGO_PRESET=<name>)
 启用后 `mangopi-cli --acp` 分派到本扩展 (entry_points["acp"]); 未安装时报错提示.
 
 契约: 扩展文件顶层只允许 import, 禁止访问 mangopi_cli 属性 (导入期半初始化);

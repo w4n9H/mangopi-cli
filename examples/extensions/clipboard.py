@@ -1,8 +1,7 @@
 """Shipped extension — clipboard: 系统剪贴板读写.
 
 按需启用:
-  * 复制/软链本文件到 ~/.mangocli/extensions/, 或
-  * MANGO_EXTENSIONS_DIR=examples/extensions
+  * 复制/软链本文件到 preset 扩展目录: ~/.mangocli/presets/<name>/extensions/ (需设 MANGO_PRESET=<name>)
 
 平台: macOS (pbpaste/pbcopy), Linux (xclip); 其他平台返回明确错误.
 安全: read 只读无需确认; write 写入剪贴板, 经核心确认机制 (confirm) 需用户同意.

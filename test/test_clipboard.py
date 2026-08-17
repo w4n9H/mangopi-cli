@@ -38,7 +38,7 @@ def _proc(stdout="", rc=0):
 
 class ClipboardTestBase(unittest.TestCase):
     """隔离加载随仓库分发的扩展 (examples/extensions), 用完恢复:
-    测试不依赖环境变量, CI (无 MANGO_EXTENSIONS_DIR) 下同样自足."""
+    测试不依赖环境变量, CI 下同样自足."""
 
     def setUp(self):
         self._orig = (m.extensions_dir, dict(m.TOOLS), list(m.extension_registry.tools))

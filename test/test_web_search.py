@@ -27,7 +27,12 @@ os.environ.setdefault("MANGO_KEY", "test-key-not-used")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import mangopi_cli as m  # noqa: E402
-from mangopi_cli import WebSearchTool, TOOLS  # noqa: E402
+
+
+# v0.1.49: web_search 插件化, 从扩展文件加载 (与 test_clipboard 同模式)
+_EXT = os.path.join("examples", "extensions", "web_search.py")
+_wmod = m.ExtensionRegistry.load_file(_EXT)
+WebSearchTool = _wmod.WebSearchTool  # noqa: E402
 
 
 # ── Shared base: each test gets a controllable API key + mocked API ──────────
@@ -35,7 +40,8 @@ from mangopi_cli import WebSearchTool, TOOLS  # noqa: E402
 
 class _WebSearchBase(unittest.TestCase):
     """Base class: patches MANGO_SEARCH_API_KEY and replaces _bocha_search_api
-    with a Mock so each test can stage return_value / side_effect freely.
+    (on the extension module) with a Mock so each test can stage return_value /
+    side_effect freely.
 
     setUp stores the original key and function reference, then swaps them.
     tearDown restores both, so tests are order-independent and don't leak
@@ -48,16 +54,16 @@ class _WebSearchBase(unittest.TestCase):
         # attribute (none exists).
         self._orig_env = os.environ.get("MANGO_SEARCH_API_KEY")
         os.environ["MANGO_SEARCH_API_KEY"] = "test-bocha-key"
-        self._orig_api = m._bocha_search_api
+        self._orig_api = _wmod._bocha_search_api
         self.api_mock = mock.Mock()
-        m._bocha_search_api = self.api_mock
+        _wmod._bocha_search_api = self.api_mock
 
     def tearDown(self):
         if self._orig_env is None:
             os.environ.pop("MANGO_SEARCH_API_KEY", None)
         else:
             os.environ["MANGO_SEARCH_API_KEY"] = self._orig_env
-        m._bocha_search_api = self._orig_api
+        _wmod._bocha_search_api = self._orig_api
 
     def _run(self, **kwargs):
         return WebSearchTool().run(kwargs)
@@ -369,8 +375,12 @@ class TestSchemaAndRegistration(unittest.TestCase):
         self.assertEqual(params["properties"]["freshness"]["type"], "string")
 
     def test_registered_in_tools_dict(self):
-        self.assertIn("web_search", TOOLS)
-        self.assertIsInstance(TOOLS["web_search"], WebSearchTool)
+        # v0.1.49: 插件化 — 扩展加载合并后进入 TOOLS (此处模拟合并语义)
+        m.TOOLS["web_search"] = WebSearchTool()
+        try:
+            self.assertIsInstance(m.TOOLS["web_search"], WebSearchTool)
+        finally:
+            del m.TOOLS["web_search"]
 
     def test_description_mentions_bocha_and_env_var(self):
         desc = WebSearchTool().description
@@ -378,8 +388,13 @@ class TestSchemaAndRegistration(unittest.TestCase):
         self.assertIn("MANGO_SEARCH_API_KEY", desc)
 
     def test_in_tool_schema_list(self):
-        names = [s["function"]["name"] for s in m.tool_schema()]
-        self.assertIn("web_search", names)
+        # v0.1.49: 插件化 — 扩展合并进 TOOLS 后出现在 tool_schema (此处模拟合并语义)
+        m.TOOLS["web_search"] = WebSearchTool()
+        try:
+            names = [s["function"]["name"] for s in m.tool_schema()]
+            self.assertIn("web_search", names)
+        finally:
+            del m.TOOLS["web_search"]
 
 
 if __name__ == "__main__":

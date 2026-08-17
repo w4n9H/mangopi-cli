@@ -1,5 +1,5 @@
 """Tests for the extension mechanism — auto-discovered extensions in
-~/.mangocli/extensions/*.py (or MANGO_EXTENSIONS_DIR).
+~/.mangocli/presets/<preset>/extensions/*.py (MANGO_PRESET-selected).
 
 Three-channel contract (all optional per file):
   * `tools`           — list of ToolBase instances; merged into TOOLS
@@ -41,6 +41,56 @@ tools = [HelloTool()]
 
 BROKEN_EXT = "this is not valid python {{{"
 
+COMBO_EXT = '''
+from mangopi_cli import ToolBase
+
+class ComboTool(ToolBase):
+    name = "combo"
+    description = "combo tool"
+    params = {}
+
+    def run(self, args):
+        return self.ok("combo v1")
+
+tools = [ComboTool()]
+prompt_sections = [("combo_section", "combo content")]
+entry_points = {"combo_entry": lambda: 42}
+'''
+
+DUP_TOOL_A = '''
+from mangopi_cli import ToolBase
+
+class SharedA(ToolBase):
+    name = "shared"
+    description = "shared a"
+    params = {}
+
+    def run(self, args):
+        return self.ok("a")
+
+tools = [SharedA()]
+'''
+
+DUP_TOOL_B = '''
+from mangopi_cli import ToolBase
+
+class SharedB(ToolBase):
+    name = "shared"
+    description = "shared b"
+    params = {}
+
+    def run(self, args):
+        return self.ok("b")
+
+tools = [SharedB()]
+'''
+
+DUP_ENTRY_A = 'entry_points = {"acp": lambda: 1}\n'
+DUP_ENTRY_B = 'entry_points = {"acp": lambda: 2}\n'
+
+DUP_SEC_A = 'prompt_sections = [("dup", "from a")]\n'
+DUP_SEC_B = 'prompt_sections = [("dup", "from b")]\n'
+
 
 class TestExtensions(unittest.TestCase):
     def setUp(self):
@@ -48,7 +98,8 @@ class TestExtensions(unittest.TestCase):
         self.orig_tools = dict(m.TOOLS)  # 快照: tearDown 恢复, 防污染其他测试
         self.orig_reg = (list(m.extension_registry.tools),
                          list(m.extension_registry.prompt_sections),
-                         dict(m.extension_registry.entry_points))
+                         dict(m.extension_registry.entry_points),
+                         {k: list(v) for k, v in m.extension_registry.get_per_source().items()})
         self.tmp = tempfile.mkdtemp()
         m.extensions_dir = os.path.join(self.tmp, "ext")
 
@@ -58,6 +109,9 @@ class TestExtensions(unittest.TestCase):
         m.extension_registry.tools = list(self.orig_reg[0])
         m.extension_registry.prompt_sections = list(self.orig_reg[1])
         m.extension_registry.entry_points = dict(self.orig_reg[2])
+        src = m.extension_registry.get_per_source()
+        src.clear()
+        src.update({k: list(v) for k, v in self.orig_reg[3].items()})
         m.extensions_dir = self.orig_dir
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -205,6 +259,79 @@ entry_points = {"acp": acp_main, "web": web_main}
         self.assertEqual(m.extension_registry.prompt_sections, [])
         self.assertEqual(m.extension_registry.entry_points, {})
 
+    # --- PR1: 可逆卸载 / 单文件重载 / MANGO_EXTENSIONS_OFF ---
+
+    def test_unload_removes_all_channels_and_tools(self):
+        self._write_ext("combo.py", COMBO_EXT)
+        self._merge()
+        self.assertIn("combo", m.TOOLS)
+        n = m.extension_registry.unload_source("combo.py")
+        self.assertEqual(n, 3)  # tool + prompt_section + entry_point
+        self.assertEqual(m.extension_registry.tools, [])
+        self.assertEqual(m.extension_registry.prompt_sections, [])
+        self.assertEqual(m.extension_registry.entry_points, {})
+        self.assertNotIn("combo", m.TOOLS)          # TOOLS 同步清理
+        with self.assertRaises(KeyError):           # run_tool 对未知工具报错而非静默
+            m.run_tool("combo", {})
+
+    def test_unload_keeps_override_tool(self):
+        # 同名覆盖: unload 早者不误删后来者 (按实例 is 比对)
+        self._write_ext("dup_a.py", DUP_TOOL_A)
+        self._write_ext("dup_b.py", DUP_TOOL_B)
+        self._merge()
+        self.assertEqual(len(m.extension_registry.tools), 2)
+        m.extension_registry.unload_source("dup_a.py")
+        self.assertEqual([t.name for t in m.extension_registry.tools], ["shared"])
+        self.assertEqual(m.TOOLS["shared"].run({}), {"success": True, "content": "b"})
+
+    def test_unload_entry_point_first_winner_semantics(self):
+        self._write_ext("entry_a.py", DUP_ENTRY_A)
+        self._write_ext("entry_b.py", DUP_ENTRY_B)
+        m.extension_registry.load()
+        self.assertEqual(m.extension_registry.entry_points["acp"](), 1)  # 首个生效
+        m.extension_registry.unload_source("entry_a.py")
+        self.assertNotIn("acp", m.extension_registry.entry_points)  # 注册者卸载即删
+        self.assertEqual(m.extension_registry.unload_source("entry_b.py"), 0)  # 未注册者无效果
+
+    def test_unload_prompt_section_exact_match(self):
+        self._write_ext("sec_a.py", DUP_SEC_A)
+        self._write_ext("sec_b.py", DUP_SEC_B)
+        m.extension_registry.load()
+        self.assertEqual(len(m.extension_registry.prompt_sections), 2)
+        m.extension_registry.unload_source("sec_a.py")
+        self.assertEqual(m.extension_registry.prompt_sections, [("dup", "from b")])  # 精确匹配不误删
+
+    def test_unload_unknown_source_returns_zero(self):
+        self.assertEqual(m.extension_registry.unload_source("nope.py"), 0)
+
+    def test_unload_then_load_restores(self):
+        # 重载语义: unload 后 load() 全量重扫恢复
+        self._write_ext("hello.py", HELLO_EXT)
+        self._merge()
+        m.extension_registry.unload_source("hello.py")
+        self.assertEqual(m.extension_registry.tools, [])
+        self._merge()
+        self.assertEqual([t.name for t in m.extension_registry.tools], ["hello"])
+
+    def test_reload_source_applies_edits_keeps_others(self):
+        self._write_ext("hello.py", HELLO_EXT)
+        self._write_ext("combo.py", COMBO_EXT)
+        self._merge()
+        self._write_ext("combo.py", COMBO_EXT.replace("combo v1", "combo v2"))
+        n = m.extension_registry.reload_source("combo.py")
+        self.assertEqual(n, 3)
+        self.assertEqual(m.TOOLS["combo"].run({}), {"success": True, "content": "combo v2"})
+        self.assertIn("hello", m.TOOLS)  # 其他 source 不受影响
+
+    def test_reload_source_missing_file_returns_zero(self):
+        self.assertEqual(m.extension_registry.reload_source("nope.py"), 0)
+
+    def test_off_env_skips_file(self):
+        self._write_ext("hello.py", HELLO_EXT)
+        with mock.patch.dict(os.environ, {"MANGO_EXTENSIONS_OFF": "hello.py, other.py"}):
+            tools = m.extension_registry.load().tools
+        self.assertEqual(tools, [])  # 静态禁用: 不加载不记录
+
 
 class TestImportTimeLoading(unittest.TestCase):
     """导入期集成: 真实子进程执行 import mangopi_cli, 验证扩展在模块
@@ -214,11 +341,15 @@ class TestImportTimeLoading(unittest.TestCase):
 
     def _run_import(self, ext_content, assert_code):
         with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, "ext"), exist_ok=True)
-            with open(os.path.join(tmp, "ext", "hello.py"), "w", encoding="utf-8") as f:
+            # HOME 重定向 + MANGO_PRESET=test: 扩展目录 = {tmp}/.mangocli/presets/test/extensions
+            # (隔离于真实 home; 无 MANGO_PRESET 时纯内置无扩展)
+            ext_dir = os.path.join(tmp, ".mangocli", "presets", "test", "extensions")
+            os.makedirs(ext_dir, exist_ok=True)
+            with open(os.path.join(ext_dir, "hello.py"), "w", encoding="utf-8") as f:
                 f.write(ext_content)
             env = dict(os.environ)
-            env["MANGO_EXTENSIONS_DIR"] = os.path.join(tmp, "ext")
+            env["HOME"] = tmp
+            env["MANGO_PRESET"] = "test"
             env["MANGO_KEY"] = "test-key-not-used"
             code = ("import mangopi_cli as m; " + assert_code)
             proc = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
@@ -237,6 +368,18 @@ def acp_main():
 
 entry_points = {"acp": acp_main}
 ''', "assert m.extension_registry.entry_points['acp']() == 0")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_on_registration_at_import_time(self):
+        # 扩展顶层 from mangopi_cli import on 并注册: _EventBus 定义早于扫描点 (回归: 曾计划置于 run_tool 上方导致 ImportError)
+        proc = self._run_import('''
+from mangopi_cli import on
+
+def _handler(name, args):
+    pass
+
+on("tool:before", _handler)
+''', "assert len(m._mango_events._listeners.get('tool:before', [])) == 1")
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
 

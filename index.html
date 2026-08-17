@@ -744,7 +744,7 @@
 <header>
     <div class="wrap header-row">
         <div>
-            <span class="brand">MANGOPI CLI<span class="brand-version">v0.1.48</span></span>
+            <span class="brand">MANGOPI CLI<span class="brand-version">v0.1.49</span></span>
         </div>
         <nav>
             <a href="#features"><span class="lang-en">features</span><span class="lang-zh">特性</span></a>
@@ -881,14 +881,14 @@
                 <div class="feat-tag">— 04</div>
                 <div>
                     <h3><span class="lang-en">Multimodal</span><span class="lang-zh">多模态</span></h3>
-                    <p><span class="lang-en">Drop a screenshot into the conversation. <code>read</code> auto-routes png/jpg/gif/webp to the model's vision.</span><span class="lang-zh">将截图拖入对话。<code>read</code> 自动将 png/jpg/gif/webp 路由至模型视觉。</span></p>
+                    <p><span class="lang-en"><code>view_image</code> extension loads local screenshots / UI mockups into the model's vision context.</span><span class="lang-zh"><code>view_image</code> 扩展将本地截图/界面稿载入模型视觉上下文。</span></p>
                 </div>
             </div>
             <div class="feat">
                 <div class="feat-tag">— 05</div>
                 <div>
-                    <h3><span class="lang-en">Web Search</span><span class="lang-zh">Web 搜索</span></h3>
-                    <p><span class="lang-en"><code>web_search</code> tool queries the live web via Bocha AI Search when the model needs fresh docs.</span><span class="lang-zh"><code>web_search</code> 工具通过 Bocha AI Search 查询实时网络。</span></p>
+                    <h3><span class="lang-en">Preset Bundles</span><span class="lang-zh">预设工作流</span></h3>
+                    <p><span class="lang-en">Per-preset directories: <code>conf.py</code> (tool whitelist / unloads) + <code>extensions/</code>. Activate with <code>MANGO_PRESET</code>; without it: pure built-in tools.</span><span class="lang-zh">按预设目录组织：<code>conf.py</code>（工具白名单/卸载）+ <code>extensions/</code>。用 <code>MANGO_PRESET</code> 激活；不设置则为纯内置工具。</span></p>
                 </div>
             </div>
             <div class="feat">
@@ -916,7 +916,7 @@
                 <div class="feat-tag">— 09</div>
                 <div>
                     <h3><span class="lang-en">Extension System</span><span class="lang-zh">扩展系统</span></h3>
-                    <p><span class="lang-en">Custom tools via auto-discovered Python files in ~/.mangocli/extensions/. Join the LLM tool registry on startup.</span><span class="lang-zh">将 Python 文件放入 ~/.mangocli/extensions/ 自动注册自定义工具，启动即进入 LLM 工具列表。</span></p>
+                    <p><span class="lang-en">Extension files in ~/.mangocli/presets/&lt;name&gt;/extensions/ — tools, prompt sections and entry points auto-register at startup. Event bus + reversible unload.</span><span class="lang-zh">将扩展放入 ~/.mangocli/presets/&lt;name&gt;/extensions/ — 工具/提示词段/入口启动自动注册。支持事件总线与可逆卸载。</span></p>
                 </div>
             </div>
             <div class="feat">
@@ -1036,20 +1036,34 @@
     <div class="wrap">
         <div class="sec-head">
             <div class="sec-num">— 06</div>
-            <h2 class="sec-title"><span class="lang-en"><em>10</em> built-in tools, <em>∞</em> extendable.</span><span class="lang-zh"><em>10</em> 个内置工具，<em>∞</em> 无限扩展</span></h2>
+            <h2 class="sec-title"><span class="lang-en"><em>8</em> built-in tools, <em>∞</em> extendable.</span><span class="lang-zh"><em>8</em> 个内置工具，<em>∞</em> 无限扩展</span></h2>
         </div>
         <div class="tools">
-            <div class="tool"><code>read</code><p><span class="lang-en">File or image (png/jpg/gif/webp auto-routes to vision)</span><span class="lang-zh">文件或图片（png/jpg/gif/webp 自动路由至视觉）</span></p></div>
+            <div class="tool"><code>read</code><p><span class="lang-en">Text files only (view_image for images)</span><span class="lang-zh">仅文本文件（图片用 view_image）</span></p></div>
             <div class="tool"><code>write</code><p><span class="lang-en">Write or overwrite</span><span class="lang-zh">写入或覆写</span></p></div>
             <div class="tool"><code>edit</code><p><span class="lang-en">Exact string replace + diff</span><span class="lang-zh">精确字符串替换 + diff</span></p></div>
             <div class="tool"><code>search</code><p><span class="lang-en">Glob patterns, sorted by mtime</span><span class="lang-zh">Glob 模式，按修改时间排序</span></p></div>
             <div class="tool"><code>grep</code><p><span class="lang-en">Recursive regex content search</span><span class="lang-zh">递归正则内容搜索</span></p></div>
             <div class="tool"><code>bash</code><p><span class="lang-en">Shell exec (60s timeout)</span><span class="lang-zh">Shell 执行（60s 超时）</span></p></div>
-            <div class="tool"><code>view_image</code><p><span class="lang-en">Load local image into vision context</span><span class="lang-zh">加载本地图片至视觉上下文</span></p></div>
-            <div class="tool"><code>web_search</code><p><span class="lang-en">Bocha AI Search live web</span><span class="lang-zh">Bocha AI 实时搜索</span></p></div>
             <div class="tool"><code>use_skill</code><p><span class="lang-en">Load installed SKILL.md</span><span class="lang-zh">加载已安装技能</span></p></div>
             <div class="tool"><code>attempt_completion</code><p><span class="lang-en">Task completion signal</span><span class="lang-zh">任务完成信号</span></p></div>
-            <div class="tool"><code>+ yours</code><p><span class="lang-en">Drop a .py into ~/.mangocli/extensions/ — auto-registered at startup</span><span class="lang-zh">放入 .py 至 ~/.mangocli/extensions/ 启动自动注册</span></p></div>
+            <div class="tool"><code>+ yours</code><p><span class="lang-en">Drop a .py into ~/.mangocli/presets/&lt;name&gt;/extensions/ — auto-registered at startup</span><span class="lang-zh">放入 .py 至 ~/.mangocli/presets/&lt;name&gt;/extensions/ 启动自动注册</span></p></div>
+        </div>
+
+        <div class="sec-head" style="margin-top:2.5rem">
+            <div class="sec-num">— 06b</div>
+            <h2 class="sec-title"><span class="lang-en">Shipped extensions (<em>9</em>, optional)</span><span class="lang-zh">随仓库分发的扩展（<em>9</em> 个，可选）</span></h2>
+        </div>
+        <div class="tools">
+            <div class="tool"><code>acp</code><p><span class="lang-en">ACP v1 agent server</span><span class="lang-zh">ACP v1 Agent 服务</span></p></div>
+            <div class="tool"><code>web_search</code><p><span class="lang-en">Bocha AI Search live web</span><span class="lang-zh">Bocha AI 实时搜索</span></p></div>
+            <div class="tool"><code>view_image</code><p><span class="lang-en">Local image to vision</span><span class="lang-zh">本地图片至视觉</span></p></div>
+            <div class="tool"><code>clipboard</code><p><span class="lang-en">System clipboard R/W</span><span class="lang-zh">系统剪贴板读写</span></p></div>
+            <div class="tool"><code>git_status</code><p><span class="lang-en">Read-only git summaries</span><span class="lang-zh">只读 git 摘要</span></p></div>
+            <div class="tool"><code>audit</code><p><span class="lang-en">Tool-call audit JSONL</span><span class="lang-zh">工具调用审计</span></p></div>
+            <div class="tool"><code>debug</code><p><span class="lang-en">Per-call debug prints</span><span class="lang-zh">逐调用调试打印</span></p></div>
+            <div class="tool"><code>ratelimit</code><p><span class="lang-en">Rate warning (warn only)</span><span class="lang-zh">频率告警（仅告警）</span></p></div>
+            <div class="tool"><code>trace</code><p><span class="lang-en">Session event stream JSON</span><span class="lang-zh">会话事件流落盘</span></p></div>
         </div>
 
         <div class="commands">

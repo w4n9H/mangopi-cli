@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.49] - 2026-08-17
+
+### Changed
+- **Per-preset extension model** — single entry `MANGO_PRESET=<name>`: `~/.mangocli/presets/<name>/conf.py` (total config: `keep_tools` whitelist / `unload_sources`) + `extensions/` (tools / prompt_sections / entry_points / event hooks); without it the CLI runs pure 8 built-in tools; banner shows the active preset and tool count (e.g. `minimal[8 tool]`)
+- **Reversible registration & event bus** — `unload_source()` / `reload_source()` per-file rollback (same-name conflicts never remove later registrations); `on()`/`emit()` bus with `tool:before|after|error` plus session-level `agent:user_input|assistant|compact|end`
+- **Core slimmed to 8 tools** — `web_search` / `view_image` moved to extensions (lazy-import contract); `read` no longer auto-routes images (1910 lines)
+
+### Removed
+- `MANGO_TRACE` (replaced by the `trace.py` extension), `MANGO_EXTENSIONS_DIR` and `MANGO_PROFILE` (unified under `MANGO_PRESET`)
+
+### Added
+- Preset `keep_tools` whitelist with reversible `__preset__` slot; 9 shipped extensions (`acp` / `web_search` / `view_image` / `clipboard` / `git_status` / `audit` / `debug` / `ratelimit` / `trace`); 431 tests
+
+---
+
 ## [0.1.48] - 2026-08-13
 
 ### Changed
