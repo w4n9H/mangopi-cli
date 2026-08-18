@@ -26,7 +26,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.49"
+__version__ = "0.1.50"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
