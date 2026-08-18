@@ -941,10 +941,11 @@ TOOLS = {
                         AttemptCompletionTool()] + extension_registry.tools}
 
 
-def load_preset(name: str) -> Optional[int]:
-    """加载 preset 总配置 (~/.mangocli/presets/<name>/conf.py): unload_sources 逐个可逆卸载扩展 (PR 1),
-    keep_tools 白名单过滤 TOOLS (逆操作登记 _per_source["__preset__"], unload_source("__preset__") 可恢复),
-    完成后触发 preset:applied 事件 (PR 2). 返回卸载的 source 数; None = preset 不存在或未导出合法 preset dict."""
+def load_preset(name: str) -> Optional[dict]:
+    """加载 preset 配置并应用副作用 (~/.mangocli/presets/<name>/conf.py): unload_sources 逐个可逆卸载
+    扩展 (PR 1), keep_tools 白名单过滤 TOOLS (逆操作登记 _per_source["__preset__"],
+    unload_source("__preset__") 可恢复), 完成后触发 preset:applied 事件 (PR 2).
+    返回 preset dict (SystemPrompt 据此应用 prompt_overrides); None = preset 不存在或未导出合法 preset dict."""
     path = os.path.join(MANGO_PRESET_DIR, name, "conf.py")
     if not os.path.isfile(path):
         return None
@@ -952,10 +953,8 @@ def load_preset(name: str) -> Optional[int]:
     preset = getattr(mod, "preset", None)
     if not isinstance(preset, dict):
         return None
-    n = 0
     for source in preset.get("unload_sources", []) or []:
-        if extension_registry.unload_source(source):
-            n += 1  # 按 source 计数 (文档语义: 卸掉的 source 数)
+        extension_registry.unload_source(source)
     keep = preset.get("keep_tools")
     if keep:
         keep_set = set(keep)
@@ -969,7 +968,7 @@ def load_preset(name: str) -> Optional[int]:
 
         extension_registry.get_per_source().setdefault("__preset__", []).append(inverse)
     _mango_events.emit("preset:applied", name, preset)
-    return n
+    return preset
 
 
 def tool_schema():
@@ -1618,6 +1617,17 @@ class SystemPrompt:
                 self.sections = [(n, c if n != name else content) for n, c in self.sections]
             else:
                 self.sections.append((name, content))
+        # preset 级 prompt 覆盖 (v0.1.50 模式系统): base 覆盖 base_intro 段, clear_sections 删除段,
+        # append_sections 追加段. 副作用幂等 (load_preset 已在 main 应用过, 此处仅取配置).
+        preset = load_preset(MANGO_PRESET)
+        overrides = (preset or {}).get("prompt_overrides") or {}
+        if overrides.get("base"):
+            self.sections = [("base_intro", overrides["base"]) if n == "base_intro" else (n, c)
+                             for n, c in self.sections]
+        for section_name in overrides.get("clear_sections", []) or []:
+            self.sections = [(n, c) for n, c in self.sections if n != section_name]
+        for sec in overrides.get("append_sections", []) or []:
+            self.sections.append((sec["name"], sec["content"]))
 
     @staticmethod
     def _build_base_intro() -> str:

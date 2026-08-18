@@ -346,25 +346,54 @@ entry_points = {"hello": hello_serve}
 
 ### Presets (total config)
 
-Each preset `<name>` is a directory `~/.mangocli/presets/<name>/` with an optional `conf.py` (total config applied at startup) and the `extensions/` folder above. Set `MANGO_PRESET=<name>` to activate; **without it the CLI runs pure built-in tools (no extensions)**. The banner shows the active preset and tool count, e.g. `... | minimal[8 tool]`.
+Each preset `<name>` is a directory `~/.mangocli/presets/<name>/` with an optional `conf.py` (total config applied at startup) and the `extensions/` folder above. Set `MANGO_PRESET=<name>` to activate; **without it the CLI runs pure built-in tools (no extensions)**. The banner shows the active preset and tool count, e.g. `... | minimal[2 tool]`.
 
 ```python
 # ~/.mangocli/presets/minimal/conf.py
 preset = {
     "name": "minimal",
-    "description": "Core 8 tools only: no network, no vision, no extensions",
-    "keep_tools": ["read", "write", "edit", "search", "grep", "bash", "use_skill", "attempt_completion"],
+    "description": "Benchmark mode: bash + edit only, one-line system prompt",
+    "keep_tools": ["bash", "edit"],
     # optional: "unload_sources": ["clipboard.py", "git_status.py"],
+    # optional: prompt overrides (v0.1.50 mode system)
+    "prompt_overrides": {
+        "base": "You are a helpful software engineer assistant.",  # replaces the base_intro section
+        "clear_sections": ["safety", "builtin_rules", "tool_guidance",  # removes sections
+                           "skills_guidance", "memory", "environment"],
+        # "append_sections": [{"name": "custom", "content": "..."}],  # appends sections
+    },
 }
 ```
 
 * `keep_tools` — whitelist: `TOOLS` keeps only the listed tools (built-in + extensions unified); the inverse is registered under the `__preset__` slot, `unload_source("__preset__")` restores
 * `unload_sources` — optional: reversibly unload extension registrations (three channels), combinable with `keep_tools`
+* `prompt_overrides` — optional: `base` replaces the `base_intro` section, `clear_sections` removes sections, `append_sections` appends new ones (see Run Modes below)
 * Applying a preset emits the `preset:applied` event (extensions such as `audit.py` can listen)
+
+## Run Modes
+
+Mangopi CLI ships three run-mode presets in `examples/presets/` (copy a directory into `~/.mangocli/presets/` to enable). Modes are a preset-level combination of tool whitelist and system-prompt overrides, modeled after DeepSeek Harness:
+
+| Mode | Tools | System Prompt | Use case |
+|---|---|---|---|
+| `standard` | 8 core tools | Full layered assembly | Daily development (same as no preset) |
+| `minimal` | `bash` + `edit` only | One line | Model benchmark / capability baseline |
+| `codemode` | `run_code` + `attempt_completion` | Full + SDK declarations | Batch operations with fewer round-trips |
+
+```bash
+export MANGO_PRESET=minimal   # or: standard / codemode
+mangopi-cli
+```
+
+* `standard` — the default behavior made explicit: 8 core tools and the complete layered system prompt.
+* `minimal` — strips every peripheral enhancement (safety rules, tool guidance, skills, memory, environment) to purely measure the model's autonomous planning, code editing and terminal capability. Mirrors DeepSeek Harness minimal mode (`bash` + editor only, one-line persona).
+* `codemode` — Programmatic Tool Calling (PTC): `run_code` is the only directly callable file/shell tool; the six tools (`read`/`write`/`edit`/`search`/`grep`/`bash`) are reached from inside the program — the model writes one Python script orchestrating multiple tool calls in a single execution. Intermediate tool results stay out of the conversation — only `print` output flows back, cutting token usage and model round-trips. The code-only instruction and SDK declarations are declared in `examples/presets/codemode/conf.py` via `prompt_overrides.append_sections`.
+
+**Security note**: `run_code` executes in a restricted scope — whitelist builtins (no `__import__`/`open`/`eval`/`exec`/`globals`), only six tool APIs bound (`read`/`write`/`edit`/`search`/`grep`/`bash`), a SIGALRM timeout (30s, main thread only), and output truncation. Tool calls inside the script inherit the core safety checks (path sandbox, dangerous-command detection). This is a reasonable guardrail for model-generated scripts, not a hard sandbox.
 
 ### Shipped extensions
 
-The repo ships 9 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable):
+The repo ships 10 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable):
 
 | File | Function |
 |---|---|
@@ -373,6 +402,7 @@ The repo ships 9 optional extensions in `examples/extensions/` (copy/symlink int
 | `view_image.py` | Local image into vision context |
 | `clipboard.py` | System clipboard read/write (macOS / Linux) |
 | `git_status.py` | Read-only git status/log/diff summaries |
+| `run_code.py` | Code Mode / PTC tool: batch tool orchestration in one execution (used by the `codemode` preset) |
 | `audit.py` | Tool-call audit to `~/.mangocli/tool_audit.jsonl` (event bus) |
 | `debug.py` | Per-call args/results debug prints (event bus) |
 | `ratelimit.py` | Sliding-window rate warning (event bus, warn only) |

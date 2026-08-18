@@ -1,9 +1,8 @@
 """Tests for preset bundles — load_preset() applies a preset dict from
 ~/.mangocli/presets/<name>/conf.py (MANGO_PRESET_DIR): unloads a list of extension
 sources via unload_source (PR 1) and emits preset:applied on the event bus
-(PR 2). Returns the number of unloaded sources, or None when the preset file
-or its `preset` dict is missing (so `MANGO_PRESET` typos warn instead of
-silently no-oping).
+(PR 2). Returns the preset dict, or None when the preset file or its `preset`
+dict is missing (so `MANGO_PRESET` typos warn instead of silently no-oping).
 
 NOTE: the main() integration (MANGO_PRESET env -> load_preset -> warning) is
 covered by the maintainer's own manual test, not here.
@@ -109,8 +108,8 @@ class TestLoadPreset(unittest.TestCase):
         self.assertIn("combo", m.TOOLS)
         events = []
         m.on("preset:applied", lambda name, p: events.append((name, p.get("name"))))
-        n = m.load_preset("minimal")
-        self.assertEqual(n, 1)  # combo.py 卸载, missing.py 不存在返回 0
+        preset = m.load_preset("minimal")
+        self.assertEqual(preset["name"], "minimal")
         self.assertEqual(m.extension_registry.tools, [])
         self.assertEqual(m.extension_registry.prompt_sections, [])
         self.assertEqual(m.extension_registry.entry_points, {})
@@ -119,7 +118,7 @@ class TestLoadPreset(unittest.TestCase):
 
     def test_empty_unload_sources_returns_zero_not_none(self):
         self._write("empty", EMPTY_PRESET)
-        self.assertEqual(m.load_preset("empty"), 0)  # 不误报 "not found"
+        self.assertIsNotNone(m.load_preset("empty"))  # 不误报 "not found"
 
     def test_emit_after_unload(self):
         # 事件在卸载完成后触发 (audit 看到的是 preset 应用后的状态)
@@ -172,8 +171,8 @@ preset = {
     "keep_tools": ["read"],
 }
 ''')
-        n = m.load_preset("combined")
-        self.assertEqual(n, 1)
+        preset = m.load_preset("combined")
+        self.assertEqual(preset["name"], "combined")
         self.assertEqual(m.extension_registry.tools, [])  # 注册通道已清
         self.assertEqual(set(m.TOOLS), {"read"})          # TOOLS 只剩 read
 

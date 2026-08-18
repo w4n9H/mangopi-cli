@@ -115,6 +115,7 @@ def serve() -> None:
 | `trace.py` | 会话级事件流 JSON 落盘（替代核心 MANGO_TRACE）：`~/.mangocli/traces/run_*.json`<br>Session event stream to JSON (replaces core MANGO_TRACE) | 无 none | `on()` 事件订阅 events |
 | `web_search.py` | Bocha AI Search 实时搜索（v0.1.49 从核心移出）<br>Live web search via Bocha AI Search API (moved out of core in v0.1.49) | `MANGO_SEARCH_API_KEY` | `tools` |
 | `view_image.py` | 本地图片载入视觉上下文（v0.1.49 从核心移出；read 不再自动路由）<br>Local image into vision context (moved out of core in v0.1.49; `read` no longer auto-routes) | 无 none | `tools` |
+| `run_code.py` | Code Mode / 程序化工具调用（PTC，v0.1.50）：脚本内编排多步工具调用一次执行；受限作用域 exec + 白名单 builtins + SIGALRM 超时（配合 codemode preset，SDK 段由 conf.py 注入）<br>Code Mode / PTC (v0.1.50): orchestrate multi-step tool calls in one script execution; restricted exec + whitelist builtins + SIGALRM timeout (used by the codemode preset; SDK section injected by its conf.py) | 无 none | `tools` |
 
 ---
 

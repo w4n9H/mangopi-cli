@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.50] - 2026-08-18
+
+### Added
+- **Run modes (mode system)** — shipped presets `standard` / `minimal` / `codemode` in `examples/presets/` (activate with `MANGO_PRESET=<name>`): `standard` = default behavior made explicit (8 core tools, full prompt); `minimal` = `bash` + `edit` only with a one-line persona (DeepSeek Harness benchmark alignment); `codemode` = `run_code` as the only directly callable tool, the six file/shell tools reached via the script-side SDK (plus `attempt_completion`)
+- **`run_code` extension (Code Mode / PTC)** — model writes a Python script orchestrating multiple tool calls in one execution (intermediate results stay out of the conversation, only `print` flows back); restricted `exec` with whitelist builtins (no `__import__`/`open`/`eval`/`exec`/`globals`), six bound tool APIs (`read`/`write`/`edit`/`search`/`grep`/`bash`), `ToolError` for failed calls, SIGALRM timeout (main thread only), output truncation; SDK prompt section declared in the codemode preset conf.py via `prompt_overrides.append_sections`; 460 tests (was 431)
+
+### Changed
+- **SystemPrompt preset overrides** — `conf.py` supports `prompt_overrides` (`base` replaces the `base_intro` section, `clear_sections` removes sections, `append_sections` appends); `load_preset()` now returns the preset dict (was the unloaded-source count, `None` semantics unchanged)
+
+---
+
 ## [0.1.49] - 2026-08-17
 
 ### Changed

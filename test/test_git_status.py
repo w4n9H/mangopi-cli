@@ -36,7 +36,10 @@ class TestGitStatus(unittest.TestCase):
     隔离加载随仓库分发的扩展: 测试不依赖环境变量, CI 下同样自足."""
 
     def setUp(self):
-        self._orig = (m.extensions_dir, dict(m.TOOLS), list(m.extension_registry.tools))
+        self._orig = (m.extensions_dir, dict(m.TOOLS), list(m.extension_registry.tools),
+                      list(m.extension_registry.prompt_sections),
+                      dict(m.extension_registry.entry_points),
+                      {k: list(v) for k, v in m.extension_registry.get_per_source().items()})
         m.extensions_dir = EXT_DIR
         m.extension_registry.load()
         for t in m.extension_registry.tools:
@@ -46,6 +49,11 @@ class TestGitStatus(unittest.TestCase):
         m.TOOLS.clear()
         m.TOOLS.update(self._orig[1])
         m.extension_registry.tools = self._orig[2]
+        m.extension_registry.prompt_sections = list(self._orig[3])
+        m.extension_registry.entry_points = dict(self._orig[4])
+        src = m.extension_registry.get_per_source()
+        src.clear()
+        src.update({k: list(v) for k, v in self._orig[5].items()})
         m.extensions_dir = self._orig[0]
 
     def test_status_reports_branch_and_count(self):
