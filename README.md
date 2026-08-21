@@ -368,7 +368,7 @@ preset = {
 * `keep_tools` — whitelist: `TOOLS` keeps only the listed tools (built-in + extensions unified); the inverse is registered under the `__preset__` slot, `unload_source("__preset__")` restores
 * `unload_sources` — optional: reversibly unload extension registrations (three channels), combinable with `keep_tools`
 * `prompt_overrides` — optional: `base` replaces the `base_intro` section, `clear_sections` removes sections, `append_sections` appends new ones (see Run Modes below)
-* Applying a preset emits the `preset:applied` event (extensions such as `audit.py` can listen)
+* Applying a preset emits the `preset:applied` event (extensions such as `trace.py` can listen)
 
 ## Run Modes
 
@@ -393,20 +393,25 @@ mangopi-cli
 
 ### Shipped extensions
 
-The repo ships 10 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable):
+The repo ships 15 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable; without `MANGO_PRESET`, `~/.mangocli/extensions/`):
 
 | File | Function |
 |---|---|
 | `acp.py` | ACP v1 agent server over stdio (`mangopi-cli --acp` dispatches to `entry_points["acp"]`) |
-| `web_search.py` | Live web search via Bocha AI Search (`MANGO_SEARCH_API_KEY`) |
-| `view_image.py` | Local image into vision context |
+| `ask_user.py` | Structured multi-choice questions to clarify requirements |
 | `clipboard.py` | System clipboard read/write (macOS / Linux) |
-| `git_status.py` | Read-only git status/log/diff summaries |
-| `run_code.py` | Code Mode / PTC tool: batch tool orchestration in one execution (used by the `codemode` preset) |
-| `audit.py` | Tool-call audit to `~/.mangocli/tool_audit.jsonl` (event bus) |
 | `debug.py` | Per-call args/results debug prints (event bus) |
+| `git_status.py` | Read-only git status/log/diff summaries |
+| `memory.py` | Long-term memory: AGENT.md / MANGO.md + per-day journals, auto-injected into the prompt |
+| `multi_edit.py` | Apply N Edit operations in one call with best-effort rollback |
+| `plan_mode.py` | Plan-then-execute state machine (read-only tool subset while active) |
 | `ratelimit.py` | Sliding-window rate warning (event bus, warn only) |
-| `trace.py` | Session event stream to `~/.mangocli/traces/run_*.json` (replaces core MANGO_TRACE) |
+| `run_code.py` | Code Mode / PTC tool: batch tool orchestration in one execution (used by the `codemode` preset) |
+| `task_tracker.py` | In-session task tracking (create/list/update/get/delete), auto-injected into the prompt |
+| `trace.py` | Session event stream to `~/.mangocli/traces/run_*.json` (replaces core MANGO_TRACE; includes tool errors) |
+| `view_image.py` | Local image into vision context |
+| `web_fetch.py` | Fetch a URL's content into context (http/https only) |
+| `web_search.py` | Live web search via Bocha AI Search (`MANGO_SEARCH_API_KEY`) |
 
 ---
 

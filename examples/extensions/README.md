@@ -107,15 +107,20 @@ def serve() -> None:
 | 文件 File | 功能 Function | 依赖 Dependencies | 入口 Entry |
 |---|---|---|---|
 | `acp.py` | ACP (Agent Client Protocol) v1 agent server over stdio；`mangopi-cli --acp` 分派目标<br>ACP v1 stdio JSON-RPC agent endpoint; target of `--acp` | 无 none | `entry_points["acp"]` |
+| `ask_user.py` | 结构化多选提问：1-4 题 × 2-4 选项，澄清需求（YOLO 自动选首项）<br>Structured multi-choice questions to clarify requirements (YOLO auto-picks first) | 无 none | `tools` |
 | `clipboard.py` | 系统剪贴板读写（read 免确认 / write 需确认）<br>System clipboard read/write (read unconfirmed / write confirmed) | macOS pbpaste/pbcopy, Linux xclip | `tools` |
-| `git_status.py` | 只读 git 仓库状态：status/log/diff 结构化摘要<br>Read-only git repo state: structured status/log/diff | git | `tools` |
-| `audit.py` | tool 调用审计：三事件 JSONL 落盘 `~/.mangocli/tool_audit.jsonl`<br>Tool-call audit: three events appended as JSONL | 无 none | `on()` 事件订阅 events |
 | `debug.py` | 调试打印：每次 tool 调用参数/结果到 stderr<br>Debug prints: per-call args/results to stderr | 无 none | `on()` 事件订阅 events |
+| `git_status.py` | 只读 git 仓库状态：status/log/diff 结构化摘要<br>Read-only git repo state: structured status/log/diff | git | `tools` |
+| `memory.py` | 长期记忆：AGENT.md / MANGO.md 精选 + 每日 journal，自动注入提示词（read/write/search）<br>Long-term memory: priority files + per-day journals, auto-injected into the prompt (read/write/search) | 无 none | `tools` + `prompt_sections()` |
+| `multi_edit.py` | 一次调用应用 N 个 edit，失败逆序回滚（best-effort）<br>Apply N edits in one call with best-effort reverse rollback | 复用核心 EditTool | `tools` |
+| `plan_mode.py` | 计划-执行状态机：enter 只留不改代码/不执行命令的工具，submit 需用户批准<br>Plan-then-execute state machine: non-mutating tool subset on enter, user approval on submit | 无 none | `tools` + `prompt_sections()` |
 | `ratelimit.py` | 频率告警：滑动窗口软限流（只告警不拦截，阈值 `MANGO_RATELIMIT_PER_SEC` 默认 5）<br>Rate warning: sliding-window soft limit (warn only, `MANGO_RATELIMIT_PER_SEC` default 5) | 无 none | `on()` 事件订阅 events |
-| `trace.py` | 会话级事件流 JSON 落盘（替代核心 MANGO_TRACE）：`~/.mangocli/traces/run_*.json`<br>Session event stream to JSON (replaces core MANGO_TRACE) | 无 none | `on()` 事件订阅 events |
-| `web_search.py` | Bocha AI Search 实时搜索（v0.1.49 从核心移出）<br>Live web search via Bocha AI Search API (moved out of core in v0.1.49) | `MANGO_SEARCH_API_KEY` | `tools` |
-| `view_image.py` | 本地图片载入视觉上下文（v0.1.49 从核心移出；read 不再自动路由）<br>Local image into vision context (moved out of core in v0.1.49; `read` no longer auto-routes) | 无 none | `tools` |
 | `run_code.py` | Code Mode / 程序化工具调用（PTC，v0.1.50）：脚本内编排多步工具调用一次执行；受限作用域 exec + 白名单 builtins + SIGALRM 超时（配合 codemode preset，SDK 段由 conf.py 注入）<br>Code Mode / PTC (v0.1.50): orchestrate multi-step tool calls in one script execution; restricted exec + whitelist builtins + SIGALRM timeout (used by the codemode preset; SDK section injected by its conf.py) | 无 none | `tools` |
+| `task_tracker.py` | 会话任务跟踪：create/list/update/get/delete，自动注入当前任务列表<br>In-session task tracking: create/list/update/get/delete, current tasks auto-injected | 无 none | `tools` + `prompt_sections()` |
+| `trace.py` | 会话级事件流 JSON 落盘（替代核心 MANGO_TRACE，v0.1.51 起含 tool:error，并入原 audit）：`~/.mangocli/traces/run_*.json`<br>Session event stream to JSON (replaces core MANGO_TRACE; tool:error included since v0.1.51, merged from audit) | 无 none | `on()` 事件订阅 events |
+| `view_image.py` | 本地图片载入视觉上下文（v0.1.49 从核心移出；read 不再自动路由）<br>Local image into vision context (moved out of core in v0.1.49; `read` no longer auto-routes) | 无 none | `tools` |
+| `web_fetch.py` | 抓取 URL 正文进入上下文（仅 http/https，超时 15s，上限 100KB）<br>Fetch a URL's content into context (http/https only, 15s timeout, 100KB cap) | 无 none | `tools` |
+| `web_search.py` | Bocha AI Search 实时搜索（v0.1.49 从核心移出）<br>Live web search via Bocha AI Search API (moved out of core in v0.1.49) | `MANGO_SEARCH_API_KEY` | `tools` |
 
 ---
 

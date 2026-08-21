@@ -4,7 +4,7 @@ Covers:
     * read: pipes pbpaste/xclip output, returns trimmed text
     * write: feeds text via stdin, reports char count
     * confirm: read skips confirmation, write requires console.prompt_apply
-      (denied → run_tool returns "User denied action")
+      (denied → run_tool returns "action denied by user confirmation")
     * validation: bad action, write without text
     * unsupported platform error (simulated)
 """
@@ -107,7 +107,7 @@ class TestWrite(ClipboardTestBase):
         with mock.patch.object(subprocess, "run") as run:
             r = self._run(action="write", text="secret")
         self.assertFalse(r["success"])
-        self.assertIn("User denied action", r["content"])
+        self.assertIn("action denied by user confirmation", r["content"])
         run.assert_not_called()  # 拒绝后不触碰剪贴板
 
     def test_write_without_text_fails(self):

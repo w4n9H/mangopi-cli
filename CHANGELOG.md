@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.51] - 2026-08-21
+
+### Added
+- **Five shipped extensions** — `ask_user` (structured multi-choice clarification, YOLO auto-picks the first option), `memory` (long-term memory: AGENT.md / MANGO.md priority files + per-day journals, auto-injected into the prompt), `multi_edit` (apply N edits in one call with best-effort reverse rollback), `plan_mode` (plan-then-execute state machine: non-mutating tool subset while active, user approval on submit), `task_tracker` (in-session task create/list/update/get/delete with current tasks auto-injected); 15 shipped extensions total
+- **`web_fetch` extension** — fetch a single http/https URL's content into the context (HTML stripped of tags, truncated to `max_chars`); SSRF guard (http/https schemes only), 15s timeout, 100KB response cap
+- **Dynamic `prompt_sections`** — extensions may export `prompt_sections` as a callable (evaluated on every SystemPrompt build) instead of a static list, enabling runtime-state injection (plan-mode status, task lists, memory content)
+
+### Changed
+- **Default extensions dir** — without `MANGO_PRESET`, extensions now load from `~/.mangocli/extensions/` (previously none were loaded)
+- **`audit.py` merged into `trace.py`** — the session trace now also records `tool:error` events (the standalone audit JSONL extension is removed)
+- **Confirmation-denied message** — `run_tool` now returns "action denied by user confirmation — pause and ask the user before retrying" (was "User denied action") so agents stop and ask instead of retrying or bypassing confirmation
+
+### Removed
+- `examples/extensions/audit.py` — merged into `trace.py`; tool-error events now land in the session trace
+
+---
+
 ## [0.1.50] - 2026-08-18
 
 ### Added

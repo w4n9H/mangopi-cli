@@ -26,7 +26,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.50"
+__version__ = "0.1.51"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -46,7 +46,8 @@ MANGO_PRESET_DIR = os.path.expanduser("~/.mangocli/presets")
 project_root = os.getcwd()
 base_persist_dir = os.path.join(project_root, '.mangocli')
 session_dir = os.path.join(base_persist_dir, "session")
-extensions_dir = os.path.expanduser(f"~/.mangocli/presets/{MANGO_PRESET}/extensions") if MANGO_PRESET else ""
+extensions_dir = os.path.expanduser(f"~/.mangocli/presets/{MANGO_PRESET}/extensions") \
+    if MANGO_PRESET else os.path.expanduser(f"~/.mangocli/extensions")
 # 直接运行 (python mangopi_cli.py) 时模块名为 __main__, 此处注入别名使扩展文件可 `from mangopi_cli import ...`
 sys.modules.setdefault("mangopi_cli", sys.modules[__name__])
 providers_file = os.path.join(base_persist_dir, "providers.json")
@@ -486,7 +487,7 @@ class ExtensionRegistry:
                 continue
             for tool in getattr(mod, "tools", []) or []:
                 self._register_tool(tool, source)
-            for section in getattr(mod, "prompt_sections", []) or []:
+            for section in self._iter_prompt_sections(mod):
                 self._register_prompt_section(section, source)
             for name, fn in (getattr(mod, "entry_points", {}) or {}).items():
                 self._register_entry_point(name, fn, source)
@@ -512,7 +513,7 @@ class ExtensionRegistry:
         for tool in getattr(mod, "tools", []) or []:
             self._register_tool(tool, source)
             TOOLS[tool.name] = tool        # 运行时重载: 新实例立即生效 (导入期由模块级 TOOLS 合并负责)
-        for section in getattr(mod, "prompt_sections", []) or []:
+        for section in self._iter_prompt_sections(mod):
             self._register_prompt_section(section, source)
         for name, fn in (getattr(mod, "entry_points", {}) or {}).items():
             self._register_entry_point(name, fn, source)
@@ -528,6 +529,16 @@ class ExtensionRegistry:
                 del TOOLS[tool.name]
 
         self._per_source.setdefault(source, []).append(inverse)
+
+    @staticmethod
+    def _iter_prompt_sections(mod):
+        """兼容两种契约: 模块级列表 [(name, content)] 或函数 () -> list (动态段).
+        函数形式原样注册 callable, 由 SystemPrompt 构建时调用 (plan_mode/task_tracker 等
+        依赖运行时状态的扩展)."""
+        raw = getattr(mod, "prompt_sections", None)
+        if raw is None:
+            return []
+        return [raw] if callable(raw) else raw
 
     def _register_prompt_section(self, section, source):
         self.prompt_sections.append(section)
@@ -1553,7 +1564,9 @@ def run_tool(tool_name, tool_args) -> dict:
         console.tool_call(tool.name, tool.preview(tool_args))
         tool.before(tool_args)
         if not tool.confirm(tool_args):
-            return {"success": False, "content": "error: User denied action"}  # 拒绝路径不 emit
+            # 拒绝路径不 emit. 措辞明确: 用户在确认环节主动拒绝 (可能对修改有疑问),
+            # agent 应停下询问用户, 而非重试或绕过确认.
+            return {"success": False, "content": "error: action denied by user confirmation — pause and ask the user before retrying"}
         if tool.use_spinner:
             console.start_spinner()
         result = tool.run(tool_args)
@@ -1612,11 +1625,13 @@ class SystemPrompt:
         self.sections.append(("environment", self._build_environment()))
         # 扩展通道: 同名段覆盖默认内容 (强化), 异名段追加
         defaults = {name for name, _ in self.sections}
-        for name, content in extension_registry.prompt_sections:
-            if name in defaults:
-                self.sections = [(n, c if n != name else content) for n, c in self.sections]
-            else:
-                self.sections.append((name, content))
+        for entry in extension_registry.prompt_sections:
+            dynamic = entry() if callable(entry) else [entry]
+            for name, content in dynamic:
+                if name in defaults:
+                    self.sections = [(n, c if n != name else content) for n, c in self.sections]
+                else:
+                    self.sections.append((name, content))
         # preset 级 prompt 覆盖 (v0.1.50 模式系统): base 覆盖 base_intro 段, clear_sections 删除段,
         # append_sections 追加段. 副作用幂等 (load_preset 已在 main 应用过, 此处仅取配置).
         preset = load_preset(MANGO_PRESET)

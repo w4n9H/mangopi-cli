@@ -9,6 +9,7 @@
                        reasoning_len, content_len, model, prompt_tokens, completion_tokens)
   * agent:compact     (tokens_before, tokens_after, saved)
   * tool:before       (name, args)  /  tool:after (name, result)   -> 工具调用/结果
+  * tool:error        (name, err)                                  -> 工具异常 (原 audit.py 并入)
   * agent:end         (total_rounds)                          -> 会话结束, 落盘
 
 输出 ~/.mangocli/traces/run_<mode>_<ts>_<rand>.json (与原 MANGO_TRACE 格式兼容).
@@ -60,6 +61,11 @@ def _tool_result(name, result):
                     "content_size": len(result.get("content") or "")})
 
 
+def _tool_error(name, err):
+    _events.append({"ts": int(time.time() * 1000), "kind": "tool_error",
+                    "name": name, "error": str(err)[:300]})
+
+
 def _end(total_rounds):
     _events.append({"ts": int(time.time() * 1000), "kind": "end", "total_rounds": total_rounds})
     os.makedirs(_TRACES_DIR, exist_ok=True)
@@ -75,4 +81,5 @@ on("agent:assistant", _assistant)
 on("agent:compact", _compact)
 on("tool:before", _tool_call)
 on("tool:after", _tool_result)
+on("tool:error", _tool_error)
 on("agent:end", _end)
