@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.52] - 2026-08-25
+
+### Removed
+- **Smart Provider Routing (`RoutedProvider`)** — the experimental `MANGO_ROUTING` feature is removed (low usage): the tiered router class (keyword + LLM two-phase scoring), the `MANGO_ROUTING` env var, the per-turn `provider.route()` call, and the `doctor()` providers.json check are gone. Single-model mode via `MANGO_MODEL` / `MANGO_API_URL` / `MANGO_KEY` is unchanged. Code + tests archived in `docs/smart-routing.md`; `providers.json.example` stays in the repo root.
+- **`FlashThinking`** — the thinking-framework keyword matcher and its module-level singleton are removed; its only consumer was `RoutedProvider._keyword_score`.
+- `test/test_provider_routing.py` (41 tests) removed with the feature (archived in `docs/smart-routing.md` §4); README / ROADMAP (marked removed) / landing page cleaned of routing & thinking-framework references.
+
+---
+
 ## [0.1.51] - 2026-08-21
 
 ### Added

@@ -58,7 +58,7 @@ Every new feature follows these rules, in order of priority:
 
 ### 1. Smart Provider Routing
 
-**Status:** 🟢 Done (Experimental Feature)
+**Status:** ❌ **Removed (v0.1.52)** — the feature was removed from the codebase (RoutedProvider + FlashThinking). History below is kept for reference.
 
 **Problem:** Within the same session, "read me this file" and "design me a distributed system" demand wildly different model capability — but every request currently hits the same `MANGO_MODEL`. Either it's too expensive, or too weak.
 

@@ -79,7 +79,6 @@ The project avoids unnecessary abstractions, frameworks, and dependencies whenev
 * Instant startup speed
 * Local-first workflow design
 * ACP agent server (`--acp`) — Agent Client Protocol v1 over stdio, connectable from Zed / JetBrains etc.
-* Smart provider routing with tiered models (high/medium/low)
 * Multimodal support (image reading via `view_image` extension)
 * Web search via Bocha AI Search (`web_search` extension)
 * Context-aware conversation management
@@ -145,33 +144,6 @@ export MANGO_LANG=en               # en (default) | zh — controls UI text and 
 
 ---
 
-
-
-# Smart Provider Routing
-
-Enable multi-model routing with the `MANGO_ROUTING` env var:
-
-```bash
-export MANGO_ROUTING=on
-```
-
-Define providers in `.mangocli/providers.json` (tiers: low/medium/high):
-
-```json
-{
-  "providers": [
-    {"name": "low",    "url": "https://api.deepseek.com", "model": "deepseek-v4-flash",    "tier": "low",    "api_key": "sk-xxx"},
-    {"name": "medium", "url": "https://api.deepseek.com", "model": "deepseek-v4",          "tier": "medium", "api_key": "sk-xxx"},
-    {"name": "high",   "url": "https://api.deepseek.com", "model": "deepseek-v4-reasoning", "tier": "high",   "api_key": "sk-xxx"}
-  ],
-  "routing": {
-    "default_tier": "medium",
-    "score_thresholds": {"low_max": 3, "medium_max": 7}
-  }
-}
-```
-
-Mangopi CLI auto-selects the appropriate tier based on task complexity — keyword matching + LLM scoring. Each turn uses one model; no mid-loop switching. A sample config is at `providers.json.example`.
 
 ---
 

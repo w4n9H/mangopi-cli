@@ -26,7 +26,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.51"
+__version__ = "0.1.52"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -37,7 +37,6 @@ MANGO_MODEL = os.environ.get("MANGO_MODEL", "deepseek-v4-flash")
 MANGO_MAX_CONTEXT = int(os.environ.get("MANGO_MAX_CONTEXT", 1_000_000))
 MANGO_MAX_ITER = int(os.environ.get("MANGO_MAX_ITER", 100))
 LANGUAGE = os.environ.get("MANGO_LANG", "en").lower()
-MANGO_ROUTING = os.environ.get("MANGO_ROUTING", "off").lower()
 MANGO_YOLO = os.environ.get("MANGO_YOLO", "").lower() in ("1", "true", "yes")
 MANGO_PRESET = os.environ.get("MANGO_PRESET", "").strip()  # preset 名 (目录名, 大小写敏感)
 MANGO_PRESET_DIR = os.path.expanduser("~/.mangocli/presets")
@@ -50,7 +49,6 @@ extensions_dir = os.path.expanduser(f"~/.mangocli/presets/{MANGO_PRESET}/extensi
     if MANGO_PRESET else os.path.expanduser(f"~/.mangocli/extensions")
 # 直接运行 (python mangopi_cli.py) 时模块名为 __main__, 此处注入别名使扩展文件可 `from mangopi_cli import ...`
 sys.modules.setdefault("mangopi_cli", sys.modules[__name__])
-providers_file = os.path.join(base_persist_dir, "providers.json")
 
 # --- Catppuccin Mocha palette (24-bit, active roles only) ---
 MOCHA = {  # Ghostty theme: Catppuccin Mocha. https://github.com/catppuccin/catppuccin
@@ -309,8 +307,6 @@ def initialize_system():
 
 def doctor():
     results = [(bool(MANGO_KEY), "MANGO_KEY is set" if MANGO_KEY else "MANGO_KEY: not set (required)")]
-    if MANGO_ROUTING == "on" and not os.path.isfile(providers_file):
-        results.append((False, "providers.json not found (required when MANGO_ROUTING=on)"))
     if not os.path.isdir(session_dir):
         results.append((False, "session directory not found"))
     else:
@@ -658,54 +654,6 @@ class SkillManager:
 
 
 skill_manager = SkillManager()
-
-
-# --- Flash-ext: Thinking Framework System ---
-class FlashThinking:  # 思考引导增强系统——根据 query 关键词和 tool call 模式选择和注入结构化思考框架。
-    KEYWORDS = {"debug": ["报错", "bug", "error", "失败", "fail", "慢", "slow", "崩溃", "crash", "排查", "debug",
-                          "修复", "fix", "test", "修改", "modif", "update", "chang", "issue", "adjust",
-                          "patch", "correct", "错误", "问题", "调整", "更正", "改动", "alter",
-                          "调试", "debugging", "异常", "exception", "日志", "log", "logging",
-                          "堆栈", "stack", "trace", "broken", "挂起", "hang", "leak",
-                          "undefined", "null", "复现", "reproduc"],
-                "design": ["设计", "design", "架构", "architect", "选型", "规划",
-                           "distribut", "microservic", "scalab", "infrastructur",
-                           "overall", "可扩展", "高可用", "容灾", "分布式", "framework", "platform",
-                           "重构", "refactor", "migrat", "死锁", "deadlock", "并发", "concurren",
-                           "async", "multithread", "异步", "迁移",
-                           "模式", "pattern", "抽象", "abstraction", "模块化", "modular",
-                           "分层", "layered", "安全", "security", "灵活", "flexib", "可靠", "reliab"],
-                "explain": ["什么是", "解释", "explain", "区别", "原理", "怎么理解", "what is",
-                            "read", "查看", "show", "find", "search", "搜索", "查询", "query",
-                            "display", "获取", "了解", "描述", "describe",
-                            "文档", "doc", "document", "注释", "comment",
-                            "概述", "overview", "总结", "summar",
-                            "对比", "compar", "列举", "list", "分析", "analy"],
-                "optimize": ["优化", "optimize", "性能", "performance", "加速", "提升",
-                             "延迟", "latency", "吞吐", "throughput", "响应", "respons",
-                             "内存", "memory", "磁盘", "disk", "缓存", "cache", "索引", "index", "瓶颈", "bottleneck",
-                             "profile", "profiling", "benchmark", "压缩", "compress", "减少", "reduc",
-                             "预加载", "preload", "懒加载", "lazy", "连接池", "调用量", "负载", "load"],
-                "implement": ["实现", "implement", "写", "create", "build", "开发", "生成",
-                              "integrat", "multi", "feature", "api", "interfac", "modul",
-                              "component", "databas", "config", "集成", "接口", "模块", "组件", "数据库", "存储", "stor",
-                              "编写", "write", "添加", "add", "函数", "function", "class", "初始化", "init",
-                              "部署", "deploy", "继承", "extend", "导入", "import", "配置", "configure",
-                              "模板", "template", "注册", "register"]}
-
-    def __init__(self):
-        self.frameworks = {}
-
-    def match(self, query):  # 返回所有命中的 framework 名称（去重），用于综合评分
-        q = query.lower()
-        matched = []
-        for fw, keywords in self.KEYWORDS.items():
-            if any(kw in q for kw in keywords):
-                matched.append(fw)
-        return matched
-
-
-flash_thinking = FlashThinking()
 
 
 # --- Tool definitions: (description, schema, function) ---
@@ -1420,136 +1368,6 @@ def create_provider() -> BaseProvider:
     return _new_provider(MANGO_MODEL, MANGO_API_URL, MANGO_KEY)
 
 
-# --- Smart Provider Routing ---
-
-class RoutedProvider:  # A provider that scores task complexity and delegates to low/medium/high sub-providers.
-    @classmethod
-    def from_file(cls, path: str) -> "RoutedProvider":
-        with open(path, "r", encoding="utf-8") as f:
-            return cls(json.load(f))
-
-    def __init__(self, config: dict):
-        self._tiers: Dict[str, List[BaseProvider]] = {"low": [], "medium": [], "high": []}
-        for p in config.get("providers", []):
-            tier = p.get("tier", "")
-            if tier not in self._tiers:
-                raise ValueError(f"Invalid provider tier '{tier}'. Must be low/medium/high.")
-            self._tiers[tier].append(_new_provider(p["model"], p["url"], p["api_key"]))
-        if not any(self._tiers.values()):
-            raise ValueError("No providers defined in config")
-
-        routing = config.get("routing", {})
-        _defaults_score_thresholds = {"low_max": 3, "medium_max": 7}
-        self._thresholds = {**_defaults_score_thresholds, **routing.get("score_thresholds", {})}
-        default_tier = routing.get("default_tier", "medium")
-        self._default_tier_value = default_tier if self._tiers.get(default_tier) else \
-            next((t for t in ("medium", "low", "high") if self._tiers.get(t)), "medium")
-        default = self._tiers.get(default_tier) or next((v for v in self._tiers.values() if v), [])
-        self._current = default[0]
-
-    # ── delegation to _current ──
-    @property
-    def api_url(self): return self._current.api_url
-
-    @property
-    def api_key(self): return self._current.api_key
-
-    @property
-    def model(self): return self._current.model
-
-    @property
-    def total_providers(self) -> int: return sum(len(v) for v in self._tiers.values())
-
-    def headers(self) -> dict: return self._current.headers()
-
-    def build_body(self, messages: List[Dict[str, Any]]) -> dict: return self._current.build_body(messages)
-
-    def parse_response(self, response: Dict[str, Any]) -> Dict[str, Any]: return self._current.parse_response(response)
-
-    _FRAMEWORK_ANGER: List[str] = [
-        "fuck", "fuxx", "f**k", "shit", "damn", "asshole", "bastard", "傻子", "笨蛋", "蠢货", "白痴", "脑残", "sb", "废物",
-        "垃圾", "特么", "卧槽", "我操", "cnm", "tmd", "废物", "傻x"]
-
-    _FRAMEWORK_SCORE: Dict[str, int] = {"design": 9, "implement": 5, "optimize": 5, "debug": 3, "explain": 1}
-
-    _SCORING_PROMPT = """\
-Rate this coding task complexity from 1-10 (1=trivial, 10=architectural/system design).
-Consider: scope of changes, reasoning depth, debugging difficulty, components involved.
-
-Tool call history (each segment = one user turn):
-{tool_patterns}
-
-Current request:
-{user_query}
-
-Rubric: 1-3=read/search, 4-6=multi-file/edit/debug, 7-10=design/refactor/complex
-
-Respond with ONLY a single integer."""
-
-    @staticmethod
-    def _keyword_score(query: str) -> int:
-        q = query.lower()
-        for kw in RoutedProvider._FRAMEWORK_ANGER:
-            if kw in q:
-                return 10
-        matched = flash_thinking.match(query)
-        if not matched:
-            return 4
-        scores = [RoutedProvider._FRAMEWORK_SCORE.get(fw, 0) for fw in matched]
-        max_s = max(scores)  # 综合加权: max(70%) 反映复杂度天花板, avg(30%) 反映多维度密度
-        avg_s = sum(scores) / len(scores)
-        return max(1, min(10, round(max_s * 0.7 + avg_s * 0.3)))
-
-    @staticmethod
-    def _llm_score(user_query: str, fingerprint: str, high_provider) -> int:
-        prompt = RoutedProvider._SCORING_PROMPT.format(
-            tool_patterns=fingerprint, user_query=user_query)
-        body = high_provider.build_body([{"role": "user", "content": prompt}])
-        try:
-            console.start_spinner("Smart Routing...")
-            resp = _request(high_provider.api_url, body,
-                            headers=high_provider.headers(), timeout=15)
-            parsed = high_provider.parse_response(resp)
-            content = parsed.get("content", "").strip()
-            match = re.search(r'\d+', content)
-            console.end_spinner()
-            if match:
-                val = int(match.group())
-                return max(1, min(10, val))
-        except Exception:
-            console.end_spinner()
-        return 5
-
-    def route(self, ctx, user_query: str):  # Score task complexity and switch to the appropriate tier provider.
-        kw = self._keyword_score(user_query)
-        if kw <= self._thresholds["low_max"]:
-            tier = "low"
-        elif kw > self._thresholds["medium_max"]:
-            tier = "high"
-        else:
-            high = self._tiers.get("high", [])
-            if high:
-                fp = ctx.tool_fingerprint()
-                llm = self._llm_score(user_query, fp, high[0])
-                final = round(kw * 0.3 + llm * 0.7)
-                if final <= self._thresholds["low_max"]:
-                    tier = "low"
-                elif final <= self._thresholds["medium_max"]:
-                    tier = "medium"
-                else:
-                    tier = "high"
-            else:
-                tier = self._default_tier
-        providers = self._tiers.get(tier)
-        if not providers:
-            providers = self._tiers[self._default_tier]
-        self._current = providers[0]
-        print(f"{DIM}→ {tier}: {self._current.model}{RESET}")
-
-    @property
-    def _default_tier(self) -> str: return self._default_tier_value
-
-
 provider = create_provider()
 
 
@@ -1821,16 +1639,8 @@ def main():
         sys.exit(1)
 
     global provider
-    if MANGO_ROUTING == "on":
-        try:
-            provider = RoutedProvider.from_file(providers_file)
-        except Exception:
-            console.warning(f"Failed to load {providers_file}, forcing high-tier fallback")
-            provider = RoutedProvider({
-                "providers": [{"name": MANGO_MODEL, "url": MANGO_API_URL, "model": MANGO_MODEL,
-                               "tier": "high", "api_key": MANGO_KEY or ""}]})
 
-    mode = f"smart-routing[{provider.total_providers}]" if MANGO_ROUTING == "on" else provider.model
+    mode = provider.model
     yolo_tag = f" | {BOLD}YOLO{RESET}{DIM}" if MANGO_YOLO else ""
     preset_tag = f" | {DIM}{MANGO_PRESET}[{len(TOOLS)} tool]{RESET}" if MANGO_PRESET else ""
     print(f"{BOLD}Mango Cli v{__version__}{RESET} | {DIM}{mode}{yolo_tag} | {project_root}{RESET}{preset_tag}\n")
@@ -1905,11 +1715,6 @@ def main():
                 continue
 
             normal_message = f"{user_input}, Current date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            if MANGO_ROUTING == "on":
-                try:
-                    provider.route(ctx, user_input)
-                except Exception as e:
-                    console.warning(f"Routing failed ({e})")
             agent_loop(ctx, ctx_file_path, normal_message)
         except (KeyboardInterrupt, EOFError):
             break

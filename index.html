@@ -351,94 +351,6 @@
             line-height: 1.5;
         }
 
-        /* ROUTING CALLOUT */
-        .callout {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            border: 1px solid var(--rule);
-            margin-top: 32px;
-        }
-
-        @media (max-width: 800px) { .callout { grid-template-columns: 1fr; } }
-
-        .callout-text {
-            padding: 28px;
-            border-right: 1px solid var(--rule);
-        }
-
-        @media (max-width: 800px) { .callout-text { border-right: none; border-bottom: 1px solid var(--rule); } }
-
-        .callout-text h3 {
-            font-size: 22px;
-            font-weight: 500;
-            letter-spacing: -0.02em;
-            margin-bottom: 10px;
-        }
-
-        .callout-text p {
-            color: var(--muted);
-            font-size: 14px;
-            line-height: 1.55;
-            margin-bottom: 12px;
-        }
-
-        .callout-code {
-            background: var(--surface);
-            padding: 28px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            line-height: 1.65;
-            color: var(--muted);
-            overflow-x: auto;
-        }
-
-        .callout-code .key { color: var(--accent); }
-        .callout-code .str { color: var(--ok); }
-
-        /* TIER STRIP */
-        .tiers {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            border-top: 1px solid var(--rule);
-            border-bottom: 1px solid var(--rule);
-            margin-top: 32px;
-        }
-
-        @media (max-width: 700px) { .tiers { grid-template-columns: 1fr; } }
-
-        .tier {
-            padding: 20px;
-            border-right: 1px solid var(--rule);
-        }
-
-        .tier:last-child { border-right: none; }
-
-        @media (max-width: 700px) {
-            .tier { border-right: none; border-bottom: 1px solid var(--rule); }
-            .tier:last-child { border-bottom: none; }
-        }
-
-        .tier-name {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            color: var(--muted);
-            margin-bottom: 12px;
-            letter-spacing: 0.08em;
-        }
-
-        .tier-value {
-            font-size: 20px;
-            font-weight: 500;
-            letter-spacing: -0.01em;
-            margin-bottom: 4px;
-        }
-
-        .tier-desc {
-            font-size: 13.5px;
-            color: var(--muted);
-            line-height: 1.45;
-        }
-
         /* PROVIDERS */
         .providers {
             display: grid;
@@ -773,8 +685,8 @@
         </h1>
         <div class="hero-tagline">
             <p class="hero-desc">
-                <span class="lang-en">A single-file Python agent for the terminal. Three-tier model routing, a thinking-framework proxy, multimodal + web search. All in stdlib. <em>Just code.</em></span>
-                <span class="lang-zh">单文件 Python 终端智能体。三档模型路由、思考框架代理、多模态 + Web Search。纯标准库实现。<em>只管写代码。</em></span>
+                <span class="lang-en">A single-file Python agent for the terminal. Multimodal + web search. All in stdlib. <em>Just code.</em></span>
+                <span class="lang-zh">单文件 Python 终端智能体。多模态 + Web Search。纯标准库实现。<em>只管写代码。</em></span>
             </p>
             <div class="hero-actions">
                 <a class="btn btn-primary" href="https://github.com/w4n9H/mangopi-cli" target="_blank">
@@ -794,8 +706,7 @@
             </div>
             <div class="demo-body">
                 <div class="row"><span class="accent">$</span><span>mangopi-cli</span></div>
-                <div class="row"><span class="muted indent">Mango Cli v0.1.29 | smart-routing[3] | ~/projects/api-server</span></div>
-                <div class="row"><span class="muted indent">→ high: deepseek-v4-reasoning</span></div>
+                <div class="row"><span class="muted indent">Mango Cli v0.1.52 | deepseek-v4 | ~/projects/api-server</span></div>
                 <div class="row"><span>&nbsp;</span></div>
                 <div class="row"><span class="accent">❯</span><span><span class="lang-en">help me refactor utils.py to use dataclasses</span><span class="lang-zh">帮我把 utils.py 重构为 dataclass</span></span></div>
                 <div class="row"><span class="warn indent">· Tool call</span></div>
@@ -831,14 +742,6 @@
             <div class="stat">
                 <div class="stat-num">10</div>
                 <div class="stat-label"><span class="lang-en">built-in tools</span><span class="lang-zh">内置工具</span></div>
-            </div>
-            <div class="stat">
-                <div class="stat-num">3</div>
-                <div class="stat-label"><span class="lang-en">routing tiers</span><span class="lang-zh">路由档位</span></div>
-            </div>
-            <div class="stat">
-                <div class="stat-num">8</div>
-                <div class="stat-label"><span class="lang-en">thinking frameworks</span><span class="lang-zh">思考框架</span></div>
             </div>
             <div class="stat">
                 <div class="stat-num">∞</div>
@@ -921,13 +824,6 @@
             </div>
             <div class="feat">
                 <div class="feat-tag">— 10</div>
-                <div>
-                    <h3><span class="lang-en">Smart Routing</span><span class="lang-zh">智能路由</span></h3>
-                    <p><span class="lang-en">Three model tiers (flash / standard / reasoning) auto-selected per turn via keyword + LLM scoring. Configure in .mangocli/providers.json.</span><span class="lang-zh">三档模型（flash / standard / reasoning）按回合经关键词 + LLM 打分自动选择。在 .mangocli/providers.json 配置。</span></p>
-                </div>
-            </div>
-            <div class="feat">
-                <div class="feat-tag">— 11</div>
                 <div>
                     <h3><span class="lang-en">ACP Agent Server</span><span class="lang-zh">ACP Agent 服务</span></h3>
                     <p><span class="lang-en">Agent Client Protocol v1 over stdio — run as an agent inside Zed / JetBrains with session switching and full history replay.</span><span class="lang-zh">基于 stdio 的 Agent Client Protocol v1 — 在 Zed / JetBrains 中以 agent 运行，支持会话切换与历史回放。</span></p>
@@ -1130,11 +1026,6 @@
                     <span class="env-default">v4-flash</span>
                 </div>
                 <div class="env-row">
-                    <span class="env-name">MANGO_ROUTING</span>
-                    <span class="env-desc"><span class="lang-en">Enable smart routing</span><span class="lang-zh">启用智能路由</span></span>
-                    <span class="env-default">off</span>
-                </div>
-                <div class="env-row">
                     <span class="env-name">MANGO_MAX_CONTEXT</span>
                     <span class="env-desc"><span class="lang-en">Max tokens</span><span class="lang-zh">最大 token</span></span>
                     <span class="env-default">1M</span>
@@ -1149,10 +1040,7 @@
                 <div class="code">
 <span class="cmd-c">$</span> export MANGO_KEY=<span class="str-c">"your-key"</span><br>
 <span class="cmd-c">$</span> export MANGO_API_URL=<span class="str-c">"https://api.deepseek.com"</span><br>
-<span class="cmd-c">$</span> export MANGO_MODEL=<span class="str-c">"deepseek-v4-flash"</span><br>
-<br>
-<span style="color: var(--muted);"># smart routing</span><br>
-<span class="cmd-c">$</span> export MANGO_ROUTING=<span class="str-c">"on"</span>
+<span class="cmd-c">$</span> export MANGO_MODEL=<span class="str-c">"deepseek-v4-flash"</span>
                 </div>
             </div>
         </div>
