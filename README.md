@@ -216,10 +216,11 @@ The client drives the conversation via `session/new` + `session/prompt` messages
 | `search`             | Search files using glob patterns, sorted by mtime               |
 | `grep`               | Recursive regex content search                                  |
 | `bash`               | Execute a shell command (60s timeout, output filtered)          |
-| `use_skill`          | Load an installed `SKILL.md` with its scripts/references        |
 | `attempt_completion` | Final step — present the result to the user                     |
 
-`web_search` / `view_image` are shipped as optional extensions (`examples/extensions/`) since v0.1.49.
+`web_search` / `view_image` are shipped as optional extensions (`examples/extensions/`) since v0.1.49;
+`use_skill` (skill system: `SkillManager` + `skills_guidance` prompt section) ships as the
+`skill` extension since v0.1.53.
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
 
@@ -227,7 +228,9 @@ Mangopi CLI can autonomously inspect files, modify code, search projects, and ex
 
 # Skill System
 
-Mangopi CLI supports reusable workflow skills.
+Mangopi CLI supports reusable workflow skills (shipped as the `skill` extension,
+`examples/extensions/skill.py` — enable by copying/symlinking into
+`~/.mangocli/extensions/` or a preset's `extensions/` dir).
 
 Example structure:
 
@@ -365,7 +368,7 @@ mangopi-cli
 
 ### Shipped extensions
 
-The repo ships 15 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable; without `MANGO_PRESET`, `~/.mangocli/extensions/`):
+The repo ships 16 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable; without `MANGO_PRESET`, `~/.mangocli/extensions/`):
 
 | File | Function |
 |---|---|
@@ -379,6 +382,7 @@ The repo ships 15 optional extensions in `examples/extensions/` (copy/symlink in
 | `plan_mode.py` | Plan-then-execute state machine (read-only tool subset while active) |
 | `ratelimit.py` | Sliding-window rate warning (event bus, warn only) |
 | `run_code.py` | Code Mode / PTC tool: batch tool orchestration in one execution (used by the `codemode` preset) |
+| `skill.py` | Skill system: `use_skill` loads `SKILL.md` + scripts/references; dynamic `skills_guidance` prompt section (moved out of core in v0.1.53) |
 | `task_tracker.py` | In-session task tracking (create/list/update/get/delete), auto-injected into the prompt |
 | `trace.py` | Session event stream to `~/.mangocli/traces/run_*.json` (replaces core MANGO_TRACE; includes tool errors) |
 | `view_image.py` | Local image into vision context |
@@ -448,7 +452,6 @@ Core components:
 | `ToolBase`        | Tool framework (schema, confirm, before/after hooks, preview)            |
 | `Provider`        | API abstraction (`OpenAIProvider`, `DeepSeekProvider`, `MiniMaxProvider`) |
 | `SystemPrompt`    | Layered runtime prompt assembly (base, safety, rules, tools, env)        |
-| `SkillManager`    | Discovers and loads `SKILL.md` + scripts/references                      |
 | `AcpServer`        | ACP (Agent Client Protocol) v1 server: stdio JSON-RPC dispatch, sessions, permissions |
 | `agent_loop`      | Drives the read → think → tool-call → verify loop until the model stops or calls `attempt_completion` |
 

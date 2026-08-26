@@ -61,18 +61,19 @@ class TestSectionsStructure(unittest.TestCase):
         self.assertIsInstance(sp.sections, list)
         self.assertGreater(len(sp.sections), 0)
 
-    def test_02_default_sections_count_is_seven(self):
-        # Default has 7 sections: base_intro / safety / builtin_rules /
-        # tool_guidance / skills_guidance / memory / environment.
+    def test_02_default_sections_count_is_six(self):
+        # Default has 6 sections: base_intro / safety / builtin_rules /
+        # tool_guidance / memory / environment.  skills_guidance 段自 v0.1.53
+        # 起由 skill 扩展 (examples/extensions/skill.py) 经 prompt_sections 通道注入.
         sp = SystemPrompt()
-        self.assertEqual(len(sp.sections), 7)
+        self.assertEqual(len(sp.sections), 6)
 
     def test_03_default_sections_order(self):
         sp = SystemPrompt()
         names = [n for n, _ in sp.sections]
         expected = [
             "base_intro", "safety", "builtin_rules", "tool_guidance",
-            "skills_guidance", "memory", "environment",
+            "memory", "environment",
         ]
         self.assertEqual(names, expected)
 
@@ -158,10 +159,10 @@ class TestDynamicSectionHeaders(_SystemPromptBase):
         content = self._section_text(sp, "memory")
         self.assertIn("## User Rules", content)
 
-    def test_16_skills_guidance_section_has_proper_header(self):
+    def test_16_core_has_no_skills_guidance_default(self):
+        # skills_guidance 段已从核心移除: 由 skill 扩展注入 (见 TestSkillExtensionChannel)
         sp = SystemPrompt()
-        content = self._section_text(sp, "skills_guidance")
-        self.assertIn("## Skills Selection Guidelines", content)
+        self.assertNotIn("skills_guidance", [n for n, _ in sp.sections])
 
 
 # ── 4. assemble() behavior ──────────────────────────────────────────────────
@@ -223,7 +224,6 @@ class TestStaticBuilderSignatures(unittest.TestCase):
         "_build_safety",
         "_build_builtin_rules",
         "_build_tool_guidance",
-        "_build_skills_guidance",
         "_build_user_rules",
         "_build_environment",
     ]
@@ -375,9 +375,9 @@ class TestExtensionPromptSections(unittest.TestCase):
     def tearDown(self):
         mangopi_cli.extension_registry.prompt_sections[:] = self.orig
 
-    def test_50_no_extensions_keeps_seven_sections(self):
+    def test_50_no_extensions_keeps_six_sections(self):
         sp = SystemPrompt()
-        self.assertEqual(len(sp.sections), 7)
+        self.assertEqual(len(sp.sections), 6)
 
     def test_51_override_default_section(self):
         mangopi_cli.extension_registry.prompt_sections[:] = [("safety", "Extension safety policy.")]
@@ -385,14 +385,14 @@ class TestExtensionPromptSections(unittest.TestCase):
         self.assertEqual(next(c for n, c in sp.sections if n == "safety"),
                          "Extension safety policy.")
         self.assertEqual([n for n, _ in sp.sections].count("safety"), 1)  # 覆盖不产生重复段
-        self.assertEqual(len(sp.sections), 7)
+        self.assertEqual(len(sp.sections), 6)
 
     def test_52_append_new_section(self):
         mangopi_cli.extension_registry.prompt_sections[:] = [("project_note", "Pinned note.")]
         sp = SystemPrompt()
         names = [n for n, _ in sp.sections]
         self.assertEqual(names[-1], "project_note")  # 异名段追加于末尾
-        self.assertEqual(len(sp.sections), 8)
+        self.assertEqual(len(sp.sections), 7)
         self.assertIn("Pinned note.", sp.assemble())
 
     def test_53_mixed_override_and_append(self):
@@ -403,9 +403,86 @@ class TestExtensionPromptSections(unittest.TestCase):
         self.assertEqual(names.count("builtin_rules"), 1)
         self.assertIn("extra_a", names)
         self.assertIn("extra_b", names)
-        self.assertEqual(len(sp.sections), 9)
+        self.assertEqual(len(sp.sections), 8)
         self.assertEqual(next(c for n, c in sp.sections if n == "builtin_rules"),
                          "Replaced rules.")
+
+
+class TestSkillExtensionChannel(unittest.TestCase):
+    """skill 扩展 (examples/extensions/skill.py) 双通道:
+    tools 通道 → use_skill 并入 TOOLS, guidance 注入 tool_guidance;
+    prompt_sections 通道 → skills_guidance 动态段 (核心默认段 v0.1.53 已移除, 现为追加)。
+    注册路径与 ExtensionRegistry.load 一致 (load_file + _register_*),
+    run 行为与提示词断言均用临时技能目录, 不依赖仓库磁盘状态。"""
+
+    EXT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "examples", "extensions", "skill.py")
+
+    def setUp(self):
+        self._orig_tools = dict(mangopi_cli.TOOLS)
+        self._orig_sections = list(mangopi_cli.extension_registry.prompt_sections)
+        self._orig_reg_tools = list(mangopi_cli.extension_registry.tools)
+        self.mod = mangopi_cli.ExtensionRegistry.load_file(self.EXT)
+        for t in self.mod.tools:
+            mangopi_cli.extension_registry._register_tool(t, "skill.py")
+            mangopi_cli.TOOLS[t.name] = t
+        mangopi_cli.extension_registry._register_prompt_section(self.mod.prompt_sections, "skill.py")
+
+    def tearDown(self):
+        mangopi_cli.extension_registry.unload_source("skill.py")
+        mangopi_cli.extension_registry.tools = self._orig_reg_tools
+        mangopi_cli.extension_registry.prompt_sections[:] = self._orig_sections
+        mangopi_cli.TOOLS.clear()
+        mangopi_cli.TOOLS.update(self._orig_tools)
+
+    @staticmethod
+    def _make_skill(tmp, name="demo", desc="demo skill"):
+        d = os.path.join(tmp, name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write(f"---\ndescription: {desc}\ntags: [\"demo\"]\n---\nDemo body.\n")
+        return tmp
+
+    def test_70_tools_merged_into_TOOLS(self):
+        self.assertIs(mangopi_cli.TOOLS["use_skill"], self.mod.tools[0])
+
+    def test_71_guidance_injected_into_tool_guidance(self):
+        sp = SystemPrompt()
+        content = next(c for n, c in sp.sections if n == "tool_guidance")
+        self.assertIn("call **use_skill** first", content)
+
+    def test_72_skills_guidance_dynamic_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = self.mod.SkillManager(base_paths=[self._make_skill(tmp)])
+            with patch.object(self.mod, "_manager", mgr):
+                sp = SystemPrompt()
+                content = next(c for n, c in sp.sections if n == "skills_guidance")
+                self.assertIn("## Skills Selection Guidelines", content)
+                self.assertIn("- demo: demo skill", content)
+
+    def test_73_no_skills_section_disappears(self):
+        mgr = self.mod.SkillManager(base_paths=["/nonexistent-skills-dir"])
+        self.assertEqual(mgr.all(), {})
+        with patch.object(self.mod, "_manager", mgr):
+            sp = SystemPrompt()
+            self.assertNotIn("skills_guidance", [n for n, _ in sp.sections])
+
+    def test_74_use_skill_runs_and_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = self.mod.SkillManager(base_paths=[self._make_skill(tmp)])
+            with patch.object(self.mod, "SkillManager", lambda: mgr):
+                tool = mangopi_cli.TOOLS["use_skill"]
+                ok = tool.run({"name": "demo"})
+                self.assertTrue(ok["success"])
+                self.assertIn("# Skill: demo", ok["content"])
+                self.assertIn("Demo body.", ok["content"])
+                self.assertFalse(tool.run({"name": "nope"})["success"])
+
+    def test_75_unload_removes_tool_and_section(self):
+        mangopi_cli.extension_registry.unload_source("skill.py")
+        self.assertNotIn("use_skill", mangopi_cli.TOOLS)
+        sp = SystemPrompt()
+        self.assertNotIn("skills_guidance", [n for n, _ in sp.sections])
 
 
 class TestDynamicToolGuidance(unittest.TestCase):

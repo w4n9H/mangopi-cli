@@ -7,9 +7,10 @@ Shipped preset — standard: full Mangopi experience (default behavior, made exp
   └── extensions/          # 该 preset 的扩展 (tools/prompt_sections/entry_points/on 订阅)
 
 启用 / Enable: 将本目录复制到 ~/.mangocli/presets/ 后, 以 `MANGO_PRESET=standard` 启动
-mangopi-cli. 无 MANGO_PRESET 时行为与此 preset 等价 (纯内置 8 工具 + 完整分层 prompt).
+mangopi-cli. 无 MANGO_PRESET 时行为与此 preset 等价 (纯内置 7 工具 + 完整分层 prompt);
+use_skill 需以 skill 扩展启用.
 Copy this directory into ~/.mangocli/presets/ and start with `MANGO_PRESET=standard`.
-Without MANGO_PRESET the CLI behaves the same (pure built-in 8 tools + full
+Without MANGO_PRESET the CLI behaves the same (pure built-in 7 tools + full
 layered system prompt).
 
 字段 / Fields:
@@ -20,7 +21,7 @@ layered system prompt).
 """
 preset = {
     "name": "standard",
-    "description": "Full Mangopi experience: 8 core tools, complete system prompt",
+    "description": "Full Mangopi experience: 7 core tools + use_skill extension, complete system prompt",
     "keep_tools": [
         "read",
         "write",
@@ -28,7 +29,7 @@ preset = {
         "search",
         "grep",
         "bash",
-        "use_skill",
+        "use_skill",  # 由 skill 扩展提供; 未安装时白名单忽略该名字 (安全)
         "attempt_completion",
     ],
 }

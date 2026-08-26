@@ -211,9 +211,9 @@ The main file is organized in this order:
 3. `initialize_system` / helper
 4. Bash output filter / safety / path validation
 5. `_request` (HTTP)
-6. Goal / memory / skill persistence helpers
-7. `MemoryManager`, `SkillManager`
-8. `ToolBase` + 11 built-in tools
+6. Goal / memory persistence helpers
+7. `MemoryManager`
+8. `ToolBase` + built-in tools (skill system lives in `examples/extensions/skill.py`)
 9. `ContextManager` (4-tier compaction)
 10. `Provider` (OpenAI / DeepSeek / MiniMax)
 11. `SystemPrompt` (layered assembly)

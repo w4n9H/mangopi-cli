@@ -376,8 +376,8 @@ class TestToolSchemaIncludesViewImage(unittest.TestCase):
             m.TOOLS.pop("view_image", None)
 
     def test_schema_count(self):
-        # 8 built-in tools (web_search/view_image 已插件化)
-        self.assertEqual(len(m.tool_schema()), 8)
+        # 7 built-in tools (web_search/view_image/use_skill 已插件化)
+        self.assertEqual(len(m.tool_schema()), 7)
 
 
 if __name__ == "__main__":

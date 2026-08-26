@@ -41,7 +41,7 @@ preset = {
 KEEP_PRESET = '''
 preset = {
     "name": "keep8",
-    "keep_tools": ["read", "write", "edit", "search", "grep", "bash", "use_skill", "attempt_completion"],
+    "keep_tools": ["read", "write", "edit", "search", "grep", "bash", "attempt_completion"],
 }
 '''
 
@@ -137,7 +137,7 @@ class TestLoadPreset(unittest.TestCase):
         # keep_tools: TOOLS 只剩名单内工具 (内置 + 扩展统一过滤)
         self._load_combo()
         self._write("keep8", KEEP_PRESET)
-        keep = {"read", "write", "edit", "search", "grep", "bash", "use_skill", "attempt_completion"}
+        keep = {"read", "write", "edit", "search", "grep", "bash", "attempt_completion"}
         m.load_preset("keep8")
         self.assertEqual(set(m.TOOLS), keep)  # web_search/view_image/combo 均被卸
         with self.assertRaises(KeyError):
@@ -149,7 +149,7 @@ class TestLoadPreset(unittest.TestCase):
         self._write("keep8", KEEP_PRESET)
         orig = dict(m.TOOLS)
         m.load_preset("keep8")
-        self.assertEqual(len(m.TOOLS), 8)
+        self.assertEqual(len(m.TOOLS), 7)
         m.extension_registry.unload_source("__preset__")
         self.assertEqual(set(m.TOOLS), set(orig))
 

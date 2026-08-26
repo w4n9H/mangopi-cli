@@ -18,7 +18,6 @@ import shutil
 import argparse
 import types
 from datetime import datetime
-from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
 try:
@@ -26,7 +25,7 @@ try:
 except Exception:
     pass
 
-__version__ = "0.1.52"
+__version__ = "0.1.53"
 __author__ = "moofs"
 __license__ = "Apache License 2.0"
 
@@ -569,93 +568,6 @@ class ExtensionRegistry:
         return self._per_source
 
 
-class SkillManager:
-    def __init__(self, base_paths: List[str] = None, load_level: str = "resources"):
-        self.base_paths = base_paths or [os.path.expanduser("~/.mangocli/skills"), Path(base_persist_dir) / "skills"]
-        self.level = load_level
-        try:
-            self.skills = self._load_skills()
-        except Exception as err:
-            self.skills = {}
-            console.error(f"load skills err: {err}")
-
-    def _load_skills(self) -> Dict[str, dict]:
-        def _load_directory(_skill_path: str, _dirname: str):
-            dir_path = os.path.join(_skill_path, _dirname)
-            if not os.path.exists(dir_path):
-                return {}
-            files = {}
-            for root, _, filenames in os.walk(dir_path):
-                for file in filenames:
-                    path = os.path.join(root, file)
-                    with open(path, 'r', encoding='utf-8') as f:
-                        files[path] = f.read()
-            return files
-
-        skills = {}
-        for base in self.base_paths:
-            for skill_md in globlib.glob(os.path.join(base, "*/SKILL.md")):
-                skill_dir = os.path.dirname(skill_md)
-                skill_name = os.path.basename(skill_dir)
-                with open(skill_md, 'r', encoding='utf-8') as f:
-                    content = f.read()
-
-                yaml_end = content.find('---', 3)
-                if yaml_end == -1:
-                    raise ValueError(f"Invalid SKILL.md: missing YAML frontmatter in {skill_md}")
-                yaml_text, body = content[3:yaml_end].strip(), content[yaml_end + 3:].strip()
-
-                meta = {}
-                for line in yaml_text.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    key, val = re.split(r':\s*', line, 1)
-                    val = val.strip()
-                    if val.lower() == 'true':
-                        val = True
-                    elif val.lower() == 'false':
-                        val = False
-                    elif val.lower() in ('null', '~'):
-                        val = None
-                    else:
-                        try:
-                            val = ast.literal_eval(val)
-                        except Exception:
-                            pass
-                    meta[key.strip()] = val
-                meta["body"] = body
-                skills[skill_name] = {"meta": meta}
-                if self.level == "resources":
-                    skills[skill_name].update({
-                        "scripts": _load_directory(skill_dir, "scripts"),
-                        "references": _load_directory(skill_dir, "references")})
-        return skills
-
-    def reload(self):
-        try:
-            self.skills = self._load_skills()
-        except Exception as err:
-            self.skills = {}
-            console.error(f"reload skills err: {err}")
-
-    def all(self) -> Dict[str, dict]: return self.skills
-
-    def descriptions(self) -> str:
-        return "\n".join(f"- {name}: {data['meta'].get('description', '')}" for name, data in self.skills.items())
-
-    def find(self, keyword: str) -> List[Dict]:
-        matched = []
-        for name, data in self.skills.items():
-            meta = data.get("meta", {})
-            if keyword.lower() in name.lower() or any(keyword.lower() in t.lower() for t in meta.get("tags", [])):
-                matched.append({"name": name, "meta": meta})
-        return matched
-
-
-skill_manager = SkillManager()
-
-
 # --- Tool definitions: (description, schema, function) ---
 class ToolBase:
     name = ""
@@ -851,34 +763,6 @@ class BashTool(ToolBase):
         return self.ok("".join(output_lines).strip() or "(empty)")
 
 
-class UseSkillTool(ToolBase):
-    name = "use_skill"
-    description = "Load an installed skill with guidance, scripts and references"
-    params = {"name": {"type": "string", "description": "Skill name"}}
-
-    def run(self, args):
-        name = args["name"]
-        skills = SkillManager().all()
-        if name not in skills:
-            return self.fail(f"skill '{name}' not found")
-        skill = skills[name]
-        result = []
-        meta = skill.get("meta", {})
-        result.append(f"# Skill: {name}")
-        result.append(meta.get("body", ""))
-        scripts = skill.get("scripts", {})
-        if scripts:
-            result.append("\n## Scripts\n")
-            for path in scripts:
-                result.append(path)
-        refs = skill.get("references", {})
-        if refs:
-            result.append("\n## References\n")
-            for path in refs:
-                result.append(path)
-        return self.ok("\n".join(result))
-
-
 class AttemptCompletionTool(ToolBase):
     name = "attempt_completion"
     description = "Indicate that the task is complete and provide the final result/answer to the user"
@@ -896,7 +780,7 @@ class AttemptCompletionTool(ToolBase):
 # 模块级单例, 导入期扫描一次. 必须置于 ToolBase 定义之后: 扩展顶层 `from mangopi_cli import ToolBase` 依赖此处已初始化.
 extension_registry = ExtensionRegistry().load()
 TOOLS = {
-    t.name: t for t in [ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(), UseSkillTool(),
+    t.name: t for t in [ReadTool(), WriteTool(), EditTool(), SearchTool(), GrepTool(), BashTool(),
                         AttemptCompletionTool()] + extension_registry.tools}
 
 
@@ -1438,7 +1322,6 @@ class SystemPrompt:
         self.sections.append(("safety", self._build_safety()))
         self.sections.append(("builtin_rules", self._build_builtin_rules()))
         self.sections.append(("tool_guidance", self._build_tool_guidance()))
-        self.sections.append(("skills_guidance", self._build_skills_guidance()))
         self.sections.append(("memory", self._build_user_rules()))
         self.sections.append(("environment", self._build_environment()))
         # 扩展通道: 同名段覆盖默认内容 (强化), 异名段追加
@@ -1481,15 +1364,6 @@ class SystemPrompt:
                                 key=lambda t: t.name == "attempt_completion")
         parts.extend(t.guidance for t in guidance_tools)
         return "\n".join(parts) + "\n\n"
-
-    @staticmethod
-    def _build_skills_guidance() -> str:
-        desc = skill_manager.descriptions()
-        if not desc:
-            return "## Skills Selection Guidelines\n\nNo skills available.\n\n"
-        return (f"## Skills Selection Guidelines\n\n{desc}\n\n"
-                "- If an installed skill is relevant, call use_skill first before proceeding.\n"
-                "- Skills may contain: workflows, best practices, reusable scripts, references\n\n")
 
     @staticmethod
     def _build_environment() -> str:

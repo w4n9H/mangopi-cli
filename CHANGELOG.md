@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.53] - 2026-08-26
+
+### Changed
+- **Skill system pluginized** — `SkillManager` + `UseSkillTool` moved out of core into the shipped `skill` extension (`examples/extensions/skill.py`): the tool registers via the `tools` channel, the dynamic `skills_guidance` prompt section via the `prompt_sections` channel (runtime skill list, section disappears when no skills are installed), and the static usage rule via `ToolBase.guidance`. Core `SystemPrompt` no longer references the skill subsystem; without the extension the CLI runs 7 built-in tools. Enable by copying/symlinking `skill.py` into `~/.mangocli/extensions/` or a preset's `extensions/` dir (same opt-in semantics as `web_search` / `view_image`, v0.1.49).
+
+---
+
 ## [0.1.52] - 2026-08-25
 
 ### Removed
