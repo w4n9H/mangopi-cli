@@ -209,3 +209,19 @@ __marimo__/
 .idea/
 .mangocli/
 .zed/
+
+# AI coding tools — local state / cache (sessions, memory, traces)
+.workbuddy/
+.codex/
+.claude/
+CLAUDE.local.md
+.gemini/
+.qwen/
+.aider*
+.continue/
+.cline/
+.windsurf/
+.copilot/
+.opencode/
+.crush/
+.amp/

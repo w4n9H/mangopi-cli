@@ -317,7 +317,7 @@ Every new feature follows these rules, in order of priority:
 
 ### 2. MCP Client Integration
 
-**Status:** ⚪ Backlog
+**Status:** 🟡 Experimental (v0.1.54, shipped as the `mcp` extension — a stronger form of opt-in than the `MANGO_OPT_FEATURES` switch envisioned here: zero-dependency baseline intact, the feature simply lives outside the core file; awaiting real-world feedback before promotion)
 
 **Positioning:** Let Mangopi consume community MCP servers — the tool ecosystem is no longer limited to the 10 built-in tools.
 

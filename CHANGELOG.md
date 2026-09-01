@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.54] - 2026-09-01
+
+### Added
+- **MCP client extension (`examples/extensions/mcp.py`, 17th shipped extension)** — consume community MCP servers via the extension `tools` channel: each MCP tool becomes a `McpProxyTool` named `mcp_<server>_<tool>` with its native `inputSchema` passed through verbatim (overrides `schema()`, sidestepping the flat-scalar limitation of `ToolBase.params`; core `tool_schema()` unchanged), plus a dynamic `mcp_tools` prompt section listing configured servers and their tools. Transports: JSON-RPC 2.0 over stdio (subprocess + reader thread) and Streamable HTTP (POST with JSON or SSE responses, `Mcp-Session-Id` handling, 404 expiry → re-initialize) behind a shared `_Transport` interface. Servers declared in `~/.mangocli/mcp_servers.json` (per-server keys: `name`/`command`/`args`/`url`/`env`/`auth`/`enabled`/`confirm`/`prefix`/`timeout`/`init_timeout`). Manifest cache (`~/.mangocli/mcp_manifest.json`) stores tool lists keyed by server name with a config fingerprint — fingerprint mismatch (config edited) or cache miss triggers one eager connect at import, otherwise zero-startup tool registration; removed servers are pruned; first `tools/call` connects on demand when `MANGO_MCP_EAGER=0`. Self-healing: process death / session expiry / unknown tool → reconnect + manifest refresh + retry once. Server stderr goes to `~/.mangocli/mcp_logs/<name>.log` (5 MB rotation to `.log.1`). Content mapping: text/resource → text, image → core multimodal `{"type": "image"}` shape, `isError` → tool failure. Tool-name sanitization with hash-suffix disambiguation on collisions and 64-char cap. Out of scope for v1: OAuth 2.0, legacy SSE transport, GET long-lived streams. 39 extension tests (469 total).
+
+---
+
 ## [0.1.53] - 2026-08-26
 
 ### Changed

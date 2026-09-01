@@ -220,7 +220,8 @@ The client drives the conversation via `session/new` + `session/prompt` messages
 
 `web_search` / `view_image` are shipped as optional extensions (`examples/extensions/`) since v0.1.49;
 `use_skill` (skill system: `SkillManager` + `skills_guidance` prompt section) ships as the
-`skill` extension since v0.1.53.
+`skill` extension since v0.1.53; MCP servers join the tool registry as `mcp_<server>_<tool>`
+proxy tools via the `mcp` extension since v0.1.54 (see `examples/extensions/mcp.py` for config).
 
 Mangopi CLI can autonomously inspect files, modify code, search projects, and execute shell commands.
 
@@ -368,7 +369,7 @@ mangopi-cli
 
 ### Shipped extensions
 
-The repo ships 16 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable; without `MANGO_PRESET`, `~/.mangocli/extensions/`):
+The repo ships 17 optional extensions in `examples/extensions/` (copy/symlink into `~/.mangocli/presets/<name>/extensions/` to enable; without `MANGO_PRESET`, `~/.mangocli/extensions/`):
 
 | File | Function |
 |---|---|
@@ -377,6 +378,7 @@ The repo ships 16 optional extensions in `examples/extensions/` (copy/symlink in
 | `clipboard.py` | System clipboard read/write (macOS / Linux) |
 | `debug.py` | Per-call args/results debug prints (event bus) |
 | `git_status.py` | Read-only git status/log/diff summaries |
+| `mcp.py` | MCP client: community MCP servers as proxy tools (`mcp_<server>_<tool>`, native inputSchema passthrough; stdio + Streamable HTTP; manifest cache with config fingerprint; self-healing reconnect; config `~/.mangocli/mcp_servers.json`) |
 | `memory.py` | Long-term memory: AGENT.md / MANGO.md + per-day journals, auto-injected into the prompt |
 | `multi_edit.py` | Apply N Edit operations in one call with best-effort rollback |
 | `plan_mode.py` | Plan-then-execute state machine (read-only tool subset while active) |
